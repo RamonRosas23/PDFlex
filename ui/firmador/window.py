@@ -166,6 +166,7 @@ class FirmadorWindow(PipelineWindow):
 
         # ── Datos de documentos ────────────────────────────────────────
         self._active_doc_idx: int = -1
+        self._active_doc_path: Optional[str] = None   # para sobrevivir reordenaciones
         self.per_doc_mode: bool = False
         self.last_results: List[JobResult] = []
         self._worker_thread: Optional[QThread] = None
@@ -227,9 +228,18 @@ class FirmadorWindow(PipelineWindow):
         return page
 
     def _on_docs_changed(self, paths: List[str]) -> None:
-        """Sincroniza estado cuando DocumentsCard cambia la lista."""
-        if self._active_doc_idx >= len(paths):
+        """Sincroniza _active_doc_idx cuando DocumentsCard cambia (add, delete, reorder)."""
+        if not paths:
+            self._active_doc_idx = -1
+            self._active_doc_path = None
+        elif self._active_doc_path and self._active_doc_path in paths:
+            # El doc activo sigue existiendo — actualizar índice (sobrevive reordenar)
+            self._active_doc_idx = paths.index(self._active_doc_path)
+        elif self._active_doc_idx >= len(paths):
+            # El doc activo fue eliminado — ir al anterior
             self._active_doc_idx = len(paths) - 1
+            self._active_doc_path = paths[self._active_doc_idx] if paths else None
+        # else: idx sigue siendo válido y el path aún existe
         self._update_doc_nav()
 
     # ================================================================== #
@@ -286,12 +296,17 @@ class FirmadorWindow(PipelineWindow):
         sl.addWidget(self.sigs_list)
 
         self._sig_hint = QLabel(
-            "Sin firmas — agrega al menos una imagen PNG.\n"
-            "☑ = activa para el documento actual"
+            "Sin firmas — usa «+ Agregar PNG» para cargar tu imagen de firma.\n"
+            "Tip: PNG con fondo transparente da mejor resultado."
         )
         self._sig_hint.setProperty("class", "CardHint")
         self._sig_hint.setWordWrap(True)
         sl.addWidget(self._sig_hint)
+
+        self._sig_list_hint = QLabel("☑ activa en este doc  ☐ omitir en este doc")
+        self._sig_list_hint.setProperty("class", "CardHint")
+        self._sig_list_hint.setVisible(False)
+        sl.addWidget(self._sig_list_hint)
 
         left_col.addWidget(sig_card)
 
@@ -367,13 +382,35 @@ class FirmadorWindow(PipelineWindow):
         cw_layout.setContentsMargins(0, 0, 0, 0)
         cw_layout.setSpacing(0)
 
-        # Preview (creamos ANTES del status bar para que las lambdas funcionen)
+        # Stack: preview encima, empty-state debajo (se alternan)
+        from PyQt6.QtWidgets import QStackedWidget
+        self._canvas_stack = QStackedWidget()
+
+        # Preview
         self.preview = PdfPreviewView()
         self.preview.setObjectName("PdfPreview")
         self.preview.sig_placement_changed.connect(self._on_placement_changed)
         self.preview.item_activated.connect(self._on_item_activated)
         self.preview.pageChanged.connect(self._on_page_changed)
-        cw_layout.addWidget(self.preview, 1)
+        self._canvas_stack.addWidget(self.preview)  # idx 0
+
+        # Empty state
+        empty_w = QWidget()
+        empty_w.setStyleSheet("background:#111114;")
+        empty_v = QVBoxLayout(empty_w)
+        empty_v.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_icon = QLabel("📄")
+        empty_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_icon.setStyleSheet("font-size:48px; background:transparent;")
+        empty_msg = QLabel("Sin documentos\n\nAgrega PDFs en el paso 01 y regresa aquí.")
+        empty_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_msg.setStyleSheet("color:#6B6F7A; font-size:14px; background:transparent;")
+        empty_msg.setWordWrap(True)
+        empty_v.addWidget(empty_icon)
+        empty_v.addWidget(empty_msg)
+        self._canvas_stack.addWidget(empty_w)  # idx 1
+
+        cw_layout.addWidget(self._canvas_stack, 1)
 
         # Barra de estado (42 px fijos)
         status_bar = self._build_status_bar()
@@ -440,14 +477,16 @@ class FirmadorWindow(PipelineWindow):
         layout.addWidget(sep1)
 
         # Zoom
-        for icon, fn in [
-            ("−", self.preview.zoom_out),
-            ("+", self.preview.zoom_in),
-            ("⊡", self.preview.fit_to_view),
-        ]:
+        zoom_specs = [
+            ("−", self.preview.zoom_out, "Reducir (Ctrl+Rueda ↓)"),
+            ("+", self.preview.zoom_in, "Aumentar (Ctrl+Rueda ↑)"),
+            ("⊡", self.preview.fit_to_view, "Ajustar a la vista"),
+        ]
+        for icon, fn, tip in zoom_specs:
             btn = QPushButton(icon)
             btn.setProperty("class", "IconBtn")
             btn.setFixedSize(26, 26)
+            btn.setToolTip(tip)
             btn.clicked.connect(fn)
             layout.addWidget(btn)
 
@@ -631,10 +670,23 @@ class FirmadorWindow(PipelineWindow):
 
     def _on_section_activated(self, idx: int) -> None:
         if idx == 1:
-            # Auto-cargar el primer doc si aún no hay ninguno cargado
-            if self.pdf_paths and self._active_doc_idx < 0:
+            paths = self.pdf_paths
+            if not paths:
+                # No hay documentos: mostrar estado vacío
+                self.preview.clear_page()
+                self._active_doc_idx = -1
+                self._active_doc_path = None
+                self._canvas_stack.setCurrentIndex(1)   # empty state
+                self._update_doc_nav()
+                self._update_sig_list_checks()
+                self._update_status_bar()
+            elif self._active_doc_idx < 0:
+                # Hay docs pero ninguno activo: cargar el primero
+                self._canvas_stack.setCurrentIndex(0)   # preview
                 self._go_to_doc(0)
             else:
+                # Hay doc activo
+                self._canvas_stack.setCurrentIndex(0)
                 self._update_doc_nav()
                 self._update_sig_list_checks()
                 self._update_status_bar()
@@ -679,11 +731,16 @@ class FirmadorWindow(PipelineWindow):
         list_item.setIcon(QIcon(_make_sig_icon(pixmap, color)))
         list_item.setFlags(list_item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         list_item.setCheckState(Qt.CheckState.Checked)
+        list_item.setToolTip(
+            f"{label} · {Path(path).name}\n"
+            "☑ = aplicar en el documento actual  ☐ = omitir en este documento"
+        )
         self.sigs_list.blockSignals(True)
         self.sigs_list.addItem(list_item)
         self.sigs_list.blockSignals(False)
 
         self._sig_hint.setVisible(False)
+        self._sig_list_hint.setVisible(True)
 
         # Agregar al canvas si hay un doc activo
         if self._active_doc_idx >= 0:
@@ -737,6 +794,7 @@ class FirmadorWindow(PipelineWindow):
 
         if not self._sigs:
             self._sig_hint.setVisible(True)
+            self._sig_list_hint.setVisible(False)
 
         self._update_status_bar()
 
@@ -773,6 +831,11 @@ class FirmadorWindow(PipelineWindow):
 
         self._active_doc_idx = new_idx
         new_path = self.pdf_paths[new_idx]
+        self._active_doc_path = new_path
+
+        # Mostrar el canvas (no el empty state)
+        if hasattr(self, "_canvas_stack"):
+            self._canvas_stack.setCurrentIndex(0)
 
         # Cargar el nuevo PDF (load_pdf limpia el canvas)
         self.preview.load_pdf(new_path)
@@ -814,6 +877,26 @@ class FirmadorWindow(PipelineWindow):
         self._update_doc_nav()
         self._update_sig_list_checks()
         self._update_status_bar()
+        self._highlight_active_doc()
+
+    def _highlight_active_doc(self) -> None:
+        """Marca el documento activo en la lista del paso 01 con color de acento."""
+        from PyQt6.QtGui import QBrush, QColor, QFont
+        list_widget = self._docs_card.list_widget
+        for i in range(list_widget.count()):
+            item = list_widget.item(i)
+            if item is None:
+                continue
+            is_active = (i == self._active_doc_idx)
+            font = item.font()
+            font.setBold(is_active)
+            item.setFont(font)
+            if is_active:
+                item.setForeground(QBrush(QColor("#5E6AD2")))
+                item.setBackground(QBrush(QColor(94, 106, 210, 18)))
+            else:
+                item.setForeground(QBrush(QColor("#9094A0")))
+                item.setBackground(QBrush(QColor(0, 0, 0, 0)))
 
     def _on_delete_doc(self) -> None:
         idx = self._active_doc_idx
@@ -822,6 +905,15 @@ class FirmadorWindow(PipelineWindow):
             return
 
         doc_path = paths[idx]
+        doc_name = Path(doc_path).name
+
+        reply = QMessageBox.question(
+            self, "Eliminar documento",
+            f"¿Eliminar «{doc_name}» del lote?\n\nSe perderán las posiciones de firma configuradas para este documento.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
 
         # Limpiar placements y caches per-doc
         for uid in self._placements:
@@ -830,17 +922,19 @@ class FirmadorWindow(PipelineWindow):
             self._sig_disabled[uid].discard(doc_path)
         self._doc_page_sizes.pop(doc_path, None)
 
-        # Quitar de la tarjeta (actualiza la lista internamente)
+        # Quitar de la tarjeta — dispara _on_docs_changed automáticamente
         self._docs_card.remove_at(idx)
 
         if not self.pdf_paths:
             self._active_doc_idx = -1
-            self.preview.clear_all_sigs()
+            self._active_doc_path = None
+            self.preview.clear_page()
             self._update_doc_nav()
             self._update_sig_list_checks()
             self._update_status_bar()
         else:
             self._active_doc_idx = -1
+            self._active_doc_path = None
             self._go_to_doc(min(idx, len(self.pdf_paths) - 1))
 
     def _update_doc_nav(self) -> None:
@@ -1015,12 +1109,21 @@ class FirmadorWindow(PipelineWindow):
         self._sb_next_pg.setEnabled(n > 1 and cur < n - 1)
 
         if not self._active_uid:
-            self._sb_sig_info.setText("Sin firma seleccionada")
+            hint = "Sin firma — agrega una con «+ Agregar PNG»" if not self._sigs else "Sin firma seleccionada"
+            self._sb_sig_info.setText(hint)
             return
         p = self.preview.placement_of(self._active_uid)
         entry = next((e for e in self._sigs if e.uid == self._active_uid), None)
         if not p or not entry:
-            self._sb_sig_info.setText("Sin firma colocada")
+            # Puede ser que la firma esté desactivada para este documento
+            if self._active_doc_idx >= 0:
+                doc_path = self.pdf_paths[self._active_doc_idx]
+                if not self._sig_is_active(self._active_uid, doc_path):
+                    self._sb_sig_info.setText(
+                        f"<span style='color:#9094A0'>☐ {entry.label if entry else ''} desactivada para este documento</span>"
+                    )
+                    return
+            self._sb_sig_info.setText("Sin firma en el canvas — ve al paso 2")
             return
         cx_n, cy_n, w_pt, h_pt, angle = p
         r = entry.color.red()
@@ -1050,53 +1153,6 @@ class FirmadorWindow(PipelineWindow):
         if self.per_doc_mode and doc_path and doc_path in per:
             return per[doc_path]
         return per.get(None)
-
-    # ================================================================== #
-    # Word → PDF
-    # ================================================================== #
-
-    def _handle_word_files(self, paths: List[str]) -> None:
-        if not self.ctx.word_converter.is_available():
-            QMessageBox.information(
-                self, "Microsoft Office requerido",
-                "Para convertir archivos Word a PDF se necesita Microsoft Office.\n"
-                "Los archivos .doc/.docx han sido omitidos.",
-            )
-            return
-        from PyQt6.QtWidgets import QProgressDialog
-        self._conv_dlg = QProgressDialog(
-            "Convirtiendo archivos Word a PDF…", None, 0, len(paths), self
-        )
-        self._conv_dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        self._conv_dlg.setMinimumDuration(0)
-        self._conv_dlg.show()
-        worker = WordConvertWorker(self.ctx.word_converter, paths, self._word_tmp)
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(
-            lambda c, t, m: self._conv_dlg.setValue(c) if self._conv_dlg else None
-        )
-        worker.finished.connect(thread.quit)
-        worker.error.connect(thread.quit)
-        worker.finished.connect(self._on_word_convert_done)
-        worker.error.connect(self._on_word_convert_error)
-        self._conv_thread = thread
-        thread.start()
-
-    def _on_word_convert_done(self, paths: List[str]) -> None:
-        if self._conv_dlg:
-            self._conv_dlg.close()
-            self._conv_dlg = None
-        self._conv_thread = None
-        self._docs_card.add_paths(paths)
-
-    def _on_word_convert_error(self, msg: str) -> None:
-        if self._conv_dlg:
-            self._conv_dlg.close()
-            self._conv_dlg = None
-        self._conv_thread = None
-        QMessageBox.warning(self, "Error en conversión Word", msg)
 
     # ================================================================== #
     # Paso 04: Procesar — lógica
@@ -1167,6 +1223,26 @@ class FirmadorWindow(PipelineWindow):
     def _build_jobs(self) -> List[SignJob]:
         out_dir = Path(self._proc_step.output_dir())
         out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Avisar si algún archivo de salida ya existe
+        existing = [
+            f"{Path(p).stem}_firmado.pdf"
+            for p in self.pdf_paths
+            if (out_dir / f"{Path(p).stem}_firmado.pdf").exists()
+        ]
+        if existing:
+            msg = "Los siguientes archivos ya existen y serán sobreescritos:\n\n"
+            msg += "\n".join(f"  • {f}" for f in existing[:5])
+            if len(existing) > 5:
+                msg += f"\n  … y {len(existing) - 5} más"
+            msg += "\n\n¿Continuar?"
+            reply = QMessageBox.question(
+                self, "Archivos existentes", msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return []
+
         jobs: List[SignJob] = []
 
         for pdf_path in self.pdf_paths:
@@ -1235,10 +1311,8 @@ class FirmadorWindow(PipelineWindow):
         self.results_viewer.clear_results()
         jobs = self._build_jobs()
         if not jobs:
-            QMessageBox.warning(
-                self, "Sin trabajos",
-                "Ningún documento tiene firma con posición definida.",
-            )
+            # Puede ser que el usuario canceló el diálogo de sobreescritura,
+            # o que ningún documento tiene firma configurada
             return
 
         variation = self._build_variation_config()
@@ -1320,11 +1394,13 @@ class FirmadorWindow(PipelineWindow):
         self._doc_page_sizes.clear()
         self._active_uid = None
         self._active_doc_idx = -1
+        self._active_doc_path = None
         self._sig_hint.setVisible(True)
+        self.preview.clear_page()
+        self._canvas_stack.setCurrentIndex(1)  # empty state
         self._update_doc_nav()
         self._update_sig_list_checks()
         self._update_status_bar()
-        self.preview.clear_all_sigs()
         self._proc_step.reset()
         self._switch_section(0)
 

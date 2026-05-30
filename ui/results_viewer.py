@@ -120,6 +120,12 @@ class ResultsViewer(QWidget):
         self.fit_page_btn.setEnabled(False)
         header.addWidget(self.fit_page_btn)
 
+        self.open_file_btn = QPushButton("Abrir PDF")
+        self.open_file_btn.setProperty("class", "Ghost")
+        self.open_file_btn.clicked.connect(self._open_file_directly)
+        self.open_file_btn.setEnabled(False)
+        header.addWidget(self.open_file_btn)
+
         self.open_btn = QPushButton("Abrir carpeta")
         self.open_btn.setProperty("class", "Ghost")
         self.open_btn.clicked.connect(self._open_in_explorer)
@@ -132,10 +138,15 @@ class ResultsViewer(QWidget):
         inner = QHBoxLayout()
         inner.setSpacing(12)
 
-        # Lista de páginas con thumbnails
+        # Lista de páginas con thumbnails (IconMode: número debajo, sin cortes)
         self.page_list = QListWidget()
-        self.page_list.setFixedWidth(140)
-        self.page_list.setIconSize(QSize(105, 135))
+        self.page_list.setFixedWidth(112)
+        self.page_list.setViewMode(QListWidget.ViewMode.IconMode)
+        self.page_list.setIconSize(QSize(88, 112))
+        self.page_list.setGridSize(QSize(100, 132))
+        self.page_list.setFlow(QListWidget.Flow.TopToBottom)
+        self.page_list.setWrapping(False)
+        self.page_list.setResizeMode(QListWidget.ResizeMode.Fixed)
         self.page_list.setSpacing(2)
         self.page_list.itemSelectionChanged.connect(self._on_page_selected)
         inner.addWidget(self.page_list)
@@ -213,6 +224,7 @@ class ResultsViewer(QWidget):
     # ================================================================== #
     def _set_actions_enabled(self, enabled: bool) -> None:
         self.open_btn.setEnabled(enabled)
+        self.open_file_btn.setEnabled(enabled)
         self.zoom_in_btn.setEnabled(enabled)
         self.zoom_out_btn.setEnabled(enabled)
         self.fit_width_btn.setEnabled(enabled)
@@ -256,7 +268,7 @@ class ResultsViewer(QWidget):
         self.page_list.clear()
         for i in range(self._current_doc.page_count):
             thumb = self._render_page_pixmap(i, dpi=32)
-            item = QListWidgetItem(QIcon(thumb), f"Página {i + 1}")
+            item = QListWidgetItem(QIcon(thumb), str(i + 1))
             pr = self._find_page_result(result, i)
             if pr is not None:
                 marks = []
@@ -372,6 +384,14 @@ class ResultsViewer(QWidget):
         self._fit_mode = "page"
         self._zoom_index = 2
         self._render_current()
+
+    def _open_file_directly(self) -> None:
+        if self._current_result and self._current_result.output_path:
+            path = Path(self._current_result.output_path)
+            if path.exists():
+                from PyQt6.QtCore import QUrl
+                from PyQt6.QtGui import QDesktopServices
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
     def _open_in_explorer(self) -> None:
         if self._current_result and self._current_result.output_path:

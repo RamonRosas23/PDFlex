@@ -7,9 +7,11 @@ busca la posición más cercana posible que:
   - Esté dentro de los márgenes de la página
   - Idealmente esté cerca de una línea de firma si la hay
 
-Estrategia: búsqueda en espiral cuadrada alrededor del punto inicial,
-con paso configurable. Si tras N intentos no encuentra zona libre,
-devuelve la posición original (mejor algo que nada) y marca `clean=False`.
+Estrategia:
+  1. Si la posición deseada es válida → usarla (con posible snap a línea)
+  2. Búsqueda en espiral pequeña alrededor del punto (radio máximo ~1.5cm)
+  3. Si todo falla → usar la posición deseada original (clean=False)
+     El usuario colocó la firma a propósito; no la movemos a otro lado.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -66,14 +68,14 @@ class SafeZoneFinder:
         self,
         margin: float = 18.0,
         text_padding: float = 4.0,
-        spiral_step: float = 8.0,
-        max_attempts: int = 80,
+        spiral_step: float = 6.0,
+        max_attempts: int = 24,
         snap_to_line_distance: float = 40.0,
     ):
         self.margin = margin
         self.text_padding = text_padding
         self.spiral_step = spiral_step
-        self.max_attempts = max_attempts
+        self.max_attempts = max_attempts           # ≈ 24 pasos × 6pt = radio ~40pt
         self.snap_to_line_distance = snap_to_line_distance
 
     def find_safe_placement(
@@ -81,28 +83,30 @@ class SafeZoneFinder:
         analysis: PageAnalysis,
         desired: Placement,
     ) -> Placement:
-        """Devuelve una colocación segura cercana a la deseada."""
+        """Devuelve una colocación lo más cerca posible de la deseada.
+
+        Prioridades:
+          1. Snap a línea de firma cercana
+          2. Posición exacta deseada si es válida
+          3. Espiral pequeña alrededor (~40pt radio)
+          4. Posición deseada sin validar (clean=False) — NUNCA movemos lejos
+        """
+        # 0) ¿Hay una línea de firma muy cerca? → snapear antes de validar
+        snapped = self._try_snap_to_line(analysis, desired)
+        if snapped is not None and self._is_valid(analysis, snapped):
+            return snapped
+
         # 1) ¿La deseada ya es válida?
         if self._is_valid(analysis, desired):
-            snapped = self._try_snap_to_line(analysis, desired)
-            if snapped is not None:
-                return snapped
             return desired
 
-        # 2) Búsqueda en espiral cuadrada
+        # 2) Búsqueda en espiral pequeña (radio máximo ~40pt ≈ 1.4cm)
         best = self._spiral_search(analysis, desired)
         if best is not None:
-            snapped = self._try_snap_to_line(analysis, best)
-            if snapped is not None:
-                return snapped
             return best
 
-        # 3) Fallback duro: colócala en el último cuarto inferior, lejos del texto
-        fallback = self._fallback_position(analysis, desired)
-        if fallback is not None:
-            return fallback
-
-        # 4) Si todo falla, devuelve la deseada marcada como no-limpia
+        # 3) Fallback: respetar la posición del usuario aunque haya colisión.
+        #    El usuario la colocó a propósito; moverla lejos es peor.
         return Placement(
             x=desired.x, y=desired.y,
             width=desired.width, height=desired.height,
@@ -189,27 +193,3 @@ class SafeZoneFinder:
             return candidate
         return None
 
-    def _fallback_position(
-        self, analysis: PageAnalysis, desired: Placement
-    ) -> Optional[Placement]:
-        """Barrido en grilla del cuarto inferior buscando espacio."""
-        step = max(self.spiral_step, 12)
-        y_min = analysis.height * 0.55
-        y_max = analysis.height - self.margin - desired.height / 2
-        x_min = self.margin + desired.width / 2
-        x_max = analysis.width - self.margin - desired.width / 2
-
-        y = y_max
-        while y > y_min:
-            x = x_max
-            while x > x_min:
-                candidate = Placement(
-                    x=x, y=y,
-                    width=desired.width, height=desired.height,
-                    angle=desired.angle, opacity=desired.opacity,
-                )
-                if self._is_valid(analysis, candidate):
-                    return candidate
-                x -= step
-            y -= step
-        return None

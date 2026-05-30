@@ -1,19 +1,15 @@
 """
-Motor de firma masiva.
+Motor de firma masiva — v2.
 
-Combina:
-  - Análisis de cada página (texto, líneas de firma)
-  - Generador de variación natural
-  - Buscador de zona segura
-  - Aplicación efectiva de la firma sobre el PDF (PyMuPDF)
-
-Produce un PDF firmado y un log de colocaciones (para el visor de resultados).
+Soporta múltiples firmas por documento en una sola pasada,
+sin archivos temporales intermedios.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List, Optional, Callable
+from typing import Dict, List, Optional, Callable
 import io
 import os
+import tempfile
 
 import fitz
 from PIL import Image, ImageEnhance, ImageFilter
@@ -23,19 +19,42 @@ from .safe_zone import SafeZoneFinder, Placement
 from .variation import VariationGenerator, VariationConfig
 
 
+def _open_pdf_safe(path: str) -> fitz.Document:
+    """Abre un PDF y repara su xref si es necesario.
+
+    Algunos PDFs tienen tablas xref corruptas que MuPDF puede recuperar
+    automáticamente. Si se detecta reparación, se guarda una copia limpia
+    en un buffer temporal para que el save final sea estable.
+    """
+    doc = fitz.open(path)
+    # is_repaired indica que MuPDF tuvo que reconstruir el xref
+    if getattr(doc, "is_repaired", False):
+        buf = io.BytesIO()
+        doc.save(buf, garbage=4, deflate=True, clean=True)
+        doc.close()
+        buf.seek(0)
+        doc = fitz.open(stream=buf, filetype="pdf")
+    return doc
+
+
+@dataclass
+class SigPlacement:
+    """Posición y tamaño de una firma individual dentro de un job."""
+    signature_path: str
+    base_x_norm: float       # centro X normalizado (0..1)
+    base_y_norm: float       # centro Y normalizado (0..1)
+    base_width_pt: float     # ancho en puntos PDF
+    base_height_pt: float    # alto en puntos PDF
+    base_angle: float = 0.0  # ángulo base en grados
+
+
 @dataclass
 class SignJob:
-    """Una instrucción de firma para un documento."""
+    """Una instrucción de firma para un documento (soporta N firmas)."""
     pdf_path: str
     output_path: str
-    # Punto base normalizado (0..1) sobre la primera página, definido en el preview
-    base_x_norm: float
-    base_y_norm: float
-    # Tamaño base en puntos PDF (calculado desde el preview)
-    base_width_pt: float
-    base_height_pt: float
-    base_angle: float = 0.0  # ángulo base elegido por el usuario
-    pages: Optional[List[int]] = None  # None = todas
+    signatures: List[SigPlacement]     # Una o más firmas
+    pages: Optional[List[int]] = None  # None = todas las páginas
 
 
 @dataclass
@@ -56,21 +75,19 @@ class JobResult:
 
 
 class SignatureEngine:
-    """Aplica firmas con variación natural y validación anti-texto."""
+    """Aplica múltiples firmas con variación natural y validación anti-texto."""
 
     def __init__(
         self,
-        signature_png_path: str,
         variation: VariationConfig,
         margin: float = 18.0,
         text_padding: float = 4.0,
     ):
-        self.signature_png_path = signature_png_path
         self.variation_gen = VariationGenerator(variation)
         self.analyzer = PdfAnalyzer()
         self.finder = SafeZoneFinder(margin=margin, text_padding=text_padding)
-        # Pre-cargar firma RGBA
-        self._base_image = Image.open(signature_png_path).convert("RGBA")
+        # Caché de imágenes para no reabrir el mismo archivo N veces
+        self._img_cache: Dict[str, Image.Image] = {}
 
     # ------------------------------------------------------------------ #
     # API pública
@@ -81,15 +98,16 @@ class SignatureEngine:
         job: SignJob,
         progress: Optional[Callable[[int, int, str], None]] = None,
     ) -> JobResult:
-        """Procesa un documento. `progress(current, total, msg)` opcional."""
+        """Procesa un documento aplicando todas las firmas en una sola pasada."""
         try:
-            doc = fitz.open(job.pdf_path)
+            doc = _open_pdf_safe(job.pdf_path)
         except Exception as e:
             return JobResult(job=job, output_path="", success=False,
                              error=f"No se pudo abrir PDF: {e}")
 
         results: List[PageResult] = []
-        target_pages = job.pages if job.pages is not None else list(range(doc.page_count))
+        target_pages = (job.pages if job.pages is not None
+                        else list(range(doc.page_count)))
         total = len(target_pages)
 
         try:
@@ -98,21 +116,34 @@ class SignatureEngine:
                     progress(i, total, f"Página {page_idx + 1}/{doc.page_count}")
 
                 analysis = self.analyzer.analyze_page(doc, page_idx)
-                placement = self._compute_placement(job, analysis, page_idx)
+                page = doc[page_idx]
+                primary_placement: Optional[Placement] = None
 
-                self._apply_signature(doc[page_idx], placement, page_idx, job)
+                for sig_conf in job.signatures:
+                    base_img = self._get_image(sig_conf.signature_path)
+                    placement = self._compute_placement(
+                        sig_conf, analysis, job.pdf_path, page_idx
+                    )
+                    self._apply_signature(
+                        page, placement, base_img,
+                        job.pdf_path, sig_conf.signature_path, page_idx
+                    )
+                    if primary_placement is None:
+                        primary_placement = placement
 
-                results.append(PageResult(
-                    page_index=page_idx,
-                    placement=placement,
-                    snapped_to_line=placement.snapped_to_line,
-                    clean=placement.clean,
-                ))
+                if primary_placement is not None:
+                    results.append(PageResult(
+                        page_index=page_idx,
+                        placement=primary_placement,
+                        snapped_to_line=primary_placement.snapped_to_line,
+                        clean=primary_placement.clean,
+                    ))
 
             os.makedirs(os.path.dirname(os.path.abspath(job.output_path)), exist_ok=True)
             doc.save(job.output_path, garbage=4, deflate=True)
             if progress:
                 progress(total, total, "Guardado")
+
         except Exception as e:
             doc.close()
             return JobResult(job=job, output_path="", success=False, error=str(e))
@@ -130,88 +161,88 @@ class SignatureEngine:
         )
 
     # ------------------------------------------------------------------ #
-    # Cálculo de colocación
+    # Privados
     # ------------------------------------------------------------------ #
 
+    def _get_image(self, path: str) -> Image.Image:
+        if path not in self._img_cache:
+            self._img_cache[path] = Image.open(path).convert("RGBA")
+        return self._img_cache[path]
+
     def _compute_placement(
-        self, job: SignJob, analysis: PageAnalysis, page_index: int
+        self,
+        sig_conf: SigPlacement,
+        analysis: PageAnalysis,
+        doc_id: str,
+        page_index: int,
     ) -> Placement:
-        # Punto base en coordenadas reales de la página
-        base_x = job.base_x_norm * analysis.width
-        base_y = job.base_y_norm * analysis.height
+        base_x = sig_conf.base_x_norm * analysis.width
+        base_y = sig_conf.base_y_norm * analysis.height
 
-        # Variación determinista para esta página
-        v = self.variation_gen.variation_for(job.pdf_path, page_index)
+        # Semilla única por (doc, firma, página).
+        # Usamos solo el nombre del archivo (sin path completo) para estabilidad.
+        import os as _os
+        doc_name = _os.path.basename(doc_id)
+        sig_name = _os.path.basename(sig_conf.signature_path)
+        seed_key = doc_name + "\x00" + sig_name
+        v = self.variation_gen.variation_for(seed_key, page_index)
 
-        # Aplicar variación
-        w = job.base_width_pt * v.scale_factor
-        h = job.base_height_pt * v.scale_factor
+        w = sig_conf.base_width_pt * v.scale_factor
+        h = sig_conf.base_height_pt * v.scale_factor
         x = base_x + v.d_x
         y = base_y + v.d_y
-        angle = job.base_angle + v.d_angle
+        angle = sig_conf.base_angle + v.d_angle
 
         desired = Placement(
             x=x, y=y, width=w, height=h,
             angle=angle, opacity=v.opacity,
         )
-
-        # Buscar zona segura
         return self.finder.find_safe_placement(analysis, desired)
-
-    # ------------------------------------------------------------------ #
-    # Aplicación de la imagen
-    # ------------------------------------------------------------------ #
 
     def _apply_signature(
         self,
         page: fitz.Page,
         placement: Placement,
+        base_img: Image.Image,
+        doc_id: str,
+        sig_path: str,
         page_index: int,
-        job: SignJob,
     ) -> None:
-        """Inserta la imagen de la firma con rotación y opacidad."""
-        v = self.variation_gen.variation_for(job.pdf_path, page_index)
-        img = self._transform_image(self._base_image, placement, v.pressure)
+        import os as _os
+        doc_name = _os.path.basename(doc_id)
+        sig_name = _os.path.basename(sig_path)
+        seed_key = doc_name + "\x00" + sig_name
+        v = self.variation_gen.variation_for(seed_key, page_index)
+        img = self._transform_image(base_img, placement, v.pressure)
 
-        # Bytes PNG con alpha
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         img_bytes = buf.getvalue()
 
-        # Rectángulo destino: el bbox rotado, porque la imagen ya viene rotada con expand=True
         target = placement.rotated_bbox
-
         try:
             page.insert_image(target, stream=img_bytes, keep_proportion=False, overlay=True)
         except TypeError:
-            # Versiones viejas no soportan keep_proportion=False
             page.insert_image(target, stream=img_bytes, overlay=True)
 
     def _transform_image(
         self, base: Image.Image, placement: Placement, pressure: float
     ) -> Image.Image:
-        """Aplica rotación, opacidad y "pressure jitter" a la imagen."""
         img = base.copy()
 
-        # Pressure jitter sutil: pequeñas variaciones de contraste/blur
         if pressure > 0:
-            # Contraste leve
             contrast = 0.95 + 0.10 * pressure
             img = ImageEnhance.Contrast(img).enhance(contrast)
-            # A veces aplica un blur muy ligero
             if pressure > 0.7:
                 img = img.filter(ImageFilter.GaussianBlur(radius=0.3))
-            # Brillo leve
             brightness = 0.97 + 0.06 * (1.0 - pressure)
             img = ImageEnhance.Brightness(img).enhance(brightness)
 
-        # Opacidad: multiplicar canal alpha
         if placement.opacity < 0.999:
             r, g, b, a = img.split()
             a = a.point(lambda v: int(v * placement.opacity))
             img = Image.merge("RGBA", (r, g, b, a))
 
-        # Rotación (positivo = antihorario en PIL)
         if abs(placement.angle) > 0.01:
             img = img.rotate(
                 placement.angle,

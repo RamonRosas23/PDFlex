@@ -1,20 +1,26 @@
 """
-Vista previa interactiva del PDF con firma arrastrable.
+Vista previa interactiva del PDF con soporte multi-firma.
 
-Mejoras vs versión anterior:
-  - El fitInView se hace una sola vez al cargar, no en cada resize.
-  - Controles de zoom expuestos (zoomIn, zoomOut, fitToView, actualSize).
-  - Manejo robusto del estado de selección y handles siempre visibles.
+Cambios v3:
+  - Múltiples SignatureItem simultáneos, cada uno con color propio.
+  - set_page() no destruye los items del canvas (solo actualiza el pixmap).
+  - load_pdf() limpia todo el canvas (incluyendo firmas).
+  - API backward-compat: set_signature/clear_signature/has_signature/
+    restore_signature_placement/signature_center_* siguen funcionando
+    exactamente igual (usados por foleador y main_window legacy).
+  - Nueva API multi-sig: add_sig / remove_sig / clear_all_sigs /
+    set_active_uid / restore_placement / placement_of.
+  - Señales: placementChanged() ← backward compat (sin uid);
+             sig_placement_changed(str uid) ← nueva;
+             item_activated(str uid) ← click del usuario sobre un item.
 """
 from __future__ import annotations
-from typing import Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import math
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import (
-    Qt, QRectF, QPointF, pyqtSignal,
-)
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QBrush, QCursor,
 )
@@ -36,18 +42,26 @@ def pil_to_qpixmap(img: Image.Image) -> QPixmap:
 
 
 # ====================================================================== #
-#  Item de firma con handles
+#  Item de firma con handles, color propio y estado activo/inactivo
 # ====================================================================== #
 
 class SignatureItem(QGraphicsObject):
-    HANDLE_SIZE = 11
-    ROTATE_HANDLE_OFFSET = 28
+    # Handles circulares: radio en px (espacio local)
+    HANDLE_RADIUS = 7
+    # Distancia del handle de rotación por encima del borde superior
+    ROTATE_HANDLE_OFFSET = 36
 
     geometryChanged = pyqtSignal()
+    activated = pyqtSignal()   # emitido cuando el usuario hace click sobre un item inactivo
 
-    def __init__(self, pixmap: QPixmap, parent=None):
+    def __init__(self, uid: str, pixmap: QPixmap, color: QColor, parent=None):
         super().__init__(parent)
+        self._uid = uid
         self._pixmap = pixmap
+        self._color = color
+        self._active: bool = False
+
+        # Tamaño inicial provisional; PdfPreviewView.add_sig() ajusta al PDF real
         target_w = 220
         ratio = pixmap.height() / max(1, pixmap.width())
         self._w = float(target_w)
@@ -57,18 +71,39 @@ class SignatureItem(QGraphicsObject):
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
         self.setAcceptHoverEvents(True)
-        self.setZValue(10)
+        self.setZValue(5)
 
         self._action: Optional[str] = None
         self._start_pos = QPointF()
         self._start_w = self._w
         self._start_h = self._h
         self._start_angle = 0.0
+        # Pivot para resize: esquina opuesta en espacio local y de escena
+        self._pivot_local = QPointF()
+        self._resize_pivot_scene = QPointF()
 
         self.setTransformOriginPoint(self._w / 2, self._h / 2)
 
+    # ------------------------------------------------------------------ #
+    # Estado
+    # ------------------------------------------------------------------ #
+
+    def set_active(self, active: bool) -> None:
+        if self._active == active:
+            return
+        self._active = active
+        self.setZValue(10 if active else 5)
+        self.update()
+
+    def uid(self) -> str:
+        return self._uid
+
+    # ------------------------------------------------------------------ #
+    # Geometría
+    # ------------------------------------------------------------------ #
+
     def boundingRect(self) -> QRectF:
-        m = self.HANDLE_SIZE + self.ROTATE_HANDLE_OFFSET + 6
+        m = self.HANDLE_RADIUS + self.ROTATE_HANDLE_OFFSET + 10
         return QRectF(-m, -m, self._w + 2 * m, self._h + 2 * m)
 
     def signatureRect(self) -> QRectF:
@@ -88,6 +123,26 @@ class SignatureItem(QGraphicsObject):
         self.geometryChanged.emit()
         self.update()
 
+    # ------------------------------------------------------------------ #
+    # Posiciones de handles (en espacio local)
+    # ------------------------------------------------------------------ #
+
+    def _corner_centers(self) -> dict:
+        """Centros de los 4 handles de esquina."""
+        return {
+            "resize-tl": QPointF(0.0,       0.0),
+            "resize-tr": QPointF(self._w,    0.0),
+            "resize-bl": QPointF(0.0,        self._h),
+            "resize-br": QPointF(self._w,    self._h),
+        }
+
+    def _rotate_center(self) -> QPointF:
+        return QPointF(self._w / 2, -self.ROTATE_HANDLE_OFFSET)
+
+    # ------------------------------------------------------------------ #
+    # Pintura
+    # ------------------------------------------------------------------ #
+
     def paint(self, painter: QPainter, option, widget=None) -> None:
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -95,50 +150,102 @@ class SignatureItem(QGraphicsObject):
         target = self.signatureRect()
         painter.drawPixmap(target, self._pixmap, QRectF(self._pixmap.rect()))
 
-        # Borde fino con acento
-        pen = QPen(QColor(94, 106, 210, 200), 1.4)
-        pen.setStyle(Qt.PenStyle.DashLine)
+        if self._active:
+            pen = QPen(self._color, 2.0)
+            pen.setStyle(Qt.PenStyle.SolidLine)
+        else:
+            faded = QColor(self._color.red(), self._color.green(),
+                           self._color.blue(), 70)
+            pen = QPen(faded, 1.0)
+            pen.setStyle(Qt.PenStyle.DashLine)
+
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(target)
 
-        self._draw_handles(painter)
-
-    def _handle_rects(self) -> dict:
-        s = self.HANDLE_SIZE
-        half = s / 2
-        r = self.signatureRect()
-        return {
-            "resize-tl": QRectF(r.left() - half, r.top() - half, s, s),
-            "resize-tr": QRectF(r.right() - half, r.top() - half, s, s),
-            "resize-bl": QRectF(r.left() - half, r.bottom() - half, s, s),
-            "resize-br": QRectF(r.right() - half, r.bottom() - half, s, s),
-            "rotate": QRectF(
-                r.center().x() - half,
-                r.top() - self.ROTATE_HANDLE_OFFSET - half,
-                s, s,
-            ),
-        }
+        if self._active:
+            self._draw_handles(painter)
 
     def _draw_handles(self, painter: QPainter) -> None:
-        accent = QColor(94, 106, 210)
+        R = self.HANDLE_RADIUS
+        c = self._color
+        white = QColor(248, 248, 252)
 
-        for name, rect in self._handle_rects().items():
-            if name == "rotate":
-                painter.setPen(QPen(accent, 1.2))
-                painter.drawLine(
-                    QPointF(rect.center().x(), rect.center().y() + self.HANDLE_SIZE / 2),
-                    QPointF(rect.center().x(), self.signatureRect().top()),
-                )
-                painter.setPen(QPen(QColor(255, 255, 255), 1.5))
-                painter.setBrush(QBrush(accent))
-                painter.drawEllipse(rect)
-            else:
-                painter.setPen(QPen(accent, 1.5))
-                painter.setBrush(QBrush(QColor(255, 255, 255)))
-                painter.drawRect(rect)
+        # ── Línea punteada al handle de rotación ──────────────────────
+        rot_c = self._rotate_center()
+        painter.setPen(QPen(QColor(c.red(), c.green(), c.blue(), 160), 1.0,
+                            Qt.PenStyle.DotLine))
+        painter.drawLine(QPointF(self._w / 2, 0), rot_c)
+
+        # ── Handle de rotación (círculo con arco ↻) ───────────────────
+        # Sombra
+        shadow_c = QColor(0, 0, 0, 55)
+        painter.setPen(QPen(shadow_c, 2.5))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawEllipse(rot_c, R + 1.5, R + 1.5)
+        # Relleno oscuro
+        painter.setPen(QPen(c, 1.5))
+        painter.setBrush(QBrush(QColor(22, 22, 30, 230)))
+        painter.drawEllipse(rot_c, R, R)
+        # Arco ↻ interior
+        arc_r = R * 0.58
+        arc_rect = QRectF(rot_c.x() - arc_r, rot_c.y() - arc_r, arc_r * 2, arc_r * 2)
+        painter.setPen(QPen(c, 1.4))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(arc_rect, 20 * 16, 290 * 16)
+        # Punta de flecha (triángulo pequeño)
+        tip_angle = math.radians(20 - 10)
+        tx = rot_c.x() + arc_r * math.cos(tip_angle)
+        ty = rot_c.y() - arc_r * math.sin(tip_angle)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(c))
+        tip_size = arc_r * 0.55
+        painter.drawPolygon([
+            QPointF(tx, ty),
+            QPointF(tx - tip_size, ty - tip_size * 0.5),
+            QPointF(tx - tip_size * 0.5, ty + tip_size),
+        ])
+
+        # ── Handles de esquina (círculos premium) ─────────────────────
+        for center in self._corner_centers().values():
+            # Sombra exterior
+            painter.setPen(QPen(QColor(0, 0, 0, 50), 2.5))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawEllipse(center, R + 1.5, R + 1.5)
+            # Círculo blanco
+            painter.setPen(QPen(c, 1.5))
+            painter.setBrush(QBrush(white))
+            painter.drawEllipse(center, R, R)
+            # Punto interior del color de la firma
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(c))
+            painter.drawEllipse(center, R * 0.38, R * 0.38)
+
+    # ------------------------------------------------------------------ #
+    # Detección de handle
+    # ------------------------------------------------------------------ #
+
+    def _handle_at(self, pos: QPointF) -> Optional[str]:
+        R = self.HANDLE_RADIUS + 5   # zona de hit generosa
+        rc = self._rotate_center()
+        dx, dy = pos.x() - rc.x(), pos.y() - rc.y()
+        if dx * dx + dy * dy <= R * R * 1.6:
+            return "rotate"
+        for name, center in self._corner_centers().items():
+            dx, dy = pos.x() - center.x(), pos.y() - center.y()
+            if dx * dx + dy * dy <= R * R * 1.6:
+                return name
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Hover
+    # ------------------------------------------------------------------ #
 
     def hoverMoveEvent(self, event) -> None:
+        if not self._active:
+            self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
+            super().hoverMoveEvent(event)
+            return
         handle = self._handle_at(event.pos())
         if handle == "rotate":
             self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
@@ -147,17 +254,23 @@ class SignatureItem(QGraphicsObject):
         elif handle in ("resize-tr", "resize-bl"):
             self.setCursor(QCursor(Qt.CursorShape.SizeBDiagCursor))
         else:
-            self.setCursor(QCursor(Qt.CursorShape.OpenHandCursor))
+            self.setCursor(QCursor(Qt.CursorShape.SizeAllCursor))
         super().hoverMoveEvent(event)
 
-    def _handle_at(self, pos: QPointF) -> Optional[str]:
-        for name, rect in self._handle_rects().items():
-            if rect.contains(pos):
-                return name
-        return None
+    def hoverLeaveEvent(self, event) -> None:
+        self.unsetCursor()
+        super().hoverLeaveEvent(event)
+
+    # ------------------------------------------------------------------ #
+    # Mouse
+    # ------------------------------------------------------------------ #
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            if not self._active:
+                self.activated.emit()
+                super().mousePressEvent(event)
+                return
             handle = self._handle_at(event.pos())
             if handle:
                 self._action = handle
@@ -165,7 +278,18 @@ class SignatureItem(QGraphicsObject):
                 self._start_w = self._w
                 self._start_h = self._h
                 self._start_angle = self.rotation()
-                self.setCursor(QCursor(Qt.CursorShape.ClosedHandCursor))
+
+                if handle in ("resize-tl", "resize-tr", "resize-bl", "resize-br"):
+                    # Pivot = esquina OPUESTA (se queda fija durante el resize)
+                    _pivot_map = {
+                        "resize-tl": QPointF(self._w,  self._h),   # br
+                        "resize-tr": QPointF(0.0,       self._h),   # bl
+                        "resize-bl": QPointF(self._w,  0.0),        # tr
+                        "resize-br": QPointF(0.0,       0.0),       # tl
+                    }
+                    self._pivot_local = _pivot_map[handle]
+                    self._resize_pivot_scene = self.mapToScene(self._pivot_local)
+
                 event.accept()
                 return
         super().mousePressEvent(event)
@@ -190,22 +314,50 @@ class SignatureItem(QGraphicsObject):
         super().mouseReleaseEvent(event)
         self.geometryChanged.emit()
 
+    # ------------------------------------------------------------------ #
+    # Resize con esquina opuesta fija
+    # ------------------------------------------------------------------ #
+
     def _do_resize(self, scene_pos: QPointF) -> None:
+        # Cursor en espacio local del item (tiene en cuenta rotación)
         local = self.mapFromScene(scene_pos)
-        cx, cy = self._w / 2, self._h / 2
-        dx = abs(local.x() - cx) * 2
-        dy = abs(local.y() - cy) * 2
+        pivot = self._pivot_local
         ratio = self._start_h / max(1.0, self._start_w)
-        if dx / max(1, self._start_w) > dy / max(1, self._start_h):
-            new_w = max(40.0, dx)
-            new_h = new_w * ratio
+
+        # Distancia del cursor al pivot en cada eje
+        dx = abs(local.x() - pivot.x())
+        dy = abs(local.y() - pivot.y())
+
+        # Eje dominante para mantener ratio de aspecto
+        if self._start_w > 0 and self._start_h > 0:
+            if dx / self._start_w >= dy / self._start_h:
+                new_w = max(40.0, dx)
+            else:
+                new_w = max(20.0, dy) / max(1e-4, ratio)
         else:
-            new_h = max(20.0, dy)
-            new_w = new_h / max(0.01, ratio)
-        old_center = self.mapToScene(QPointF(self._w / 2, self._h / 2))
+            new_w = max(40.0, dx)
+        new_h = max(10.0, new_w * ratio)
+
+        # Hacer el resize
         self.setSize(new_w, new_h)
-        new_center = self.mapToScene(QPointF(self._w / 2, self._h / 2))
-        self.setPos(self.pos() + (old_center - new_center))
+
+        # El pivot en el nuevo rectángulo (posición local DESPUÉS del resize)
+        _new_pivot_map = {
+            "resize-tl": QPointF(self._w,  self._h),
+            "resize-tr": QPointF(0.0,       self._h),
+            "resize-bl": QPointF(self._w,  0.0),
+            "resize-br": QPointF(0.0,       0.0),
+        }
+        new_pivot_local = _new_pivot_map[self._action]
+
+        # Ajustar posición para que el pivot quede donde estaba en escena
+        new_pivot_scene = self.mapToScene(new_pivot_local)
+        delta = self._resize_pivot_scene - new_pivot_scene
+        self.setPos(self.pos() + delta)
+
+    # ------------------------------------------------------------------ #
+    # Rotación
+    # ------------------------------------------------------------------ #
 
     def _do_rotate(self, scene_pos: QPointF) -> None:
         center = self.mapToScene(QPointF(self._w / 2, self._h / 2))
@@ -224,8 +376,16 @@ class SignatureItem(QGraphicsObject):
 # ====================================================================== #
 
 class PdfPreviewView(QGraphicsView):
+
+    # ── Señales ──────────────────────────────────────────────────────── #
+    # Backward compat: emitida para cualquier cambio (sin uid)
     placementChanged = pyqtSignal()
-    pageChanged = pyqtSignal(int, int)  # current, total
+    # Nueva: emitida con el uid de la firma que cambió
+    sig_placement_changed = pyqtSignal(str)
+    # Emitida cuando el usuario hace click sobre una firma (para sincronizar lista)
+    item_activated = pyqtSignal(str)
+    # Cambio de página
+    pageChanged = pyqtSignal(int, int)   # current, total
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -249,36 +409,53 @@ class PdfPreviewView(QGraphicsView):
         self._pdf_path: Optional[str] = None
         self._page_index: int = 0
         self._page_pixmap_item: Optional[QGraphicsPixmapItem] = None
-        self._signature_item: Optional[SignatureItem] = None
-        self._stored_signature_pix: Optional[QPixmap] = None
+
+        # Multi-sig state
+        self._sig_items: Dict[str, SignatureItem] = {}
+        self._active_uid: Optional[str] = None
+        self._restoring: bool = False   # bloquea emision de señales durante restore
 
         self._scene_to_pdf: float = 72.0 / PREVIEW_DPI
         self._page_w_pt: float = 0.0
         self._page_h_pt: float = 0.0
-
         self._has_fit_once: bool = False
 
-    # ---- Carga ----
+    # ==================================================================== #
+    # API de carga de documentos
+    # ==================================================================== #
+
     def load_pdf(self, path: str) -> None:
+        """Carga un nuevo PDF. Limpia TODOS los items del canvas (página + firmas)."""
         if self._doc is not None:
             try:
                 self._doc.close()
             except Exception:
                 pass
+
+        # Limpiar firmas sin emitir señales
+        self._sig_items.clear()
+        self._active_uid = None
+
         self._doc = fitz.open(path)
         self._pdf_path = path
         self._page_index = 0
         self._has_fit_once = False
+
+        self._scene.clear()
+        self._page_pixmap_item = None
+
         self._render_page()
 
     def set_page(self, idx: int) -> None:
-        if self._doc is None:
+        """Cambia a otra página SIN destruir los items de firma en el canvas."""
+        if not self._doc:
             return
         idx = max(0, min(idx, self._doc.page_count - 1))
         if idx == self._page_index:
             return
         self._page_index = idx
-        self._render_page(preserve_signature=True)
+        self._update_page_pixmap()
+        self.pageChanged.emit(self._page_index, self.page_count())
 
     def page_count(self) -> int:
         return self._doc.page_count if self._doc else 0
@@ -286,137 +463,197 @@ class PdfPreviewView(QGraphicsView):
     def current_page(self) -> int:
         return self._page_index
 
-    def _render_page(self, preserve_signature: bool = False) -> None:
-        if self._doc is None:
-            return
-
-        sig_state: Optional[Tuple[float, float, float, float, float]] = None
-        if preserve_signature and self._signature_item is not None and self._page_w_pt > 0:
-            cx_pt, cy_pt = self.signature_center_pdf()
-            w_pt = self._signature_item.width() * self._scene_to_pdf
-            h_pt = self._signature_item.height() * self._scene_to_pdf
-            sig_state = (
-                cx_pt / self._page_w_pt,
-                cy_pt / self._page_h_pt,
-                w_pt, h_pt,
-                self._signature_item.rotation(),
-            )
-
-        self._scene.clear()
-        self._page_pixmap_item = None
-        self._signature_item = None
-
-        page = self._doc[self._page_index]
-        mat = fitz.Matrix(PREVIEW_DPI / 72.0, PREVIEW_DPI / 72.0)
-        pm = page.get_pixmap(matrix=mat, alpha=False)
-        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
-        pix = pil_to_qpixmap(img)
-
-        self._page_pixmap_item = QGraphicsPixmapItem(pix)
-        self._page_pixmap_item.setZValue(0)
-        # Sombra sutil
-        shadow = QGraphicsDropShadowEffect()
-        shadow.setBlurRadius(24)
-        shadow.setColor(QColor(0, 0, 0, 130))
-        shadow.setOffset(0, 6)
-        self._page_pixmap_item.setGraphicsEffect(shadow)
-        self._scene.addItem(self._page_pixmap_item)
-
-        self._page_w_pt = page.rect.width
-        self._page_h_pt = page.rect.height
-        # Margen alrededor de la página para que la sombra no se corte
-        margin = 40
-        self._scene.setSceneRect(
-            QRectF(-margin, -margin, pix.width() + 2 * margin, pix.height() + 2 * margin)
-        )
-
-        if sig_state and self._stored_signature_pix is not None:
-            nx, ny, w_pt, h_pt, rot = sig_state
-            self.set_signature(self._stored_signature_pix)
-            assert self._signature_item is not None
-            w_sc = w_pt / self._scene_to_pdf
-            h_sc = h_pt / self._scene_to_pdf
-            self._signature_item.setSize(w_sc, h_sc)
-            cx_sc = nx * pix.width()
-            cy_sc = ny * pix.height()
-            self._signature_item.setPos(cx_sc - w_sc / 2, cy_sc - h_sc / 2)
-            self._signature_item.setRotation(rot)
-
-        if not self._has_fit_once:
-            self.fit_to_view()
-            self._has_fit_once = True
-
-        self.pageChanged.emit(self._page_index, self.page_count())
-
-    # ---- Firma ----
-    def set_signature(self, pixmap: QPixmap) -> None:
-        if self._signature_item is not None:
-            self._scene.removeItem(self._signature_item)
-            self._signature_item = None
-
-        if pixmap.isNull():
-            return
-
-        self._stored_signature_pix = pixmap
-        item = SignatureItem(pixmap)
-        self._scene.addItem(item)
-
-        if self._page_pixmap_item is not None:
-            page_rect = self._page_pixmap_item.boundingRect()
-            init_x = page_rect.width() * 0.62
-            init_y = page_rect.height() * 0.82
-            item.setPos(init_x, init_y)
-
-        item.geometryChanged.connect(self.placementChanged.emit)
-        self._signature_item = item
-        self.placementChanged.emit()
-
-    def clear_signature(self) -> None:
-        """Elimina la firma del canvas y borra la referencia almacenada."""
-        if self._signature_item is not None:
-            self._scene.removeItem(self._signature_item)
-            self._signature_item = None
-        self._stored_signature_pix = None
-        self.placementChanged.emit()
-
-    def has_signature(self) -> bool:
-        return self._signature_item is not None
-
-    # ---- Conversión ----
-    def signature_center_pdf(self) -> Tuple[float, float]:
-        if self._signature_item is None:
-            return 0.0, 0.0
-        item = self._signature_item
-        center_local = QPointF(item.width() / 2, item.height() / 2)
-        center_scene = item.mapToScene(center_local)
-        return (
-            center_scene.x() * self._scene_to_pdf,
-            center_scene.y() * self._scene_to_pdf,
-        )
-
-    def signature_size_pdf(self) -> Tuple[float, float]:
-        if self._signature_item is None:
-            return 0.0, 0.0
-        return (
-            self._signature_item.width() * self._scene_to_pdf,
-            self._signature_item.height() * self._scene_to_pdf,
-        )
-
-    def signature_angle(self) -> float:
-        if self._signature_item is None:
-            return 0.0
-        return -self._signature_item.rotation()
-
-    def signature_center_normalized(self) -> Tuple[float, float]:
-        if self._page_w_pt <= 0 or self._page_h_pt <= 0:
-            return 0.5, 0.5
-        cx, cy = self.signature_center_pdf()
-        return cx / self._page_w_pt, cy / self._page_h_pt
-
     def page_size_pt(self) -> Tuple[float, float]:
         return self._page_w_pt, self._page_h_pt
 
-    # ---- Zoom público ----
+    # ==================================================================== #
+    # API multi-firma (nueva)
+    # ==================================================================== #
+
+    def add_sig(self, uid: str, pixmap: QPixmap, color: QColor) -> None:
+        """Agrega una firma al canvas en posición por defecto (zona inferior).
+
+        El tamaño inicial es proporcional al ancho del PDF activo (~22 %),
+        de modo que sea consistente entre documentos de distintos formatos.
+        """
+        if uid in self._sig_items:
+            self.remove_sig(uid)
+
+        item = SignatureItem(uid, pixmap, color)
+        item.geometryChanged.connect(lambda _uid=uid: self._on_item_geometry_changed(_uid))
+        item.activated.connect(lambda _uid=uid: self._on_item_activated(_uid))
+
+        # ── Tamaño inicial proporcional al PDF ─────────────────────────
+        if self._page_w_pt > 0:
+            # ~22 % del ancho del PDF en puntos, convertido a pixels del canvas
+            target_w_pt = max(60.0, self._page_w_pt * 0.22)
+            target_w_sc = target_w_pt / self._scene_to_pdf
+            ratio = pixmap.height() / max(1, pixmap.width())
+            item.setSize(target_w_sc, target_w_sc * ratio)
+
+        if self._page_pixmap_item is not None:
+            pr = self._page_pixmap_item.boundingRect()
+            item.setPos(
+                pr.width() * 0.5 - item.width() / 2,
+                pr.height() * 0.82 - item.height() / 2,
+            )
+
+        self._scene.addItem(item)
+        self._sig_items[uid] = item
+
+        if len(self._sig_items) == 1:
+            self.set_active_uid(uid)
+
+    def remove_sig(self, uid: str) -> None:
+        """Elimina una firma del canvas."""
+        item = self._sig_items.pop(uid, None)
+        if item is not None and item.scene() == self._scene:
+            self._scene.removeItem(item)
+        if self._active_uid == uid:
+            self._active_uid = None
+
+    def clear_all_sigs(self) -> None:
+        """Elimina todas las firmas del canvas."""
+        for uid in list(self._sig_items.keys()):
+            self.remove_sig(uid)
+        self._active_uid = None
+
+    def clear_page(self) -> None:
+        """Limpia la escena completamente: página y todas las firmas."""
+        if self._doc is not None:
+            try:
+                self._doc.close()
+            except Exception:
+                pass
+            self._doc = None
+        self._pdf_path = None
+        self._page_index = 0
+        self._page_pixmap_item = None
+        self._sig_items.clear()
+        self._active_uid = None
+        self._page_w_pt = 0.0
+        self._page_h_pt = 0.0
+        self._has_fit_once = False
+        self._scene.clear()
+
+    def set_active_uid(self, uid: Optional[str]) -> None:
+        """Selecciona la firma activa (borde sólido + handles visibles)."""
+        self._active_uid = uid
+        for u, item in self._sig_items.items():
+            item.set_active(u == uid)
+
+    def restore_placement(
+        self,
+        uid: str,
+        cx_norm: float,
+        cy_norm: float,
+        w_pt: float,
+        h_pt: float,
+        angle: float,
+    ) -> None:
+        """Posiciona programáticamente una firma; NO emite señales de cambio."""
+        item = self._sig_items.get(uid)
+        if item is None or self._page_pixmap_item is None:
+            return
+        pix = self._page_pixmap_item.pixmap()
+        if pix.width() == 0 or pix.height() == 0:
+            return
+
+        self._restoring = True
+        try:
+            w_sc = w_pt / self._scene_to_pdf
+            h_sc = h_pt / self._scene_to_pdf
+            item.setSize(w_sc, h_sc)
+            cx_sc = cx_norm * pix.width()
+            cy_sc = cy_norm * pix.height()
+            item.setPos(cx_sc - w_sc / 2, cy_sc - h_sc / 2)
+            item.setRotation(-angle)
+        finally:
+            self._restoring = False
+
+    def placement_of(
+        self, uid: str
+    ) -> Optional[Tuple[float, float, float, float, float]]:
+        """Devuelve (cx_norm, cy_norm, w_pt, h_pt, angle) de una firma, o None."""
+        item = self._sig_items.get(uid)
+        if item is None or self._page_pixmap_item is None:
+            return None
+        pix = self._page_pixmap_item.pixmap()
+        if pix.width() == 0 or pix.height() == 0:
+            return None
+
+        center_local = QPointF(item.width() / 2, item.height() / 2)
+        center_scene = item.mapToScene(center_local)
+        cx_n = center_scene.x() / pix.width()
+        cy_n = center_scene.y() / pix.height()
+        w_pt = item.width() * self._scene_to_pdf
+        h_pt = item.height() * self._scene_to_pdf
+        angle = -item.rotation()
+        return (cx_n, cy_n, w_pt, h_pt, angle)
+
+    def sig_uids(self) -> List[str]:
+        return list(self._sig_items.keys())
+
+    def has_sigs(self) -> bool:
+        return bool(self._sig_items)
+
+    # ==================================================================== #
+    # API backward-compat (foleador, main_window legacy)
+    # ==================================================================== #
+
+    def set_signature(self, pixmap: QPixmap) -> None:
+        """Backward-compat: gestiona una sola firma con uid '_single'."""
+        self.remove_sig("_single")
+        if not pixmap.isNull():
+            self.add_sig("_single", pixmap, QColor(94, 106, 210))
+            self.set_active_uid("_single")
+        self.placementChanged.emit()
+
+    def clear_signature(self) -> None:
+        self.remove_sig("_single")
+        self.placementChanged.emit()
+
+    def has_signature(self) -> bool:
+        return "_single" in self._sig_items
+
+    def restore_signature_placement(
+        self,
+        cx_norm: float,
+        cy_norm: float,
+        w_pt: float,
+        h_pt: float,
+        angle: float,
+    ) -> None:
+        if "_single" in self._sig_items:
+            self.restore_placement("_single", cx_norm, cy_norm, w_pt, h_pt, angle)
+
+    def signature_center_pdf(self) -> Tuple[float, float]:
+        p = self.placement_of("_single")
+        if not p:
+            return (0.0, 0.0)
+        cx_n, cy_n, _, _, _ = p
+        return cx_n * self._page_w_pt, cy_n * self._page_h_pt
+
+    def signature_size_pdf(self) -> Tuple[float, float]:
+        p = self.placement_of("_single")
+        if not p:
+            return (0.0, 0.0)
+        return p[2], p[3]
+
+    def signature_angle(self) -> float:
+        p = self.placement_of("_single")
+        return p[4] if p else 0.0
+
+    def signature_center_normalized(self) -> Tuple[float, float]:
+        p = self.placement_of("_single")
+        if not p:
+            return (0.5, 0.5)
+        return p[0], p[1]
+
+    # ==================================================================== #
+    # Zoom público
+    # ==================================================================== #
+
     def fit_to_view(self) -> None:
         if self._page_pixmap_item is not None:
             self.fitInView(
@@ -443,7 +680,70 @@ class PdfPreviewView(QGraphicsView):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        # Primera vez visible: ajustar
         if not self._has_fit_once and self._page_pixmap_item is not None:
             self.fit_to_view()
             self._has_fit_once = True
+
+    # ==================================================================== #
+    # Internos
+    # ==================================================================== #
+
+    def _render_page(self) -> None:
+        """Renderiza la página actual y la agrega al canvas. No toca las firmas."""
+        if not self._doc:
+            return
+
+        page = self._doc[self._page_index]
+        mat = fitz.Matrix(PREVIEW_DPI / 72.0, PREVIEW_DPI / 72.0)
+        pm = page.get_pixmap(matrix=mat, alpha=False)
+        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
+        pix = pil_to_qpixmap(img)
+
+        self._page_pixmap_item = QGraphicsPixmapItem(pix)
+        self._page_pixmap_item.setZValue(0)
+
+        shadow = QGraphicsDropShadowEffect()
+        shadow.setBlurRadius(24)
+        shadow.setColor(QColor(0, 0, 0, 130))
+        shadow.setOffset(0, 6)
+        self._page_pixmap_item.setGraphicsEffect(shadow)
+        self._scene.addItem(self._page_pixmap_item)
+
+        self._page_w_pt = page.rect.width
+        self._page_h_pt = page.rect.height
+
+        margin = 40
+        self._scene.setSceneRect(
+            QRectF(-margin, -margin,
+                   pix.width() + 2 * margin,
+                   pix.height() + 2 * margin)
+        )
+
+        if not self._has_fit_once:
+            self.fit_to_view()
+            self._has_fit_once = True
+
+        self.pageChanged.emit(self._page_index, self.page_count())
+
+    def _update_page_pixmap(self) -> None:
+        """Solo actualiza el pixmap de página; los items de firma se conservan."""
+        if not self._doc or not self._page_pixmap_item:
+            return
+        page = self._doc[self._page_index]
+        mat = fitz.Matrix(PREVIEW_DPI / 72.0, PREVIEW_DPI / 72.0)
+        pm = page.get_pixmap(matrix=mat, alpha=False)
+        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
+        pix = pil_to_qpixmap(img)
+        self._page_pixmap_item.setPixmap(pix)
+        self._page_w_pt = page.rect.width
+        self._page_h_pt = page.rect.height
+
+    def _on_item_geometry_changed(self, uid: str) -> None:
+        if self._restoring:
+            return
+        self.sig_placement_changed.emit(uid)
+        self.placementChanged.emit()   # backward compat
+
+    def _on_item_activated(self, uid: str) -> None:
+        self.set_active_uid(uid)
+        self.item_activated.emit(uid)

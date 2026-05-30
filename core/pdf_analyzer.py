@@ -7,6 +7,7 @@ consulta para decidir si una posición candidata de firma es válida.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Tuple
+import io
 import fitz  # PyMuPDF
 
 

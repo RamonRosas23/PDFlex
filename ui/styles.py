@@ -6,6 +6,23 @@ Estilos consistentes para TODOS los widgets de Qt (incluyendo
 QSpinBox/QDoubleSpinBox/QComboBox que requieren reglas explícitas
 para sus sub-controles).
 """
+import tempfile
+from pathlib import Path as _Path
+
+# Genera el SVG del checkmark una sola vez al cargar el módulo
+def _write_check_svg() -> str:
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12">'
+        '<polyline points="2,6 5,9.5 10,3" stroke="white" stroke-width="1.8" '
+        'stroke-linecap="round" stroke-linejoin="round" fill="none"/>'
+        '</svg>'
+    )
+    tmp = _Path(tempfile.gettempdir()).resolve() / "PDFlex" / "check.svg"
+    tmp.parent.mkdir(parents=True, exist_ok=True)
+    tmp.write_text(svg, encoding="utf-8")
+    return str(tmp).replace("\\", "/")
+
+_CHECK_SVG = _write_check_svg()
 
 # Paleta refinada
 COLORS = {
@@ -619,7 +636,8 @@ QCheckBox::indicator:hover {{
 QCheckBox::indicator:checked {{
     background: {COLORS['accent']};
     border-color: {COLORS['accent']};
-    image: none;
+    border-radius: 4px;
+    image: url({_CHECK_SVG});
 }}
 
 /* ============================================================
@@ -787,5 +805,162 @@ QFrame[class="PageContainer"] {{
 #PdfPreview QScrollBar::add-page:horizontal,
 #PdfPreview QScrollBar::sub-page:horizontal {{
     background: none;
+}}
+
+/* ============================================================
+   Shell — Topbar
+============================================================ */
+#ShellTopbar {{
+    background-color: {COLORS['surface']};
+    border-bottom: 1px solid {COLORS['border']};
+}}
+
+#TopbarLogo {{
+    color: {COLORS['text']};
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+}}
+
+#TopbarSep {{
+    background-color: {COLORS['border']};
+}}
+
+#TopbarToolName {{
+    color: {COLORS['text_muted']};
+    font-size: 13px;
+}}
+
+#TrayBtn {{
+    background-color: {COLORS['surface_2']};
+    color: {COLORS['text_muted']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 6px;
+    padding: 0 12px;
+    font-size: 12px;
+}}
+
+#TrayBtn:hover {{
+    background-color: {COLORS['surface_3']};
+    color: {COLORS['text']};
+    border-color: {COLORS['border_strong']};
+}}
+
+#TrayBtn[has_items="true"] {{
+    color: {COLORS['text']};
+    border-color: {COLORS['border_strong']};
+}}
+
+/* ============================================================
+   Shell — Launcher
+============================================================ */
+#LauncherTitle {{
+    color: {COLORS['text']};
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+}}
+
+#LauncherSubtitle {{
+    color: {COLORS['text_muted']};
+    font-size: 13px;
+}}
+
+#LauncherCard {{
+    background-color: {COLORS['surface']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 12px;
+}}
+
+#LauncherCard:hover {{
+    background-color: {COLORS['surface_2']};
+    border-color: {COLORS['border_strong']};
+}}
+
+#LauncherCard[enabled_tool="false"] {{
+    opacity: 0.55;
+}}
+
+#ToolCardTitle {{
+    font-size: 14px;
+    font-weight: 600;
+}}
+
+#ToolCardTagline {{
+    color: {COLORS['text_muted']};
+    font-size: 12px;
+}}
+
+#ComingSoonBadge {{
+    background-color: {COLORS['surface_3']};
+    color: {COLORS['text_dim']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-weight: 500;
+}}
+
+/* ============================================================
+   Shell — Bandeja (Tray)
+============================================================ */
+#TrayPopup {{
+    background-color: {COLORS['surface']};
+    border: 1px solid {COLORS['border_strong']};
+    border-radius: 10px;
+}}
+
+#TrayTitle {{
+    color: {COLORS['text']};
+    font-size: 13px;
+    font-weight: 600;
+}}
+
+QFrame[class="TrayItemRow"] {{
+    background-color: {COLORS['surface_2']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 6px;
+}}
+
+QFrame[class="TrayItemRow"]:hover {{
+    border-color: {COLORS['border_strong']};
+}}
+
+/* ============================================================
+   Shell — Tippy
+============================================================ */
+#TippyPopover {{
+    background-color: {COLORS['surface']};
+    border: 1px solid {COLORS['border_strong']};
+    border-radius: 10px;
+}}
+
+#TippyTitle {{
+    color: {COLORS['text']};
+    font-size: 13px;
+    font-weight: 600;
+}}
+
+#TippyBody {{
+    background-color: transparent;
+    color: {COLORS['text_muted']};
+    font-size: 12px;
+    border: none;
+}}
+
+QPushButton[class="TippyBtn"] {{
+    background-color: transparent;
+    color: {COLORS['text_dim']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 0;
+}}
+
+QPushButton[class="TippyBtn"]:hover {{
+    background-color: {COLORS['surface_2']};
+    color: {COLORS['text_muted']};
+    border-color: {COLORS['border_strong']};
 }}
 """

@@ -13,6 +13,7 @@ el resultado sea reproducible y previsible en el visor final.
 """
 from __future__ import annotations
 from dataclasses import dataclass
+import hashlib
 import random
 
 
@@ -56,12 +57,10 @@ class VariationGenerator:
         self.config.clamp()
 
     def variation_for(self, doc_id: str, page_index: int) -> Variation:
-        # Seed combinada estable
-        seed = (
-            self.config.seed * 1_000_003
-            + hash(doc_id) % 1_000_003
-            + page_index * 31
-        )
+        # hashlib evita la aleatorización por proceso de hash() de Python.
+        # Misma configuración + documento + página = mismo resultado exacto.
+        payload = f"{self.config.seed}\0{doc_id}\0{page_index}".encode("utf-8")
+        seed = int.from_bytes(hashlib.sha256(payload).digest()[:8], "big")
         rng = random.Random(seed)
 
         d_angle = rng.uniform(-self.config.angle_deg, self.config.angle_deg)

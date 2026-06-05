@@ -5,8 +5,9 @@ Soporta múltiples firmas por documento en una sola pasada,
 sin archivos temporales intermedios.
 """
 from __future__ import annotations
+from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Callable
+from typing import Callable, Dict, List, Optional, Tuple
 import io
 import os
 import tempfile
@@ -15,8 +16,8 @@ import fitz
 from PIL import Image, ImageEnhance, ImageFilter
 
 from .pdf_analyzer import PdfAnalyzer, PageAnalysis
-from .safe_zone import SafeZoneFinder, Placement
-from .variation import VariationGenerator, VariationConfig
+from .safe_zone import SafeZoneFinder, Placement, fit_placement_inside_page
+from .variation import Variation, VariationGenerator, VariationConfig
 
 
 def _open_pdf_safe(path: str) -> fitz.Document:
@@ -55,6 +56,13 @@ class SignJob:
     output_path: str
     signatures: List[SigPlacement]     # Una o más firmas
     pages: Optional[List[int]] = None  # None = todas las páginas
+    smart_placement: bool = True       # False = desactiva el buscador de zona segura
+
+
+@dataclass
+class SignaturePageResult:
+    signature_path: str
+    placement: Placement
 
 
 @dataclass
@@ -63,6 +71,7 @@ class PageResult:
     placement: Placement
     snapped_to_line: bool = False
     clean: bool = True
+    signature_results: List[SignaturePageResult] = field(default_factory=list)
 
 
 @dataclass
@@ -74,13 +83,22 @@ class JobResult:
     error: str = ""
 
 
+@dataclass
+class BoundsPreflight:
+    """Resumen rápido de ajustes físicos previstos antes de firmar."""
+    signatures_checked: int = 0
+    adjusted_to_page: int = 0
+    scaled_to_fit: int = 0
+    skipped_documents: int = 0
+
+
 class SignatureEngine:
     """Aplica múltiples firmas con variación natural y validación anti-texto."""
 
     def __init__(
         self,
         variation: VariationConfig,
-        margin: float = 18.0,
+        margin: float = 0.0,
         text_padding: float = 4.0,
     ):
         self.variation_gen = VariationGenerator(variation)
@@ -88,10 +106,52 @@ class SignatureEngine:
         self.finder = SafeZoneFinder(margin=margin, text_padding=text_padding)
         # Caché de imágenes para no reabrir el mismo archivo N veces
         self._img_cache: Dict[str, Image.Image] = {}
+        # Caché acotada de PNGs transformados. Normalmente cada página varía,
+        # pero cuando la transformación coincide evitamos repetir PIL + zlib.
+        self._transformed_png_cache: OrderedDict[
+            Tuple[str, float, float, float], bytes
+        ] = OrderedDict()
+        self._transformed_png_cache_limit = 16
 
     # ------------------------------------------------------------------ #
     # API pública
     # ------------------------------------------------------------------ #
+
+    def preflight_bounds(self, jobs: List[SignJob]) -> BoundsPreflight:
+        """Calcula ajustes de borde previstos sin rasterizar ni modificar PDFs."""
+        summary = BoundsPreflight()
+        for job in jobs:
+            try:
+                doc = _open_pdf_safe(job.pdf_path)
+            except Exception:
+                summary.skipped_documents += 1
+                continue
+            try:
+                target_pages = (
+                    job.pages if job.pages is not None
+                    else list(range(doc.page_count))
+                )
+                for page_idx in target_pages:
+                    page = doc[page_idx]
+                    for sig_conf in job.signatures:
+                        desired = self._desired_placement(
+                            sig_conf,
+                            page.rect.width,
+                            page.rect.height,
+                            job.pdf_path,
+                            page_idx,
+                        )[0]
+                        bounded = fit_placement_inside_page(
+                            desired, page.rect.width, page.rect.height, margin=0.0
+                        )
+                        summary.signatures_checked += 1
+                        if bounded.adjusted_to_page:
+                            summary.adjusted_to_page += 1
+                        if bounded.scaled_to_fit:
+                            summary.scaled_to_fit += 1
+            finally:
+                doc.close()
+        return summary
 
     def run_job(
         self,
@@ -111,6 +171,7 @@ class SignatureEngine:
         total = len(target_pages)
 
         try:
+            image_xrefs: Dict[Tuple, int] = {}
             for i, page_idx in enumerate(target_pages):
                 if progress:
                     progress(i, total, f"Página {page_idx + 1}/{doc.page_count}")
@@ -118,16 +179,28 @@ class SignatureEngine:
                 analysis = self.analyzer.analyze_page(doc, page_idx)
                 page = doc[page_idx]
                 primary_placement: Optional[Placement] = None
+                signature_results: List[SignaturePageResult] = []
+                occupied_rects: List[fitz.Rect] = []
 
                 for sig_conf in job.signatures:
                     base_img = self._get_image(sig_conf.signature_path)
-                    placement = self._compute_placement(
-                        sig_conf, analysis, job.pdf_path, page_idx
+                    placement, variation = self._compute_placement(
+                        sig_conf, analysis, job.pdf_path, page_idx, occupied_rects,
+                        smart=job.smart_placement,
                     )
-                    self._apply_signature(
-                        page, placement, base_img,
-                        job.pdf_path, sig_conf.signature_path, page_idx
+                    placement = self._apply_signature(
+                        page,
+                        placement,
+                        base_img,
+                        sig_conf.signature_path,
+                        variation,
+                        image_xrefs,
                     )
+                    occupied_rects.append(placement.rotated_bbox)
+                    signature_results.append(SignaturePageResult(
+                        signature_path=sig_conf.signature_path,
+                        placement=placement,
+                    ))
                     if primary_placement is None:
                         primary_placement = placement
 
@@ -135,12 +208,21 @@ class SignatureEngine:
                     results.append(PageResult(
                         page_index=page_idx,
                         placement=primary_placement,
-                        snapped_to_line=primary_placement.snapped_to_line,
-                        clean=primary_placement.clean,
+                        snapped_to_line=any(
+                            result.placement.snapped_to_line
+                            for result in signature_results
+                        ),
+                        clean=all(
+                            result.placement.clean
+                            for result in signature_results
+                        ),
+                        signature_results=signature_results,
                     ))
 
             os.makedirs(os.path.dirname(os.path.abspath(job.output_path)), exist_ok=True)
-            doc.save(job.output_path, garbage=4, deflate=True)
+            # Elimina objetos sin referencia y compacta xref, pero evita comparar
+            # todos los streams: garbage=4 domina el tiempo en PDFs con mucho texto.
+            doc.save(job.output_path, garbage=2, deflate=True)
             if progress:
                 progress(total, total, "Guardado")
 
@@ -175,9 +257,32 @@ class SignatureEngine:
         analysis: PageAnalysis,
         doc_id: str,
         page_index: int,
-    ) -> Placement:
-        base_x = sig_conf.base_x_norm * analysis.width
-        base_y = sig_conf.base_y_norm * analysis.height
+        occupied_rects: List[fitz.Rect],
+        smart: bool = True,
+    ) -> Tuple[Placement, Variation]:
+        desired, variation = self._desired_placement(
+            sig_conf, analysis.width, analysis.height, doc_id, page_index
+        )
+        if not smart:
+            # Solo barrera física (fit_placement_inside_page en _apply_signature)
+            return desired, variation
+        return (
+            self.finder.find_safe_placement(
+                analysis, desired, occupied_rects=occupied_rects
+            ),
+            variation,
+        )
+
+    def _desired_placement(
+        self,
+        sig_conf: SigPlacement,
+        page_width: float,
+        page_height: float,
+        doc_id: str,
+        page_index: int,
+    ) -> Tuple[Placement, Variation]:
+        base_x = sig_conf.base_x_norm * page_width
+        base_y = sig_conf.base_y_norm * page_height
 
         # Semilla única por (doc, firma, página).
         # Usamos solo el nombre del archivo (sin path completo) para estabilidad.
@@ -197,33 +302,137 @@ class SignatureEngine:
             x=x, y=y, width=w, height=h,
             angle=angle, opacity=v.opacity,
         )
-        return self.finder.find_safe_placement(analysis, desired)
+        return desired, v
 
     def _apply_signature(
         self,
         page: fitz.Page,
         placement: Placement,
         base_img: Image.Image,
-        doc_id: str,
         sig_path: str,
-        page_index: int,
-    ) -> None:
-        import os as _os
-        doc_name = _os.path.basename(doc_id)
-        sig_name = _os.path.basename(sig_path)
-        seed_key = doc_name + "\x00" + sig_name
-        v = self.variation_gen.variation_for(seed_key, page_index)
-        img = self._transform_image(base_img, placement, v.pressure)
+        variation: Variation,
+        image_xrefs: Dict[Tuple, int],
+    ) -> Placement:
+        # Segunda barrera: fit dentro de los límites de display de la página.
+        placement = fit_placement_inside_page(
+            placement, page.rect.width, page.rect.height, margin=0.0
+        )
+        target = placement.rotated_bbox
+        if not self._inside_physical_page(target, page.rect.width, page.rect.height):
+            raise ValueError("No fue posible encajar la firma dentro de la página.")
+
+        rot = int(page.rotation) % 360
+
+        if rot != 0:
+            # insert_image() usa coordenadas NATIVAS del PDF (igual que insert_text).
+            # Para páginas rotadas grandes, el rect en display space puede exceder
+            # las dimensiones nativas → la imagen se descarta silenciosamente.
+            # Solución: transformar los 4 vértices del rect display → nativo y
+            # tomar el bounding box resultante (que sigue siendo un rectángulo
+            # válido para rotaciones de 90° / 180° / 270°).
+            derot = page.derotation_matrix
+            corners = [
+                fitz.Point(target.x0, target.y0) * derot,
+                fitz.Point(target.x1, target.y0) * derot,
+                fitz.Point(target.x0, target.y1) * derot,
+                fitz.Point(target.x1, target.y1) * derot,
+            ]
+            xs = [p.x for p in corners]
+            ys = [p.y for p in corners]
+            target = fitz.Rect(min(xs), min(ys), max(xs), max(ys))
+
+        # La clave de caché incluye rot para que imágenes pre-rotadas no se
+        # reutilicen en páginas con orientación diferente.
+        base_key = self._transformed_image_key(sig_path, placement, variation.pressure)
+        cache_key = (*base_key, rot)
+        xref = image_xrefs.get(cache_key, 0)
+
+        try:
+            if xref:
+                page.insert_image(
+                    target, xref=xref, keep_proportion=False, overlay=True
+                )
+            else:
+                img_bytes = self._transformed_png_bytes(
+                    base_key, base_img, placement, variation.pressure, page_rot=rot
+                )
+                xref = page.insert_image(
+                    target,
+                    stream=img_bytes,
+                    keep_proportion=False,
+                    overlay=True,
+                )
+        except TypeError:
+            if xref:
+                page.insert_image(target, xref=xref, overlay=True)
+            else:
+                img_bytes = self._transformed_png_bytes(
+                    base_key, base_img, placement, variation.pressure, page_rot=rot
+                )
+                xref = page.insert_image(target, stream=img_bytes, overlay=True)
+
+        image_xrefs[cache_key] = xref
+        return placement
+
+    @staticmethod
+    def _transformed_image_key(
+        sig_path: str,
+        placement: Placement,
+        pressure: float,
+    ) -> Tuple[str, float, float, float]:
+        return (sig_path, placement.angle, placement.opacity, pressure)
+
+    def _transformed_png_bytes(
+        self,
+        image_key: Tuple[str, float, float, float],
+        base_img: Image.Image,
+        placement: Placement,
+        pressure: float,
+        page_rot: int = 0,
+    ) -> bytes:
+        # La clave de caché incluye page_rot para separar variantes por orientación
+        cache_key = (*image_key, page_rot)
+        cached = self._transformed_png_cache.get(cache_key)
+        if cached is not None:
+            self._transformed_png_cache.move_to_end(cache_key)
+            return cached
+
+        img = self._transform_image(base_img, placement, pressure)
+
+        if page_rot != 0:
+            # Pre-rotar la imagen CCW para compensar la rotación del visor.
+            # El visor aplica Rotate grados CW; pre-rotar Rotate grados CCW
+            # → la firma aparece correctamente orientada en pantalla.
+            # Mismo razonamiento que fitz.Matrix(rot) en el foleador.
+            img = img.rotate(
+                page_rot,
+                expand=True,
+                resample=Image.BICUBIC,
+                fillcolor=(0, 0, 0, 0),
+            )
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         img_bytes = buf.getvalue()
+        self._transformed_png_cache[cache_key] = img_bytes
+        self._transformed_png_cache.move_to_end(cache_key)
+        while len(self._transformed_png_cache) > self._transformed_png_cache_limit:
+            self._transformed_png_cache.popitem(last=False)
+        return img_bytes
 
-        target = placement.rotated_bbox
-        try:
-            page.insert_image(target, stream=img_bytes, keep_proportion=False, overlay=True)
-        except TypeError:
-            page.insert_image(target, stream=img_bytes, overlay=True)
+    @staticmethod
+    def _inside_physical_page(
+        rect: fitz.Rect,
+        page_width: float,
+        page_height: float,
+        tolerance: float = 1e-6,
+    ) -> bool:
+        return (
+            rect.x0 >= -tolerance
+            and rect.y0 >= -tolerance
+            and rect.x1 <= page_width + tolerance
+            and rect.y1 <= page_height + tolerance
+        )
 
     def _transform_image(
         self, base: Image.Image, placement: Placement, pressure: float
@@ -252,3 +461,16 @@ class SignatureEngine:
             )
 
         return img
+
+
+_PROCESS_ENGINE: Optional[SignatureEngine] = None
+_PROCESS_VARIATION: Optional[VariationConfig] = None
+
+
+def run_job_in_process(job: SignJob, variation: VariationConfig) -> JobResult:
+    """Ejecuta un job en un proceso aislado, reutilizando cachés locales."""
+    global _PROCESS_ENGINE, _PROCESS_VARIATION
+    if _PROCESS_ENGINE is None or _PROCESS_VARIATION != variation:
+        _PROCESS_ENGINE = SignatureEngine(variation)
+        _PROCESS_VARIATION = variation
+    return _PROCESS_ENGINE.run_job(job)

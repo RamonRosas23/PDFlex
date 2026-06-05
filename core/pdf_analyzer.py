@@ -19,6 +19,7 @@ class TextBlock:
     x1: float
     y1: float
     text: str = ""
+    is_signature_line: bool = False
 
     @property
     def rect(self) -> fitz.Rect:
@@ -53,12 +54,14 @@ class PageAnalysis:
             rect.x1 + padding, rect.y1 + padding,
         )
         for block in self.text_blocks:
+            if block.is_signature_line:
+                continue
             if expanded.intersects(block.rect):
                 return True
         return False
 
-    def inside_page(self, rect: fitz.Rect, margin: float = 18.0) -> bool:
-        """¿El rect está dentro de los márgenes seguros de la página?"""
+    def inside_page(self, rect: fitz.Rect, margin: float = 0.0) -> bool:
+        """¿El rect está dentro de los límites de la página y del margen solicitado?"""
         return (
             rect.x0 >= margin
             and rect.y0 >= margin
@@ -101,8 +104,16 @@ class PdfAnalyzer:
             text = text.strip()
             if len(text) < self.min_text_length:
                 continue
+            is_signature_line = self._is_text_signature_line(text, x1 - x0)
             analysis.text_blocks.append(
-                TextBlock(x0=x0, y0=y0, x1=x1, y1=y1, text=text)
+                TextBlock(
+                    x0=x0,
+                    y0=y0,
+                    x1=x1,
+                    y1=y1,
+                    text=text,
+                    is_signature_line=is_signature_line,
+                )
             )
 
         # Detectar líneas de firma (líneas horizontales típicas "__________")
@@ -143,11 +154,19 @@ class PdfAnalyzer:
 
         # Buscar también texto que se vea como línea de firma (subrayados largos)
         for block in analysis.text_blocks:
-            t = block.text.replace(" ", "")
-            if len(t) >= 8 and set(t).issubset({"_", "-", "."}) and block.width >= 60:
+            if block.is_signature_line:
                 lines.append((block.x0, block.y0, block.x1, block.y1))
 
         return lines
+
+    @staticmethod
+    def _is_text_signature_line(text: str, width: float) -> bool:
+        compact = text.replace(" ", "")
+        return (
+            len(compact) >= 8
+            and set(compact).issubset({"_", "-", "."})
+            and width >= 60
+        )
 
     @staticmethod
     def suggest_signature_anchor(analysis: PageAnalysis) -> Tuple[float, float]:

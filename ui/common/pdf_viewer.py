@@ -19,11 +19,24 @@ from PyQt6.QtGui import QPixmap, QImage, QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QScrollArea, QSizePolicy,
+    QScrollArea,
 )
+
+from ui.common.save_utils import save_files_as_batch
+from ui.common.result_ui import ElidedLabel, configure_result_list
+from ui.common.file_dialogs import get_save_file_name
+from ui.common.icons import icon, set_button_icon
 
 
 ZOOM_LEVELS = [0.50, 0.75, 1.00, 1.25, 1.50, 2.00, 2.50, 3.00]
+
+# Tamaño máximo del lado largo de la imagen renderizada en el canvas principal.
+# Limita el uso de RAM para PDFs escaneados o de tamaño inusual.
+_CANVAS_MAX_PX = 2200
+
+# Tamaño objetivo del lado largo de las miniaturas (en píxeles finales).
+# El DPI se escala para que ninguna miniatura supere este umbral.
+_THUMB_TARGET_PX = 180
 
 
 def _pil_to_qpixmap(img: Image.Image) -> QPixmap:
@@ -43,6 +56,7 @@ class GenericPdfViewer(QWidget):
         super().__init__(parent)
         self._doc_list_title = doc_list_title
         self._results: list = []
+        self._source_dirs: dict = {}
         self._current_doc: fitz.Document | None = None
         self._current_result = None
         self._current_page: int = 0
@@ -73,6 +87,7 @@ class GenericPdfViewer(QWidget):
         lv.addWidget(title_lbl)
 
         self.doc_list = QListWidget()
+        configure_result_list(self.doc_list)
         self.doc_list.itemSelectionChanged.connect(self._on_doc_selected)
         lv.addWidget(self.doc_list, 1)
 
@@ -86,50 +101,76 @@ class GenericPdfViewer(QWidget):
         cv.setSpacing(12)
 
         # Header
-        header = QHBoxLayout()
+        header = QVBoxLayout()
         header.setSpacing(8)
 
-        self.title_label = QLabel("Selecciona un documento")
+        self.title_label = ElidedLabel("Selecciona un documento")
         self.title_label.setProperty("class", "CardTitle")
-        header.addWidget(self.title_label, 1)
+        header.addWidget(self.title_label)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
 
         # Controles zoom
-        self.zoom_out_btn = QPushButton("−")
+        self.zoom_out_btn = QPushButton()
         self.zoom_out_btn.setProperty("class", "IconBtn")
         self.zoom_out_btn.setToolTip("Reducir")
+        set_button_icon(self.zoom_out_btn, "minus", size=14, icon_only=True)
         self.zoom_out_btn.clicked.connect(self._zoom_out)
         self.zoom_out_btn.setEnabled(False)
-        header.addWidget(self.zoom_out_btn)
+        actions.addWidget(self.zoom_out_btn)
 
         self.zoom_label = QLabel("100%")
         self.zoom_label.setStyleSheet("color: #9094A0; min-width: 40px;")
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        header.addWidget(self.zoom_label)
+        actions.addWidget(self.zoom_label)
 
-        self.zoom_in_btn = QPushButton("+")
+        self.zoom_in_btn = QPushButton()
         self.zoom_in_btn.setProperty("class", "IconBtn")
         self.zoom_in_btn.setToolTip("Aumentar")
+        set_button_icon(self.zoom_in_btn, "plus", size=14, icon_only=True)
         self.zoom_in_btn.clicked.connect(self._zoom_in)
         self.zoom_in_btn.setEnabled(False)
-        header.addWidget(self.zoom_in_btn)
+        actions.addWidget(self.zoom_in_btn)
 
-        fit_btn = QPushButton("Ajustar")
+        fit_btn = QPushButton()
         fit_btn.setProperty("class", "IconBtn")
+        fit_btn.setToolTip("Ajustar al ancho")
+        set_button_icon(fit_btn, "maximize", size=14, icon_only=True)
         fit_btn.clicked.connect(self._fit_width)
-        header.addWidget(fit_btn)
+        actions.addWidget(fit_btn)
+
+        actions.addStretch(1)
 
         self.open_file_btn = QPushButton("Abrir PDF")
         self.open_file_btn.setProperty("class", "Ghost")
+        set_button_icon(self.open_file_btn, "external-link")
         self.open_file_btn.clicked.connect(self._on_open_file)
         self.open_file_btn.setEnabled(False)
-        header.addWidget(self.open_file_btn)
+        actions.addWidget(self.open_file_btn)
 
         self.open_btn = QPushButton("Abrir carpeta")
         self.open_btn.setProperty("class", "Ghost")
+        set_button_icon(self.open_btn, "folder-open")
         self.open_btn.clicked.connect(self._on_open_in_explorer)
         self.open_btn.setEnabled(False)
-        header.addWidget(self.open_btn)
+        actions.addWidget(self.open_btn)
 
+        self.save_as_btn = QPushButton("Guardar como")
+        self.save_as_btn.setProperty("class", "Ghost")
+        set_button_icon(self.save_as_btn, "save")
+        self.save_as_btn.clicked.connect(self._on_save_as)
+        self.save_as_btn.setEnabled(False)
+        actions.addWidget(self.save_as_btn)
+
+        self.save_all_btn = QPushButton("Guardar todo")
+        self.save_all_btn.setProperty("class", "Ghost")
+        set_button_icon(self.save_all_btn, "download")
+        self.save_all_btn.clicked.connect(self._on_save_all)
+        self.save_all_btn.setEnabled(False)
+        actions.addWidget(self.save_all_btn)
+
+        header.addLayout(actions)
         cv.addLayout(header)
 
         # Body: página miniatura + canvas
@@ -137,14 +178,17 @@ class GenericPdfViewer(QWidget):
         body.setSpacing(12)
 
         self.page_list = QListWidget()
-        self.page_list.setFixedWidth(112)
+        self.page_list.setObjectName("PageThumbList")
+        self.page_list.setFixedWidth(132)
         self.page_list.setViewMode(QListWidget.ViewMode.IconMode)
-        self.page_list.setIconSize(QSize(88, 112))
-        self.page_list.setGridSize(QSize(100, 132))
+        self.page_list.setIconSize(QSize(92, 118))
+        self.page_list.setGridSize(QSize(112, 152))
         self.page_list.setFlow(QListWidget.Flow.TopToBottom)
         self.page_list.setWrapping(False)
         self.page_list.setResizeMode(QListWidget.ResizeMode.Fixed)
-        self.page_list.setSpacing(2)
+        self.page_list.setSpacing(4)
+        self.page_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.page_list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.page_list.itemSelectionChanged.connect(self._on_page_selected)
         body.addWidget(self.page_list)
 
@@ -175,14 +219,16 @@ class GenericPdfViewer(QWidget):
     def set_results(self, results: list) -> None:
         """Acepta cualquier lista de objetos con output_path, success, error."""
         self._results = results
+        self._source_dirs = {}
         self.doc_list.clear()
         for r in results:
             out = getattr(r, "output_path", "") or ""
             name = Path(out).name if out else "(error)"
             item = QListWidgetItem(name)
+            item.setToolTip(out or name)
             if not getattr(r, "success", False):
                 item.setForeground(QBrush(QColor("#E5484D")))
-                item.setText(f"⚠  {name}")
+                item.setIcon(icon("warning", "#E5484D", 16))
             self.doc_list.addItem(item)
         if results:
             self.doc_list.setCurrentRow(0)
@@ -192,26 +238,107 @@ class GenericPdfViewer(QWidget):
     def clear_results(self) -> None:
         self._close_doc()
         self._results = []
+        self._source_dirs = {}
         self._current_result = None
         self.doc_list.clear()
         self._clear_view()
 
+    def set_source_dirs(self, dirs: list) -> None:
+        """Mapea cada fila de resultados a su carpeta de origen (para el cuadro Save As)."""
+        self._source_dirs = {i: d for i, d in enumerate(dirs)}
+
+    @staticmethod
+    def _source_dir_from(result) -> str:
+        """Devuelve la carpeta del archivo origen a partir de un resultado."""
+        import tempfile
+        job = getattr(result, "job", None)
+        if job:
+            pdf_path = getattr(job, "pdf_path", None)
+            if pdf_path:
+                return str(Path(pdf_path).parent)
+        out = getattr(result, "output_path", "") or ""
+        if out:
+            p = Path(out)
+            try:
+                p.relative_to(Path(tempfile.gettempdir()))
+                # Archivo en temp — proponer carpeta home como destino
+                return str(Path.home())
+            except ValueError:
+                return str(p.parent)
+        return str(Path.home())
+
+    def _on_save_as(self) -> None:
+        if self._current_result is None:
+            return
+        out = getattr(self._current_result, "output_path", "") or ""
+        if not out or not Path(out).exists():
+            return
+        row = self.doc_list.currentRow()
+        src_dir = self._source_dirs.get(row) or self._source_dir_from(self._current_result)
+        new_path, _ = get_save_file_name(
+            self, "Guardar como",
+            str(Path(src_dir) / Path(out).name),
+            "PDF (*.pdf)",
+        )
+        if new_path:
+            import shutil
+            shutil.copy2(out, new_path)
+
+    def _on_save_all(self) -> None:
+        start_dir = Path.home()
+        row = self.doc_list.currentRow()
+        if row >= 0:
+            src_dir = self._source_dirs.get(row)
+            if src_dir:
+                start_dir = Path(src_dir)
+            elif self._current_result is not None:
+                start_dir = Path(self._source_dir_from(self._current_result))
+        save_files_as_batch(
+            self,
+            self._saveable_paths(),
+            title="Guardar todo",
+            start_dir=start_dir,
+        )
+
     # ------------------------------------------------------------------ #
 
     def _clear_view(self) -> None:
-        self.page_list.clear()
+        self.page_list.blockSignals(True)
+        try:
+            self.page_list.clear()
+        finally:
+            self.page_list.blockSignals(False)
+        self._current_page = 0
         self.canvas.clear()
         self.title_label.setText("Selecciona un documento")
         self.meta_label.setText("")
         self._set_zoom_enabled(False)
         self.open_btn.setEnabled(False)
         self.open_file_btn.setEnabled(False)
+        self.save_as_btn.setEnabled(False)
+        self.save_all_btn.setEnabled(False)
 
     def _set_zoom_enabled(self, enabled: bool) -> None:
         self.zoom_in_btn.setEnabled(enabled)
         self.zoom_out_btn.setEnabled(enabled)
         self.open_btn.setEnabled(enabled)
         self.open_file_btn.setEnabled(enabled)
+        self.save_as_btn.setEnabled(enabled)
+        self.save_all_btn.setEnabled(self._has_saveable_results())
+
+    def _has_saveable_results(self) -> bool:
+        return bool(self._saveable_paths())
+
+    def _saveable_paths(self) -> list[str]:
+        return [
+            getattr(r, "output_path", "")
+            for r in self._results
+            if (
+                getattr(r, "success", False)
+                and getattr(r, "output_path", "")
+                and Path(getattr(r, "output_path", "")).exists()
+            )
+        ]
 
     def _close_doc(self) -> None:
         if self._current_doc is not None:
@@ -231,6 +358,7 @@ class GenericPdfViewer(QWidget):
             return
         result = self._results[row]
         self._current_result = result
+        self._current_page = 0
         self._close_doc()
 
         out_path = getattr(result, "output_path", "") or ""
@@ -238,7 +366,11 @@ class GenericPdfViewer(QWidget):
             self.title_label.setText("Error en este documento")
             err = getattr(result, "error", "")
             self.meta_label.setText(err or "")
-            self.page_list.clear()
+            self.page_list.blockSignals(True)
+            try:
+                self.page_list.clear()
+            finally:
+                self.page_list.blockSignals(False)
             self.canvas.clear()
             self._set_zoom_enabled(False)
             return
@@ -250,17 +382,34 @@ class GenericPdfViewer(QWidget):
             self._current_doc = fitz.open(out_path)
         except Exception as e:
             self.meta_label.setText(f"No se pudo abrir: {e}")
+            self.page_list.blockSignals(True)
+            try:
+                self.page_list.clear()
+            finally:
+                self.page_list.blockSignals(False)
+            self.canvas.clear()
+            self._set_zoom_enabled(False)
             return
 
-        self._current_page = 0
-        self.page_list.clear()
-        for i in range(self._current_doc.page_count):
-            thumb = self._render(i, dpi=30)
-            item = QListWidgetItem(QIcon(thumb), str(i + 1))
-            self.page_list.addItem(item)
+        self.page_list.blockSignals(True)
+        try:
+            self.page_list.clear()
+            for i in range(self._current_doc.page_count):
+                # DPI adaptativo: la miniatura nunca ocupa más de _THUMB_TARGET_PX
+                # en su lado largo, independientemente del tamaño físico de la página.
+                thumb_dpi = self._thumb_dpi_for_page(i)
+                thumb = self._render(i, dpi=thumb_dpi)
+                item = QListWidgetItem(QIcon(thumb), str(i + 1))
+                item.setToolTip(f"Página {i + 1}")
+                self.page_list.addItem(item)
+        finally:
+            self.page_list.blockSignals(False)
 
         if self._current_doc.page_count > 0:
             self.page_list.setCurrentRow(0)
+            self._render_current()
+        else:
+            self.canvas.clear()
 
         self.meta_label.setText(
             f"{self._current_doc.page_count} páginas · {Path(out_path).name}"
@@ -272,6 +421,9 @@ class GenericPdfViewer(QWidget):
         row = self.page_list.currentRow()
         if row < 0:
             return
+        if row >= self._current_doc.page_count:
+            self._current_page = 0
+            return
         self._current_page = row
         self._render_current()
 
@@ -279,19 +431,53 @@ class GenericPdfViewer(QWidget):
     # Render
     # ------------------------------------------------------------------ #
 
-    def _compute_dpi(self) -> float:
+    def _thumb_dpi_for_page(self, page_idx: int) -> float:
+        """DPI adaptativo para miniaturas: la imagen siempre mide ≤ _THUMB_TARGET_PX
+        en su lado más largo, evitando crear imágenes enormes para páginas grandes.
+        """
         if self._current_doc is None:
+            return 12.0
+        page = self._current_doc[page_idx]
+        page_long = max(1.0, page.rect.width, page.rect.height)
+        return max(3.0, min(_THUMB_TARGET_PX * 72.0 / page_long, 30.0))
+
+    def _compute_dpi(self) -> float:
+        """DPI adaptativo para el canvas principal.
+
+        El 'base' DPI es el que hace que la página quepa exactamente en el
+        viewport (fit-width o fit-page).  El zoom multiplica ese base.
+
+        Cambios respecto a la versión anterior:
+        - Se elimina el floor fijo de 36 DPI.  Para páginas muy grandes ese
+          floor producía imágenes más anchas que el viewport, impidiendo el
+          ajuste real.  Ahora el mínimo es base×zoom_min (50 % del fit DPI),
+          lo que garantiza que 'Ajustar' siempre muestra la página completa.
+        - El máximo sigue siendo 320 DPI para evitar imágenes de cientos de MB.
+        """
+        if self._current_doc is None:
+            return 96.0
+        if self._current_page < 0 or self._current_page >= self._current_doc.page_count:
             return 96.0
         page = self._current_doc[self._current_page]
         vp_w = max(200, self.scroll.viewport().width() - 24)
         vp_h = max(200, self.scroll.viewport().height() - 24)
-        dpi_w = vp_w / max(1.0, page.rect.width) * 72.0
-        dpi_h = vp_h / max(1.0, page.rect.height) * 72.0
+        page_w = max(1.0, page.rect.width)
+        page_h = max(1.0, page.rect.height)
+        dpi_w = vp_w / page_w * 72.0
+        dpi_h = vp_h / page_h * 72.0
         base = dpi_w if self._fit_mode == "width" else min(dpi_w, dpi_h)
-        return max(36.0, min(base * ZOOM_LEVELS[self._zoom_index], 320.0))
+        # Mínimo: zoom más pequeño aplicado al base (nunca < 4 DPI para ser visible)
+        min_dpi = max(4.0, base * ZOOM_LEVELS[0])
+        # Máximo adicional: limitar tamaño absoluto de imagen en RAM
+        # (_CANVAS_MAX_PX px en el lado largo como máximo)
+        max_dpi = min(320.0, _CANVAS_MAX_PX / max(page_w, page_h) * 72.0)
+        dpi = base * ZOOM_LEVELS[self._zoom_index]
+        return max(min_dpi, min(dpi, max_dpi))
 
     def _render_current(self) -> None:
         if self._current_doc is None:
+            return
+        if self._current_page < 0 or self._current_page >= self._current_doc.page_count:
             return
         dpi = self._compute_dpi()
         pix = self._render(self._current_page, dpi)

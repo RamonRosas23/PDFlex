@@ -42,6 +42,7 @@ COLORS = {
     "success":       "#3BD37C",
     "warning":       "#F5A623",
     "danger":        "#E5484D",
+    "scroll_handle": "#34343C",   # handle de scrollbars en toda la app
 }
 
 
@@ -78,6 +79,22 @@ QToolTip {{
     border-right: 1px solid {COLORS['border']};
 }}
 
+/* Marco de marca en la parte superior */
+#SidebarBrandFrame {{
+    background: transparent;
+    border: none;
+}}
+
+/* El nombre de la herramienta se colorea vía _apply_tool_accent */
+#SidebarBrandName {{
+    color: {COLORS['accent']};
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    background: transparent;
+}}
+
+/* Compat. legado — algunas rutas aún usan SidebarBrand */
 #SidebarBrand {{
     color: {COLORS['text']};
     font-size: 16px;
@@ -89,18 +106,27 @@ QToolTip {{
 #SidebarTagline {{
     color: {COLORS['text_dim']};
     font-size: 11px;
-    padding: 0 22px 24px 22px;
+    background: transparent;
 }}
 
 #SidebarSection {{
     color: {COLORS['text_dim']};
     font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 1.2px;
-    padding: 8px 22px 6px 22px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    padding: 6px 20px 4px 20px;
     text-transform: uppercase;
+    background: transparent;
 }}
 
+/* Botones paso (estilo nuevo _StepBtn) — base */
+#SidebarStep, #SidebarStepHover, #SidebarStepActive {{
+    background: transparent;
+    border: none;
+    border-left: 2px solid transparent;
+}}
+
+/* Botones legado QPushButton */
 QPushButton[class="SidebarBtn"] {{
     background-color: transparent;
     color: {COLORS['text_muted']};
@@ -111,12 +137,10 @@ QPushButton[class="SidebarBtn"] {{
     font-weight: 500;
     min-height: 22px;
 }}
-
 QPushButton[class="SidebarBtn"]:hover {{
     background-color: {COLORS['surface_2']};
     color: {COLORS['text']};
 }}
-
 QPushButton[class="SidebarBtn"][active="true"] {{
     background-color: {COLORS['surface_3']};
     color: {COLORS['text']};
@@ -125,10 +149,11 @@ QPushButton[class="SidebarBtn"][active="true"] {{
 }}
 
 #SidebarFooter {{
-    color: {COLORS['text_dim']};
-    padding: 14px 22px;
+    color: {COLORS['border_strong']};
+    padding: 12px 20px;
     font-size: 11px;
     border-top: 1px solid {COLORS['border']};
+    background: transparent;
 }}
 
 /* ============================================================
@@ -136,11 +161,12 @@ QPushButton[class="SidebarBtn"][active="true"] {{
 ============================================================ */
 #PageTitle {{
     color: {COLORS['text']};
-    font-size: 22px;
-    font-weight: 600;
-    letter-spacing: -0.4px;
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
     padding: 0;
     margin: 0;
+    background: transparent;
 }}
 
 #PageSubtitle {{
@@ -148,6 +174,7 @@ QPushButton[class="SidebarBtn"][active="true"] {{
     font-size: 13px;
     padding: 0;
     margin: 0;
+    background: transparent;
 }}
 
 /* ============================================================
@@ -156,7 +183,7 @@ QPushButton[class="SidebarBtn"][active="true"] {{
 QFrame[class="Card"] {{
     background-color: {COLORS['surface']};
     border: 1px solid {COLORS['border']};
-    border-radius: 12px;
+    border-radius: 8px;
 }}
 
 QLabel[class="CardTitle"] {{
@@ -211,7 +238,7 @@ QPushButton {{
     background-color: {COLORS['surface_3']};
     color: {COLORS['text']};
     border: 1px solid {COLORS['border_strong']};
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 8px 14px;
     font-size: 13px;
     font-weight: 500;
@@ -239,24 +266,28 @@ QPushButton:disabled {{
     border-color: {COLORS['border']};
 }}
 
-QPushButton[class="Primary"] {{
+QPushButton[class="Primary"], QPushButton.Primary {{
+    background: {COLORS['accent']};
     background-color: {COLORS['accent']};
     color: #FFFFFF;
     border: 1px solid {COLORS['accent']};
     font-weight: 600;
 }}
 
-QPushButton[class="Primary"]:hover {{
+QPushButton[class="Primary"]:hover, QPushButton.Primary:hover {{
+    background: {COLORS['accent_hover']};
     background-color: {COLORS['accent_hover']};
     border-color: {COLORS['accent_hover']};
 }}
 
-QPushButton[class="Primary"]:pressed {{
+QPushButton[class="Primary"]:pressed, QPushButton.Primary:pressed {{
+    background: {COLORS['accent_press']};
     background-color: {COLORS['accent_press']};
     border-color: {COLORS['accent_press']};
 }}
 
-QPushButton[class="Primary"]:disabled {{
+QPushButton[class="Primary"]:disabled, QPushButton.Primary:disabled {{
+    background: {COLORS['surface_3']};
     background-color: {COLORS['surface_3']};
     color: {COLORS['text_dim']};
     border-color: {COLORS['border']};
@@ -306,7 +337,7 @@ QPushButton[class="IconBtn"]:hover {{
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QTextEdit {{
     background-color: {COLORS['surface_2']};
     border: 1px solid {COLORS['border']};
-    border-radius: 8px;
+    border-radius: 6px;
     padding: 8px 12px;
     color: {COLORS['text']};
     selection-background-color: {COLORS['accent']};
@@ -440,7 +471,7 @@ QComboBox::down-arrow:on {{
 QComboBox QAbstractItemView {{
     background-color: {COLORS['surface_3']};
     border: 1px solid {COLORS['border_strong']};
-    border-radius: 8px;
+    border-radius: 6px;
     color: {COLORS['text']};
     selection-background-color: {COLORS['accent']};
     selection-color: #FFFFFF;
@@ -503,19 +534,20 @@ QSlider::handle:horizontal:pressed {{
    Progress
 ============================================================ */
 QProgressBar {{
-    background-color: {COLORS['surface_2']};
-    border: 1px solid {COLORS['border']};
-    border-radius: 6px;
+    background-color: {COLORS['surface_3']};
+    border: none;
+    border-radius: 3px;
     text-align: center;
     color: {COLORS['text']};
-    height: 8px;
+    height: 6px;
     font-size: 11px;
     font-weight: 600;
+    max-height: 6px;
 }}
 
 QProgressBar::chunk {{
     background-color: {COLORS['accent']};
-    border-radius: 5px;
+    border-radius: 3px;
 }}
 
 /* ============================================================
@@ -524,7 +556,7 @@ QProgressBar::chunk {{
 QListWidget {{
     background-color: {COLORS['surface_2']};
     border: 1px solid {COLORS['border']};
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 6px;
     outline: 0;
     color: {COLORS['text']};
@@ -552,6 +584,32 @@ QListWidget::item:selected {{
 
 QListWidget::item:selected:!active {{
     background-color: rgba(94, 106, 210, 0.12);
+}}
+
+QListWidget#PageThumbList {{
+    padding: 4px;
+}}
+
+QListWidget#PageThumbList::item {{
+    padding: 4px;
+    margin: 2px 0;
+    min-height: 0;
+    border-radius: 6px;
+}}
+
+QListWidget#PageThumbList::item:selected {{
+    background-color: rgba(94, 106, 210, 0.18);
+    border: 1px solid rgba(94, 106, 210, 0.4);
+}}
+
+QListWidget#ResultList {{
+    padding: 6px;
+}}
+
+QListWidget#ResultList::item {{
+    padding: 9px 10px;
+    margin: 1px 0;
+    border-radius: 6px;
 }}
 
 /* ============================================================
@@ -658,30 +716,68 @@ QFrame[class="PageContainer"] {{
 #PreviewCanvas {{
     background-color: {COLORS['surface']};
     border: 1px solid {COLORS['border']};
-    border-radius: 12px;
+    border-radius: 8px;
 }}
 
 #ResultCanvas {{
     background-color: {COLORS['surface']};
     border: 1px solid {COLORS['border']};
-    border-radius: 12px;
+    border-radius: 8px;
 }}
 
 /* ============================================================
    Drop zone
 ============================================================ */
 #DropZone {{
-    background-color: {COLORS['surface_2']};
-    border: 1.5px dashed {COLORS['border_strong']};
-    border-radius: 12px;
+    background-color: {COLORS['surface_3']};
+    border: 1.5px dashed #3E3E4C;
+    border-radius: 10px;
     color: {COLORS['text_muted']};
+    min-height: 200px;
+}}
+
+#DropZone:hover {{
+    background-color: #1E1E28;
+    border-color: #50507A;
 }}
 
 #DropZoneActive {{
-    background-color: rgba(94, 106, 210, 0.08);
-    border: 1.5px dashed {COLORS['accent']};
-    border-radius: 12px;
+    background-color: rgba(94, 106, 210, 0.10);
+    border: 2px dashed {COLORS['accent']};
+    border-radius: 10px;
     color: {COLORS['text']};
+}}
+
+#DropZoneTitle {{
+    color: {COLORS['text']};
+    font-size: 14px;
+    font-weight: 600;
+    background: transparent;
+}}
+
+#DropZoneHint {{
+    color: {COLORS['text_muted']};
+    font-size: 12px;
+    background: transparent;
+}}
+
+#PreviewEmptyState {{
+    background-color: {COLORS['surface']};
+    border: 1px solid {COLORS['border']};
+    border-radius: 8px;
+}}
+
+#PreviewEmptyTitle {{
+    color: {COLORS['text']};
+    font-size: 15px;
+    font-weight: 600;
+    background: transparent;
+}}
+
+#PreviewEmptyHint {{
+    color: {COLORS['text_muted']};
+    font-size: 13px;
+    background: transparent;
 }}
 
 /* ============================================================
@@ -725,13 +821,13 @@ QFrame[class="PageContainer"] {{
 
 #LeftPanelScroll QScrollBar:vertical {{
     background: transparent;
-    width: 6px;
-    margin: 4px 0;
+    width: 16px;
+    margin: 8px 2px 8px 10px;
 }}
 
 #LeftPanelScroll QScrollBar::handle:vertical {{
-    background: {COLORS['border_strong']};
-    min-height: 28px;
+    background: #34343C;
+    min-height: 36px;
     border-radius: 3px;
 }}
 
@@ -750,19 +846,36 @@ QFrame[class="PageContainer"] {{
     background: none;
 }}
 
+QListWidget#SignatureList {{
+    padding: 4px;
+}}
+
+QListWidget#SignatureList::item {{
+    padding: 6px 8px;
+    margin: 1px 0;
+    border-radius: 6px;
+}}
+
+#SignatureOptionsScope {{
+    color: {COLORS['text']};
+    font-size: 12px;
+    font-weight: 600;
+    background: transparent;
+}}
+
 /* ============================================================
    Scrollbars del canvas de preview de firma
 ============================================================ */
 #PdfPreview QScrollBar:vertical {{
     background: transparent;
-    width: 8px;
-    margin: 14px 2px 14px 0;
+    width: 12px;
+    margin: 14px 4px 14px 6px;
 }}
 
 #PdfPreview QScrollBar::handle:vertical {{
-    background: {COLORS['border_strong']};
+    background: #34343C;
     min-height: 40px;
-    border-radius: 4px;
+    border-radius: 3px;
 }}
 
 #PdfPreview QScrollBar::handle:vertical:hover {{
@@ -782,14 +895,14 @@ QFrame[class="PageContainer"] {{
 
 #PdfPreview QScrollBar:horizontal {{
     background: transparent;
-    height: 8px;
-    margin: 0 14px 2px 14px;
+    height: 12px;
+    margin: 6px 14px 4px 14px;
 }}
 
 #PdfPreview QScrollBar::handle:horizontal {{
-    background: {COLORS['border_strong']};
+    background: #34343C;
     min-width: 40px;
-    border-radius: 4px;
+    border-radius: 3px;
 }}
 
 #PdfPreview QScrollBar::handle:horizontal:hover {{
@@ -852,43 +965,15 @@ QFrame[class="PageContainer"] {{
 }}
 
 /* ============================================================
-   Shell — Launcher
+   Shell — Launcher (rediseño v2)
 ============================================================ */
-#LauncherTitle {{
-    color: {COLORS['text']};
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-}}
 
-#LauncherSubtitle {{
-    color: {COLORS['text_muted']};
-    font-size: 13px;
-}}
-
+/* La tarjeta usa setStyleSheet() dinámico desde Python para el hover,
+   estos valores son el fallback inicial */
 #LauncherCard {{
     background-color: {COLORS['surface']};
     border: 1px solid {COLORS['border']};
-    border-radius: 12px;
-}}
-
-#LauncherCard:hover {{
-    background-color: {COLORS['surface_2']};
-    border-color: {COLORS['border_strong']};
-}}
-
-#LauncherCard[enabled_tool="false"] {{
-    opacity: 0.55;
-}}
-
-#ToolCardTitle {{
-    font-size: 14px;
-    font-weight: 600;
-}}
-
-#ToolCardTagline {{
-    color: {COLORS['text_muted']};
-    font-size: 12px;
+    border-radius: 10px;
 }}
 
 #ComingSoonBadge {{
@@ -896,9 +981,34 @@ QFrame[class="PageContainer"] {{
     color: {COLORS['text_dim']};
     border: 1px solid {COLORS['border']};
     border-radius: 4px;
-    padding: 1px 6px;
+    padding: 1px 7px;
     font-size: 10px;
-    font-weight: 500;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+}}
+
+/* Títulos legacy (se mantienen por compatibilidad) */
+#LauncherTitle {{
+    color: {COLORS['text']};
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -0.8px;
+}}
+
+#LauncherSubtitle {{
+    color: {COLORS['text_dim']};
+    font-size: 13px;
+}}
+
+#ToolCardTitle {{
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+}}
+
+#ToolCardTagline {{
+    color: {COLORS['text_muted']};
+    font-size: 12px;
 }}
 
 /* ============================================================
@@ -907,7 +1017,7 @@ QFrame[class="PageContainer"] {{
 #TrayPopup {{
     background-color: {COLORS['surface']};
     border: 1px solid {COLORS['border_strong']};
-    border-radius: 10px;
+    border-radius: 8px;
 }}
 
 #TrayTitle {{
@@ -932,7 +1042,7 @@ QFrame[class="TrayItemRow"]:hover {{
 #TippyPopover {{
     background-color: {COLORS['surface']};
     border: 1px solid {COLORS['border_strong']};
-    border-radius: 10px;
+    border-radius: 8px;
 }}
 
 #TippyTitle {{

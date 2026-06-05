@@ -29,8 +29,15 @@ from PyQt6.QtWidgets import (
     QGraphicsPixmapItem, QGraphicsObject, QGraphicsDropShadowEffect,
 )
 
+from core.safe_zone import Placement, fit_placement_inside_page
+
 
 PREVIEW_DPI = 144
+
+# Máximo de píxeles en el lado largo del canvas de preview.
+# Para páginas inusualmente grandes (scans a alta resolución) el DPI se reduce
+# para mantenerse dentro de este límite y evitar imágenes de cientos de MB.
+_PREVIEW_MAX_LONG_PX = 2000
 
 
 def pil_to_qpixmap(img: Image.Image) -> QPixmap:
@@ -52,7 +59,9 @@ class SignatureItem(QGraphicsObject):
     ROTATE_HANDLE_OFFSET = 36
 
     geometryChanged = pyqtSignal()
-    activated = pyqtSignal()   # emitido cuando el usuario hace click sobre un item inactivo
+    activated  = pyqtSignal()   # click sobre item inactivo → activarlo
+    dragStarted  = pyqtSignal()   # inicio de move o resize
+    dragFinished = pyqtSignal()   # fin de move o resize (mouse release)
 
     def __init__(self, uid: str, pixmap: QPixmap, color: QColor, parent=None):
         super().__init__(parent)
@@ -95,6 +104,11 @@ class SignatureItem(QGraphicsObject):
         self.setZValue(10 if active else 5)
         self.update()
 
+    def set_pixmap(self, pixmap) -> None:
+        """Actualiza la imagen de la firma sin mover ni redimensionar el ítem."""
+        self._pixmap = pixmap
+        self.update()
+
     def uid(self) -> str:
         return self._uid
 
@@ -117,10 +131,12 @@ class SignatureItem(QGraphicsObject):
 
     def setSize(self, w: float, h: float) -> None:
         self.prepareGeometryChange()
-        self._w = max(20.0, w)
-        self._h = max(10.0, h)
+        # El mínimo interactivo se aplica en _do_resize(). Aquí permitimos
+        # tamaños menores para poder encajar firmas en páginas inusualmente
+        # pequeñas durante una restauración o un cambio de página.
+        self._w = max(1e-3, w)
+        self._h = max(1e-3, h)
         self.setTransformOriginPoint(self._w / 2, self._h / 2)
-        self.geometryChanged.emit()
         self.update()
 
     # ------------------------------------------------------------------ #
@@ -280,7 +296,6 @@ class SignatureItem(QGraphicsObject):
                 self._start_angle = self.rotation()
 
                 if handle in ("resize-tl", "resize-tr", "resize-bl", "resize-br"):
-                    # Pivot = esquina OPUESTA (se queda fija durante el resize)
                     _pivot_map = {
                         "resize-tl": QPointF(self._w,  self._h),   # br
                         "resize-tr": QPointF(0.0,       self._h),   # bl
@@ -290,6 +305,7 @@ class SignatureItem(QGraphicsObject):
                     self._pivot_local = _pivot_map[handle]
                     self._resize_pivot_scene = self.mapToScene(self._pivot_local)
 
+                self.dragStarted.emit()
                 event.accept()
                 return
         super().mousePressEvent(event)
@@ -309,6 +325,7 @@ class SignatureItem(QGraphicsObject):
         if self._action:
             self._action = None
             self.geometryChanged.emit()
+            self.dragFinished.emit()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -319,41 +336,85 @@ class SignatureItem(QGraphicsObject):
     # ------------------------------------------------------------------ #
 
     def _do_resize(self, scene_pos: QPointF) -> None:
-        # Cursor en espacio local del item (tiene en cuenta rotación)
+        """Redimensiona manteniendo la esquina opuesta (pivot) anclada en escena.
+
+        Algoritmo de proyección diagonal
+        ---------------------------------
+        El bug clásico de los resize "trabados" viene de elegir el eje dominante
+        (X o Y) mediante una condición `if dx/w >= dy/h`.  Cuando el cursor cruza
+        esa frontera, el eje cambia de golpe y el tamaño da un salto brusco.
+
+        Solución: proyectar el vector cursor→pivot sobre la diagonal del item
+        (la línea que une las dos esquinas opuestas en espacio local).  Eso da
+        un factor de escala continuo y diferenciable — sin axis-switching, sin
+        saltos.
+
+        Invariante geométrico
+        ---------------------
+        Tras el resize, la esquina opuesta al handle (pivot) debe estar exactamente
+        en la misma posición de escena que tenía al iniciar el drag.  Se corrige la
+        posición del item después de setSize() para mantener ese invariante.
+        """
+        if self._start_w <= 0 or self._start_h <= 0:
+            return
+
+        # Cursor en coordenadas LOCALES del item (mapFromScene ya aplica rotación)
         local = self.mapFromScene(scene_pos)
         pivot = self._pivot_local
-        ratio = self._start_h / max(1.0, self._start_w)
 
-        # Distancia del cursor al pivot en cada eje
-        dx = abs(local.x() - pivot.x())
-        dy = abs(local.y() - pivot.y())
+        # Esquina que se está arrastrando en el momento del press (espacio local)
+        _start_handle_map = {
+            "resize-tl": QPointF(0.0,           0.0),
+            "resize-tr": QPointF(self._start_w,  0.0),
+            "resize-bl": QPointF(0.0,            self._start_h),
+            "resize-br": QPointF(self._start_w,  self._start_h),
+        }
+        start_handle = _start_handle_map[self._action]
 
-        # Eje dominante para mantener ratio de aspecto
-        if self._start_w > 0 and self._start_h > 0:
-            if dx / self._start_w >= dy / self._start_h:
-                new_w = max(40.0, dx)
-            else:
-                new_w = max(20.0, dy) / max(1e-4, ratio)
-        else:
-            new_w = max(40.0, dx)
-        new_h = max(10.0, new_w * ratio)
+        # Vector diagonal: del pivot hacia la esquina del handle (al inicio)
+        dir_x = start_handle.x() - pivot.x()
+        dir_y = start_handle.y() - pivot.y()
+        diag_sq = dir_x * dir_x + dir_y * dir_y
+        if diag_sq < 1.0:
+            return
+        diag_len = math.sqrt(diag_sq)   # == sqrt(w²+h²) en todos los casos
 
-        # Hacer el resize
+        # Proyección escalar del cursor (relativo al pivot) sobre la diagonal.
+        # Esto da cuánto "avanzó" el cursor en la dirección del resize.
+        cur_x = local.x() - pivot.x()
+        cur_y = local.y() - pivot.y()
+        proj = (cur_x * dir_x + cur_y * dir_y) / diag_len
+
+        # No permitir inversión (cursor cruzó el pivot): proj mínimo = 0
+        proj = max(0.0, proj)
+
+        # Factor de escala: cuánto avanzó el cursor respecto a la posición inicial
+        scale = proj / diag_len   # == 1.0 cuando el cursor está en la esquina inicial
+
+        # Tamaño mínimo: al menos MIN_W × MIN_H px en el canvas
+        MIN_W, MIN_H = 16.0, 6.0
+        min_scale = max(MIN_W / self._start_w, MIN_H / self._start_h)
+        scale = max(scale, min_scale)
+
+        new_w = self._start_w * scale
+        new_h = self._start_h * scale
+
         self.setSize(new_w, new_h)
 
-        # El pivot en el nuevo rectángulo (posición local DESPUÉS del resize)
+        # ── Reanclar el pivot ──────────────────────────────────────────────
+        # Después de setSize(), el transform-origin cambió al nuevo centro.
+        # Calculamos dónde quedó el pivot en escena y corregimos la posición
+        # del item para devolverlo a _resize_pivot_scene.
         _new_pivot_map = {
             "resize-tl": QPointF(self._w,  self._h),
             "resize-tr": QPointF(0.0,       self._h),
             "resize-bl": QPointF(self._w,  0.0),
             "resize-br": QPointF(0.0,       0.0),
         }
-        new_pivot_local = _new_pivot_map[self._action]
-
-        # Ajustar posición para que el pivot quede donde estaba en escena
-        new_pivot_scene = self.mapToScene(new_pivot_local)
+        new_pivot_scene = self.mapToScene(_new_pivot_map[self._action])
         delta = self._resize_pivot_scene - new_pivot_scene
         self.setPos(self.pos() + delta)
+        self.geometryChanged.emit()
 
     # ------------------------------------------------------------------ #
     # Rotación
@@ -364,9 +425,18 @@ class SignatureItem(QGraphicsObject):
         dx = scene_pos.x() - center.x()
         dy = scene_pos.y() - center.y()
         angle = math.degrees(math.atan2(dy, dx)) + 90
-        angle = round(angle, 1)
-        if abs(angle) < 1.5:
-            angle = 0.0
+
+        # Snap magnético a 0°, 90°, 180°, 270° con zona de ±3°
+        # (facilita alinear la firma exactamente horizontal o vertical)
+        SNAP_TARGETS = (0.0, 90.0, 180.0, 270.0, 360.0, -90.0, -180.0, -270.0)
+        SNAP_ZONE = 3.0
+        for t in SNAP_TARGETS:
+            if abs(angle - t) < SNAP_ZONE:
+                angle = 0.0 if t in (0.0, 360.0, -360.0) else t % 360
+                break
+        else:
+            angle = round(angle, 1)
+
         self.setRotation(angle)
         self.geometryChanged.emit()
 
@@ -384,6 +454,11 @@ class PdfPreviewView(QGraphicsView):
     sig_placement_changed = pyqtSignal(str)
     # Emitida cuando el usuario hace click sobre una firma (para sincronizar lista)
     item_activated = pyqtSignal(str)
+    # Emitidas al inicio y fin de un drag (mover o redimensionar).
+    # Permiten a herramientas como el foleador diferir cálculos costosos
+    # hasta que el usuario suelte el ratón, evitando lag durante el arrastre.
+    drag_started = pyqtSignal()
+    drag_finished = pyqtSignal()
     # Cambio de página
     pageChanged = pyqtSignal(int, int)   # current, total
 
@@ -412,6 +487,9 @@ class PdfPreviewView(QGraphicsView):
 
         # Multi-sig state
         self._sig_items: Dict[str, SignatureItem] = {}
+        self._configured_placements: Dict[
+            str, Tuple[float, float, float, float, float]
+        ] = {}
         self._active_uid: Optional[str] = None
         self._restoring: bool = False   # bloquea emision de señales durante restore
 
@@ -434,6 +512,7 @@ class PdfPreviewView(QGraphicsView):
 
         # Limpiar firmas sin emitir señales
         self._sig_items.clear()
+        self._configured_placements.clear()
         self._active_uid = None
 
         self._doc = fitz.open(path)
@@ -453,8 +532,15 @@ class PdfPreviewView(QGraphicsView):
         idx = max(0, min(idx, self._doc.page_count - 1))
         if idx == self._page_index:
             return
+        placements = {
+            uid: self.configured_placement_of(uid)
+            for uid in self._sig_items
+        }
         self._page_index = idx
         self._update_page_pixmap()
+        for uid, placement in placements.items():
+            if placement is not None:
+                self._apply_placement(uid, *placement, update_configured=False)
         self.pageChanged.emit(self._page_index, self.page_count())
 
     def page_count(self) -> int:
@@ -482,6 +568,10 @@ class PdfPreviewView(QGraphicsView):
         item = SignatureItem(uid, pixmap, color)
         item.geometryChanged.connect(lambda _uid=uid: self._on_item_geometry_changed(_uid))
         item.activated.connect(lambda _uid=uid: self._on_item_activated(_uid))
+        # Propagar drag_started / drag_finished para que herramientas externas
+        # puedan diferir cálculos costosos hasta que el usuario suelte el ratón.
+        item.dragStarted.connect(self.drag_started)
+        item.dragFinished.connect(self.drag_finished)
 
         # ── Tamaño inicial proporcional al PDF ─────────────────────────
         if self._page_w_pt > 0:
@@ -500,6 +590,10 @@ class PdfPreviewView(QGraphicsView):
 
         self._scene.addItem(item)
         self._sig_items[uid] = item
+        self._constrain_item_to_page(uid)
+        placement = self.placement_of(uid)
+        if placement is not None:
+            self._configured_placements[uid] = placement
 
         if len(self._sig_items) == 1:
             self.set_active_uid(uid)
@@ -509,8 +603,15 @@ class PdfPreviewView(QGraphicsView):
         item = self._sig_items.pop(uid, None)
         if item is not None and item.scene() == self._scene:
             self._scene.removeItem(item)
+        self._configured_placements.pop(uid, None)
         if self._active_uid == uid:
             self._active_uid = None
+
+    def update_sig_pixmap(self, uid: str, pixmap) -> None:
+        """Actualiza la imagen de una firma existente en el canvas (mantiene posición y tamaño)."""
+        item = self._sig_items.get(uid)
+        if item is not None:
+            item.set_pixmap(pixmap)
 
     def clear_all_sigs(self) -> None:
         """Elimina todas las firmas del canvas."""
@@ -530,6 +631,7 @@ class PdfPreviewView(QGraphicsView):
         self._page_index = 0
         self._page_pixmap_item = None
         self._sig_items.clear()
+        self._configured_placements.clear()
         self._active_uid = None
         self._page_w_pt = 0.0
         self._page_h_pt = 0.0
@@ -552,6 +654,20 @@ class PdfPreviewView(QGraphicsView):
         angle: float,
     ) -> None:
         """Posiciona programáticamente una firma; NO emite señales de cambio."""
+        self._apply_placement(
+            uid, cx_norm, cy_norm, w_pt, h_pt, angle, update_configured=True
+        )
+
+    def _apply_placement(
+        self,
+        uid: str,
+        cx_norm: float,
+        cy_norm: float,
+        w_pt: float,
+        h_pt: float,
+        angle: float,
+        update_configured: bool,
+    ) -> None:
         item = self._sig_items.get(uid)
         if item is None or self._page_pixmap_item is None:
             return
@@ -559,6 +675,7 @@ class PdfPreviewView(QGraphicsView):
         if pix.width() == 0 or pix.height() == 0:
             return
 
+        was_restoring = self._restoring
         self._restoring = True
         try:
             w_sc = w_pt / self._scene_to_pdf
@@ -568,8 +685,13 @@ class PdfPreviewView(QGraphicsView):
             cy_sc = cy_norm * pix.height()
             item.setPos(cx_sc - w_sc / 2, cy_sc - h_sc / 2)
             item.setRotation(-angle)
+            self._constrain_item_to_page(uid)
+            if update_configured:
+                placement = self.placement_of(uid)
+                if placement is not None:
+                    self._configured_placements[uid] = placement
         finally:
-            self._restoring = False
+            self._restoring = was_restoring
 
     def placement_of(
         self, uid: str
@@ -591,11 +713,39 @@ class PdfPreviewView(QGraphicsView):
         angle = -item.rotation()
         return (cx_n, cy_n, w_pt, h_pt, angle)
 
+    def configured_placement_of(
+        self, uid: str
+    ) -> Optional[Tuple[float, float, float, float, float]]:
+        """Devuelve la preferencia estable, sin ajustes temporales por página."""
+        return self._configured_placements.get(uid) or self.placement_of(uid)
+
     def sig_uids(self) -> List[str]:
         return list(self._sig_items.keys())
 
     def has_sigs(self) -> bool:
         return bool(self._sig_items)
+
+    def placement_fits_page(self, uid: str) -> bool:
+        """Indica si el bbox rotado de una firma está dentro de la página."""
+        p = self.placement_of(uid)
+        if p is None or self._page_w_pt <= 0 or self._page_h_pt <= 0:
+            return False
+        cx_n, cy_n, w_pt, h_pt, angle = p
+        placement = Placement(
+            x=cx_n * self._page_w_pt,
+            y=cy_n * self._page_h_pt,
+            width=w_pt,
+            height=h_pt,
+            angle=angle,
+        )
+        bbox = placement.rotated_bbox
+        tolerance = 1e-6
+        return (
+            bbox.x0 >= -tolerance
+            and bbox.y0 >= -tolerance
+            and bbox.x1 <= self._page_w_pt + tolerance
+            and bbox.y1 <= self._page_h_pt + tolerance
+        )
 
     # ==================================================================== #
     # API backward-compat (foleador, main_window legacy)
@@ -688,16 +838,37 @@ class PdfPreviewView(QGraphicsView):
     # Internos
     # ==================================================================== #
 
+    def _page_render_dpi(self, page: "fitz.Page") -> float:
+        """DPI adaptativo para el canvas de posicionamiento.
+
+        Usa PREVIEW_DPI (144) para páginas normales.  Para páginas muy grandes
+        (scans o formatos inusuales) reduce el DPI para que el lado más largo
+        no supere _PREVIEW_MAX_LONG_PX píxeles, evitando imágenes de cientos
+        de MB que congelen la UI.
+
+        IMPORTANTE: _scene_to_pdf debe actualizarse con 72 / dpi_usado cada
+        vez que se renderiza, para que la conversión píxeles↔puntos PDF sea
+        correcta y las firmas/folios aparezcan al tamaño proporcional correcto.
+        """
+        page_long = max(1.0, page.rect.width, page.rect.height)
+        dpi = min(PREVIEW_DPI, _PREVIEW_MAX_LONG_PX * 72.0 / page_long)
+        return max(36.0, dpi)
+
     def _render_page(self) -> None:
         """Renderiza la página actual y la agrega al canvas. No toca las firmas."""
         if not self._doc:
             return
 
         page = self._doc[self._page_index]
-        mat = fitz.Matrix(PREVIEW_DPI / 72.0, PREVIEW_DPI / 72.0)
+        dpi = self._page_render_dpi(page)
+        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
         pm = page.get_pixmap(matrix=mat, alpha=False)
         img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
         pix = pil_to_qpixmap(img)
+
+        # Actualizar la relación píxel/punto para este DPI específico.
+        # Debe hacerse ANTES de que cualquier _apply_placement use el valor.
+        self._scene_to_pdf = 72.0 / dpi
 
         self._page_pixmap_item = QGraphicsPixmapItem(pix)
         self._page_pixmap_item.setZValue(0)
@@ -712,12 +883,7 @@ class PdfPreviewView(QGraphicsView):
         self._page_w_pt = page.rect.width
         self._page_h_pt = page.rect.height
 
-        margin = 40
-        self._scene.setSceneRect(
-            QRectF(-margin, -margin,
-                   pix.width() + 2 * margin,
-                   pix.height() + 2 * margin)
-        )
+        self._update_scene_rect(pix)
 
         if not self._has_fit_once:
             self.fit_to_view()
@@ -730,20 +896,85 @@ class PdfPreviewView(QGraphicsView):
         if not self._doc or not self._page_pixmap_item:
             return
         page = self._doc[self._page_index]
-        mat = fitz.Matrix(PREVIEW_DPI / 72.0, PREVIEW_DPI / 72.0)
+        dpi = self._page_render_dpi(page)
+        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
         pm = page.get_pixmap(matrix=mat, alpha=False)
         img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
         pix = pil_to_qpixmap(img)
+
+        # Actualizar escala píxel/punto ANTES de que _apply_placement use el valor.
+        self._scene_to_pdf = 72.0 / dpi
+
         self._page_pixmap_item.setPixmap(pix)
         self._page_w_pt = page.rect.width
         self._page_h_pt = page.rect.height
+        self._update_scene_rect(pix)
 
     def _on_item_geometry_changed(self, uid: str) -> None:
         if self._restoring:
             return
+        self._constrain_item_to_page(uid)
+        placement = self.placement_of(uid)
+        if placement is not None:
+            self._configured_placements[uid] = placement
         self.sig_placement_changed.emit(uid)
         self.placementChanged.emit()   # backward compat
 
     def _on_item_activated(self, uid: str) -> None:
         self.set_active_uid(uid)
         self.item_activated.emit(uid)
+
+    def _update_scene_rect(self, pixmap: QPixmap) -> None:
+        margin = 40
+        self._scene.setSceneRect(
+            QRectF(
+                -margin,
+                -margin,
+                pixmap.width() + 2 * margin,
+                pixmap.height() + 2 * margin,
+            )
+        )
+
+    def _constrain_item_to_page(self, uid: str) -> None:
+        """Encaja una firma en el papel usando el mismo cálculo que el motor."""
+        item = self._sig_items.get(uid)
+        if (
+            item is None
+            or self._page_pixmap_item is None
+            or self._page_w_pt <= 0
+            or self._page_h_pt <= 0
+        ):
+            return
+        pix = self._page_pixmap_item.pixmap()
+        if pix.width() <= 0 or pix.height() <= 0:
+            return
+
+        p = self.placement_of(uid)
+        if p is None:
+            return
+        cx_n, cy_n, w_pt, h_pt, angle = p
+        desired = Placement(
+            x=cx_n * self._page_w_pt,
+            y=cy_n * self._page_h_pt,
+            width=w_pt,
+            height=h_pt,
+            angle=angle,
+        )
+        bounded = fit_placement_inside_page(
+            desired, self._page_w_pt, self._page_h_pt, margin=0.0
+        )
+        if not bounded.adjusted_to_page:
+            return
+
+        was_restoring = self._restoring
+        self._restoring = True
+        try:
+            w_sc = bounded.width / self._scene_to_pdf
+            h_sc = bounded.height / self._scene_to_pdf
+            cx_sc = bounded.x / self._page_w_pt * pix.width()
+            cy_sc = bounded.y / self._page_h_pt * pix.height()
+            item.setSize(w_sc, h_sc)
+            item.setPos(cx_sc - w_sc / 2, cy_sc - h_sc / 2)
+            item.setRotation(-bounded.angle)
+        finally:
+            self._restoring = was_restoring

@@ -20,13 +20,23 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QListWidget, QListWidgetItem, QStackedWidget, QFileDialog, QFrame,
-    QSpinBox, QDoubleSpinBox, QCheckBox, QSlider, QProgressBar, QMessageBox,
+    QListWidget, QListWidgetItem, QStackedWidget, QFrame,
+    QSpinBox, QDoubleSpinBox, QCheckBox, QSlider, QProgressBar,
     QGridLayout, QLineEdit, QSizePolicy, QGraphicsDropShadowEffect, QScrollArea,
 )
 
-from core.signature_engine import SignatureEngine, SignJob, JobResult
+from core.signature_engine import SignatureEngine, SignJob, SigPlacement, JobResult
+from core.update_config import APP_VERSION
 from core.variation import VariationConfig
+from core.output_naming import unique_output_path_for_source
+from ui.common.output_settings import add_tool_suffix_enabled
+from ui.common.dialogs import show_error, show_success, show_warning
+from ui.common.file_dialogs import (
+    get_existing_directory,
+    get_open_file_name,
+    get_open_file_names,
+)
+from ui.common.icons import set_button_icon
 from .pdf_preview import PdfPreviewView, pil_to_qpixmap
 from .results_viewer import ResultsViewer
 
@@ -42,10 +52,9 @@ class SignWorker(QObject):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, signature_path: str, jobs: List[SignJob],
+    def __init__(self, jobs: List[SignJob],
                  variation: VariationConfig):
         super().__init__()
-        self.signature_path = signature_path
         self.jobs = jobs
         self.variation = variation
         self._cancel = False
@@ -54,11 +63,7 @@ class SignWorker(QObject):
         self._cancel = True
 
     def run(self) -> None:
-        try:
-            engine = SignatureEngine(self.signature_path, self.variation)
-        except Exception as e:
-            self.error.emit(f"Error al inicializar el motor: {e}")
-            return
+        engine = SignatureEngine(self.variation)
 
         results: List[JobResult] = []
         total = len(self.jobs)
@@ -255,7 +260,7 @@ class MainWindow(QMainWindow):
 
         sb.addStretch(1)
 
-        footer = QLabel("GRUPO OCMX · v1.0")
+        footer = QLabel(f"GRUPO OCMX · v{APP_VERSION}")
         footer.setObjectName("SidebarFooter")
         sb.addWidget(footer)
 
@@ -316,9 +321,10 @@ class MainWindow(QMainWindow):
         # Nav
         nav = QHBoxLayout()
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -381,13 +387,15 @@ class MainWindow(QMainWindow):
 
         page_nav = QHBoxLayout()
         page_nav.setSpacing(6)
-        self.prev_page_btn = QPushButton("◀")
+        self.prev_page_btn = QPushButton()
         self.prev_page_btn.setProperty("class", "IconBtn")
+        set_button_icon(self.prev_page_btn, "chevron-left", size=15, icon_only=True)
         self.prev_page_btn.clicked.connect(
             lambda: self.preview.set_page(self.preview.current_page() - 1)
         )
-        self.next_page_btn = QPushButton("▶")
+        self.next_page_btn = QPushButton()
         self.next_page_btn.setProperty("class", "IconBtn")
+        set_button_icon(self.next_page_btn, "chevron-right", size=15, icon_only=True)
         self.next_page_btn.clicked.connect(
             lambda: self.preview.set_page(self.preview.current_page() + 1)
         )
@@ -401,14 +409,17 @@ class MainWindow(QMainWindow):
 
         zoom_row = QHBoxLayout()
         zoom_row.setSpacing(6)
-        z_out = QPushButton("−")
+        z_out = QPushButton()
         z_out.setProperty("class", "IconBtn")
+        set_button_icon(z_out, "minus", size=14, icon_only=True)
         z_out.clicked.connect(lambda: self.preview.zoom_out())
-        z_in = QPushButton("+")
+        z_in = QPushButton()
         z_in.setProperty("class", "IconBtn")
+        set_button_icon(z_in, "plus", size=14, icon_only=True)
         z_in.clicked.connect(lambda: self.preview.zoom_in())
         z_fit = QPushButton("Ajustar")
         z_fit.setProperty("class", "IconBtn")
+        set_button_icon(z_fit, "maximize", size=14)
         z_fit.clicked.connect(lambda: self.preview.fit_to_view())
         zoom_row.addWidget(z_out)
         zoom_row.addWidget(z_in)
@@ -453,14 +464,16 @@ class MainWindow(QMainWindow):
         outer.addLayout(body, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Documentos")
+        back = QPushButton("Documentos")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(0))
         nav.addWidget(back)
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -552,14 +565,16 @@ class MainWindow(QMainWindow):
         outer.addStretch(1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Firma")
+        back = QPushButton("Firma")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(back)
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(3))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -619,8 +634,9 @@ class MainWindow(QMainWindow):
         outer.addStretch(1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Variación")
+        back = QPushButton("Variación")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(back)
         nav.addStretch()
@@ -658,14 +674,16 @@ class MainWindow(QMainWindow):
         outer.addWidget(self.results_viewer, 1)
 
         nav = QHBoxLayout()
-        back_proc = QPushButton("←  Procesar")
+        back_proc = QPushButton("Procesar")
         back_proc.setProperty("class", "Ghost")
+        set_button_icon(back_proc, "arrow-left")
         back_proc.clicked.connect(lambda: self._switch_section(3))
         nav.addWidget(back_proc)
         nav.addStretch()
-        restart_btn = QPushButton("↺  Nueva sesión")
+        restart_btn = QPushButton("Nueva sesión")
         restart_btn.setProperty("class", "Primary")
         restart_btn.setMinimumWidth(180)
+        set_button_icon(restart_btn, "refresh-cw")
         restart_btn.setToolTip("Reinicia desde el paso 1 con documentos y firma limpios")
         restart_btn.clicked.connect(self._reset_session)
         nav.addWidget(restart_btn)
@@ -690,7 +708,7 @@ class MainWindow(QMainWindow):
     # Documentos
     # ================================================================== #
     def _on_add_pdfs(self) -> None:
-        files, _ = QFileDialog.getOpenFileNames(
+        files, _ = get_open_file_names(
             self, "Seleccionar PDFs", "", "PDF (*.pdf)"
         )
         if files:
@@ -734,7 +752,7 @@ class MainWindow(QMainWindow):
     # Firma
     # ================================================================== #
     def _on_load_signature(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self, "Cargar firma", "", "Imágenes (*.png *.jpg *.jpeg *.webp)"
         )
         if not path:
@@ -742,7 +760,7 @@ class MainWindow(QMainWindow):
         try:
             img = Image.open(path).convert("RGBA")
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"No se pudo abrir la imagen: {e}")
+            show_warning(self, "Error", f"No se pudo abrir la imagen: {e}")
             return
         self.signature_path = path
         self.signature_pixmap = pil_to_qpixmap(img)
@@ -798,7 +816,7 @@ class MainWindow(QMainWindow):
     # Procesar
     # ================================================================== #
     def _on_browse_output(self) -> None:
-        folder = QFileDialog.getExistingDirectory(
+        folder = get_existing_directory(
             self, "Carpeta de salida", self.out_edit.text()
         )
         if folder:
@@ -854,17 +872,32 @@ class MainWindow(QMainWindow):
         angle = self.preview.signature_angle()
 
         jobs: List[SignJob] = []
+        reserved: set[str] = set()
+        add_suffix = add_tool_suffix_enabled()
         for p in self.pdf_paths:
             in_path = Path(p)
-            out_path = out_dir / f"{in_path.stem}_firmado.pdf"
+            out_path = unique_output_path_for_source(
+                out_dir,
+                in_path,
+                extension=".pdf",
+                tool_suffix="firmado",
+                add_tool_suffix=add_suffix,
+                reserved=reserved,
+                fallback="documento",
+            )
             jobs.append(SignJob(
                 pdf_path=str(in_path),
                 output_path=str(out_path),
-                base_x_norm=cx_n,
-                base_y_norm=cy_n,
-                base_width_pt=w_pt,
-                base_height_pt=h_pt,
-                base_angle=angle,
+                signatures=[
+                    SigPlacement(
+                        signature_path=self.signature_path,
+                        base_x_norm=cx_n,
+                        base_y_norm=cy_n,
+                        base_width_pt=w_pt,
+                        base_height_pt=h_pt,
+                        base_angle=angle,
+                    )
+                ],
             ))
         return jobs
 
@@ -883,7 +916,7 @@ class MainWindow(QMainWindow):
     def _on_run(self) -> None:
         err = self._validate_ready()
         if err:
-            QMessageBox.warning(self, "Falta información", err)
+            show_warning(self, "Falta información", err)
             return
         if self._worker_thread is not None:
             return
@@ -901,7 +934,7 @@ class MainWindow(QMainWindow):
         self.progress_label.setText("Iniciando…")
 
         self._worker_thread = QThread(self)
-        self._worker = SignWorker(self.signature_path, jobs, variation)
+        self._worker = SignWorker(jobs, variation)
         self._worker.moveToThread(self._worker_thread)
 
         self._worker_thread.started.connect(self._worker.run)
@@ -943,7 +976,7 @@ class MainWindow(QMainWindow):
 
         ok = sum(1 for r in self.last_results if r.success)
         fail = len(self.last_results) - ok
-        QMessageBox.information(
+        show_success(
             self, "Hecho",
             f"Se procesaron {len(self.last_results)} documentos.\n\n"
             f"Exitosos: {ok}\n"
@@ -953,7 +986,7 @@ class MainWindow(QMainWindow):
         self._switch_section(4)
 
     def _on_worker_error(self, msg: str) -> None:
-        QMessageBox.critical(self, "Error", msg)
+        show_error(self, "Error", msg)
         self.run_btn.setEnabled(True)
         self.cancel_btn.setEnabled(False)
         if self._worker_thread:

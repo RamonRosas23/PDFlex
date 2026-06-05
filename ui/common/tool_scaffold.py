@@ -1,7 +1,7 @@
 """PipelineWindow — clase base para todas las herramientas de PDFlex.
 
 Provee:
-  - Sidebar con pasos numerados (01, 02 …)
+  - Sidebar con pasos numerados (01, 02 …) con badge numérico de acento
   - QStackedWidget derecho para las páginas de contenido
   - _switch_section(idx) con highlight del paso activo
   - set_inputs(paths) y señal outputs_ready para inter-herramientas
@@ -10,14 +10,107 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, List, Tuple
 
 from PyQt6.QtCore import Qt, pyqtSignal
+from ui.styles import COLORS
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QStackedWidget,
 )
 
+from core.update_config import APP_VERSION
+
 if TYPE_CHECKING:
     from shell.context import ShellContext
 
+
+# ──────────────────────────────────────────────────────────────
+# Botón de paso del sidebar — badge numérico + nombre
+# ──────────────────────────────────────────────────────────────
+
+class _StepBtn(QWidget):
+    """Botón de paso con badge numérico y nombre.  Reemplaza el QPushButton
+    con texto de espacios que era frágil e inconsistente."""
+
+    _clicked = pyqtSignal()
+
+    def __init__(self, num: str, name: str, hint: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self._active = False
+        self._num = num
+        self._name_text = name
+
+        if hint:
+            self.setToolTip(hint)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(42)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(18, 0, 18, 0)
+        row.setSpacing(10)
+        row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        # Badge numérico (cuadrado redondeado)
+        self._badge = QLabel(num)
+        self._badge.setFixedSize(26, 20)
+        self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._badge.setObjectName("StepBadge")
+        row.addWidget(self._badge)
+
+        # Nombre del paso
+        self._lbl = QLabel(name)
+        self._lbl.setObjectName("StepName")
+        row.addWidget(self._lbl, 1)
+
+        self._apply_state()
+
+    # ── Estado ──────────────────────────────────────────────
+
+    def set_active(self, active: bool) -> None:
+        self._active = active
+        self._apply_state()
+
+    def _apply_state(self) -> None:
+        if self._active:
+            self.setObjectName("SidebarStepActive")
+            self._badge.setObjectName("StepBadgeActive")
+            self._lbl.setObjectName("StepNameActive")
+        else:
+            self.setObjectName("SidebarStep")
+            self._badge.setObjectName("StepBadge")
+            self._lbl.setObjectName("StepName")
+        # Forzar repolicía de estilos
+        for w in (self, self._badge, self._lbl):
+            w.style().unpolish(w)
+            w.style().polish(w)
+            w.update()
+
+    # ── Eventos ──────────────────────────────────────────────
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._clicked.emit()
+        super().mousePressEvent(event)
+
+    def enterEvent(self, event) -> None:
+        if not self._active:
+            self.setObjectName("SidebarStepHover")
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self._active:
+            self.setObjectName("SidebarStep")
+            self.style().unpolish(self)
+            self.style().polish(self)
+            self.update()
+        super().leaveEvent(event)
+
+
+# ──────────────────────────────────────────────────────────────
+# Ventana base del pipeline
+# ──────────────────────────────────────────────────────────────
 
 class PipelineWindow(QWidget):
     """Widget base para el pipeline de cada herramienta."""
@@ -28,11 +121,13 @@ class PipelineWindow(QWidget):
     SECTIONS: List[Tuple[str, str, str]] = []   # (num, nombre, hint)
     BRAND: str = ""
     TAGLINE: str = ""
+    ACCENT_COLOR: str = "#5E6AD2"
 
     def __init__(self, ctx: "ShellContext", parent=None) -> None:
         super().__init__(parent)
         self.ctx = ctx
         self._build_scaffold()
+        self._apply_tool_accent()
 
     # ------------------------------------------------------------------ #
     # Construcción del caparazón (sidebar + stack)
@@ -52,42 +147,196 @@ class PipelineWindow(QWidget):
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
         sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(260)
+        sidebar.setFixedWidth(256)
 
         sb = QVBoxLayout(sidebar)
         sb.setContentsMargins(0, 0, 0, 0)
         sb.setSpacing(0)
 
-        brand = QLabel(self.BRAND)
-        brand.setObjectName("SidebarBrand")
-        sb.addWidget(brand)
+        # ── Marca ──────────────────────────────────────────────────────
+        brand_frame = QFrame()
+        brand_frame.setObjectName("SidebarBrandFrame")
+        bf = QVBoxLayout(brand_frame)
+        bf.setContentsMargins(20, 22, 20, 18)
+        bf.setSpacing(2)
+
+        # Nombre de la herramienta (en acento) + app name (gris)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(0)
+        brand_row.setContentsMargins(0, 0, 0, 0)
+        self._brand_lbl = QLabel(self.BRAND)
+        self._brand_lbl.setObjectName("SidebarBrandName")
+        brand_row.addWidget(self._brand_lbl)
+        brand_row.addStretch()
+        bf.addLayout(brand_row)
 
         tagline = QLabel(self.TAGLINE)
         tagline.setObjectName("SidebarTagline")
-        sb.addWidget(tagline)
+        tagline.setWordWrap(True)
+        bf.addWidget(tagline)
 
+        sb.addWidget(brand_frame)
+
+        # Divisor
+        div = QFrame()
+        div.setFixedHeight(1)
+        div.setStyleSheet(f"background: {COLORS['border_strong']}; border: none;")
+        sb.addWidget(div)
+
+        # ── Pasos ──────────────────────────────────────────────────────
         section_lbl = QLabel("PASOS")
         section_lbl.setObjectName("SidebarSection")
+        sb.addSpacing(8)
         sb.addWidget(section_lbl)
+        sb.addSpacing(2)
 
-        self._section_buttons: List[QPushButton] = []
+        self._section_buttons: List[_StepBtn] = []
         for i, (num, name, hint) in enumerate(self.SECTIONS):
-            btn = QPushButton(f"  {num}    {name}")
-            btn.setProperty("class", "SidebarBtn")
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            if hint:
-                btn.setToolTip(hint)
-            btn.clicked.connect(lambda _, idx=i: self._switch_section(idx))
+            btn = _StepBtn(num, name, hint)
+            btn._clicked.connect(lambda idx=i: self._switch_section(idx))
             sb.addWidget(btn)
             self._section_buttons.append(btn)
 
         sb.addStretch(1)
 
-        footer = QLabel("GRUPO OCMX · PDFlex v2.0")
+        # ── Footer ─────────────────────────────────────────────────────
+        footer = QLabel(f"GRUPO OCMX · PDFlex v{APP_VERSION}")
         footer.setObjectName("SidebarFooter")
         sb.addWidget(footer)
 
         return sidebar
+
+    # ------------------------------------------------------------------ #
+    # Acento visual por herramienta
+    # ------------------------------------------------------------------ #
+
+    def _apply_tool_accent(self) -> None:
+        accent = getattr(self, "ACCENT_COLOR", "#5E6AD2") or "#5E6AD2"
+        hover  = _mix_hex(accent, "#FFFFFF", 0.14)
+        press  = _mix_hex(accent, "#000000", 0.16)
+        soft   = _rgba(accent, 0.18)
+        soft2  = _rgba(accent, 0.12)
+        line   = _rgba(accent, 0.42)
+        badge_bg = _rgba(accent, 0.20)
+
+        # Actualizar el nombre de la herramienta en el sidebar
+        if hasattr(self, "_brand_lbl"):
+            self._brand_lbl.setStyleSheet(
+                f"color: {accent}; font-size: 16px; font-weight: 700;"
+                "letter-spacing: -0.3px; background: transparent;"
+            )
+
+        self.setStyleSheet(f"""
+/* Sidebar — pasos */
+#SidebarStep, #SidebarStepHover, #SidebarStepActive {{
+    border: none;
+    border-left: 2px solid transparent;
+}}
+#SidebarStepHover {{
+    background: #16161A;
+    border-left-color: #2A2A32;
+}}
+#SidebarStepActive {{
+    background: #1A1A22;
+    border-left-color: {accent};
+}}
+
+/* Badge numérico del paso */
+QLabel#StepBadge {{
+    background: #1E1E26;
+    color: #6B6F7A;
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    border: 1px solid #2A2A32;
+}}
+QLabel#StepBadgeActive {{
+    background: {badge_bg};
+    color: {accent};
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    border: 1px solid {_rgba(accent, 0.35)};
+}}
+
+/* Texto del paso */
+QLabel#StepName {{
+    color: #7A7E8C;
+    font-size: 13px;
+    font-weight: 500;
+    background: transparent;
+}}
+QLabel#StepNameActive {{
+    color: #ECEDEE;
+    font-size: 13px;
+    font-weight: 600;
+    background: transparent;
+}}
+
+/* Botones Primary (herramienta-acento) */
+QPushButton[class="Primary"] {{
+    background: {accent};
+    background-color: {accent};
+    border: 1px solid {accent};
+    color: #FFFFFF;
+    font-weight: 600;
+}}
+QPushButton[class="Primary"]:hover {{
+    background: {hover};
+    background-color: {hover};
+    border: 1px solid {hover};
+}}
+QPushButton[class="Primary"]:pressed {{
+    background: {press};
+    background-color: {press};
+    border: 1px solid {press};
+}}
+
+/* Ghost / Icon hover accent */
+QPushButton[class="Ghost"]:hover,
+QPushButton[class="IconBtn"]:hover {{
+    border-color: {line};
+}}
+
+/* Controles de formulario — focus */
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
+QComboBox:focus, QTextEdit:focus {{
+    border-color: {accent};
+}}
+
+/* Slider */
+QSlider::sub-page:horizontal {{
+    background: {accent};
+}}
+QSlider::handle:horizontal {{
+    border-color: {accent};
+}}
+
+/* Checkbox */
+QCheckBox::indicator:hover {{ border-color: {accent}; }}
+QCheckBox::indicator:checked {{
+    background: {accent};
+    border-color: {accent};
+}}
+
+/* Listas — selección */
+QListWidget::item:selected {{
+    background-color: {soft};
+    border-color: {line};
+}}
+QListWidget::item:selected:!active {{
+    background-color: {soft2};
+}}
+
+/* Scrollbars accent */
+#PdfPreview QScrollBar::handle:vertical:hover,
+#PdfPreview QScrollBar::handle:horizontal:hover,
+#LeftPanelScroll QScrollBar::handle:vertical:hover {{
+    background: {accent};
+}}
+""")
 
     # ------------------------------------------------------------------ #
     # Navegación
@@ -95,10 +344,7 @@ class PipelineWindow(QWidget):
 
     def _switch_section(self, idx: int) -> None:
         for i, btn in enumerate(self._section_buttons):
-            btn.setProperty("active", "true" if i == idx else "false")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-            btn.update()
+            btn.set_active(i == idx)
         self.stack.setCurrentIndex(idx)
         self._on_section_activated(idx)
 
@@ -114,3 +360,33 @@ class PipelineWindow(QWidget):
 
     def handle_drop(self, paths: List[str]) -> None:
         """Forwarding de drag&drop desde ShellWindow. Override en subclase."""
+
+
+# ──────────────────────────────────────────────────────────────
+# Utilidades de color
+# ──────────────────────────────────────────────────────────────
+
+def _hex_to_rgb(value: str) -> tuple[int, int, int]:
+    value = value.strip().lstrip("#")
+    if len(value) != 6:
+        return (94, 106, 210)
+    try:
+        return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        return (94, 106, 210)
+
+
+def _mix_hex(color: str, other: str, amount: float) -> str:
+    r1, g1, b1 = _hex_to_rgb(color)
+    r2, g2, b2 = _hex_to_rgb(other)
+    amount = max(0.0, min(1.0, amount))
+    r = round(r1 + (r2 - r1) * amount)
+    g = round(g1 + (g2 - g1) * amount)
+    b = round(b1 + (b2 - b1) * amount)
+    return f"#{r:02X}{g:02X}{b:02X}"
+
+
+def _rgba(color: str, alpha: float) -> str:
+    r, g, b = _hex_to_rgb(color)
+    alpha = max(0.0, min(1.0, alpha))
+    return f"rgba({r}, {g}, {b}, {alpha:.2f})"

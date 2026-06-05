@@ -1,4 +1,4 @@
-# Python
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.pyo
@@ -6,25 +6,41 @@ __pycache__/
 .Python
 *.egg
 *.egg-info/
-dist/
-build/
-*.spec.bak
 
-# Entornos virtuales
+# ── Entornos virtuales ────────────────────────────────────────────────────────
 venv/
 env/
 .env
 .venv/
+.venv_build/
+.venv_nuitka/
 
-# PyInstaller output
-dist/
+# ── Build artifacts (PyInstaller) ─────────────────────────────────────────────
 build/
+*.spec.bak
 
-# IDEs
+# ── Build artifacts (Nuitka) ──────────────────────────────────────────────────
+.nuitka_build/
+*.build/
+*.dist/
+*.onefile-build/
+
+# ── Distribución compilada ────────────────────────────────────────────────────
+# Los ejecutables y carpetas de distribución no se verscionan;
+# se generan con build_nuitka.ps1 o build_exe.ps1
+dist/
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
+*.swo
 
-# OS
+# ── OS ────────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# ── Archivos temporales de PDFlex ─────────────────────────────────────────────
+# Directorio de descarga del auto-updater (se crea en runtime)
+# %TEMP%/PDFlex/updates/ — no está en el proyecto, solo referencia

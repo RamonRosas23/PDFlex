@@ -1,22 +1,34 @@
-# Firmador Masivo de Documentos
+# PDFlex
 
-Aplicación de escritorio para firmar PDFs masivamente con variación natural por página, evitando colisión con texto y respetando los márgenes de cada página.
+Caja de herramientas de escritorio diseñada para manipular documentos PDF con flujos automatizados de múltiples herramientas: **Firma Masiva (inteligente)**, **Foleado (paginado)**, **OCR Local (offline)**, **Membretado**, **Separación**, **Unión**, y conversión hacia o desde imágenes y Word. Orientado a grandes volúmenes de documentos respetando colisiones de texto e integridad del archivo original.
 
-## Características
+## Herramientas / Funciones
 
-- **Carga múltiple** de PDFs (drag & drop o diálogo).
-- **Previsualizador interactivo** del PDF con la firma arrastrable, redimensionable (handles en las esquinas) y rotable (handle dedicado).
-- **Análisis por página** que detecta bloques de texto y líneas de firma típicas (`______`).
-- **Algoritmo de zona segura** con búsqueda en espiral cuadrada: si la posición elegida tapa texto, mueve la firma a la zona libre más cercana.
-- **Snap a línea de firma**: si hay una línea típica de firma cerca, la firma se ajusta sobre ella.
-- **Variación natural por página** (determinista vía semilla):
-  - Ángulo (±°)
-  - Escala (±%)
-  - Desplazamiento X / Y (±pt)
-  - Opacidad mínima
-  - "Pressure jitter": ligera variación de contraste/brillo/blur que simula presión de bolígrafo
-- **Visor de resultados** con thumbnails por página, mostrando si la firma fue ajustada automáticamente.
-- **UI/UX moderna** con tema oscuro y navegación por secciones.
+- **Firmador Masivo:**
+  - Carga múltiple de PDFs.
+  - Firma imagen PNG arrastrable, redimensionable y rotable.
+  - *Algoritmo de zona segura* y detección de texto/líneas de firma.
+  - Variación natural por página y documento (ángulo, escala, posición, opacidad, "pressure jitter").
+
+- **Foleador (Paginación):**
+  - Numera masivamente los documentos PDF.
+  - Soporta múltiples formatos de texto ("Página X de Y", alfanuméricos, prefijos, ceros a la izquierda).
+  - Posicionamiento inteligente para no tapar texto ni códigos de barras presentes en el membrete.
+
+- **Membretado Masivo:**
+  - Aplica imágenes de encabezado y pie de página en todo un bloque de documentos.
+  - Ajuste de opacidad y alineación.
+
+- **OCR (Local Neural Engine):**
+  - Convierte PDFs escaneados a Word/TXT editable sin depender de la nube.
+  - Usa los modelos oficiales `tessdata` (spa, eng) de Tesseract.
+  - Ejecuta pesados análisis OCR en procesos aislados, recuperando automáticamente páginas giradas y pre-procesando imágenes tenues.
+
+- **Herramientas de formato:**
+  - Unir múltiples PDFs.
+  - Separar PDFs por rangos (ej. 1-2, 3, 5-9) o a páginas individuales.
+  - Imágenes a PDF / PDF a Imágenes, y Word a PDF masivo (vía automatización local de COM de Word).
+  - Quitar "Fondo blanco" de imágenes (para preparar tu firma PNG perfecta).
 
 ## Instalación
 
@@ -35,7 +47,7 @@ python -m venv .venv
 # 2. Instalar dependencias
 pip install -r requirements.txt
 
-# 3. Lanzar la aplicación
+# 3. Lanzar la aplicación principal
 python main.py
 ```
 
@@ -46,86 +58,45 @@ python main.py
 > ```
 
 Dependencias principales:
-- `PyMuPDF` — lectura/escritura de PDFs y extracción de texto con bounding boxes
-- `Pillow` — transformación de imágenes (rotación, opacidad, jitter)
-- `PyQt6` — UI
-- `numpy` — operaciones numéricas para variación
+- `PyMuPDF` (lectura/escritura veloz de PDFs, Detección de bloques de texto)
+- `Pillow` y `OpenCV` (manipulación de firmas, remoción de fondos, pre-procesamiento)
+- `pytesseract` (enlace al motor de OCR Tesseract)
+- `PyQt6` (Interfaz moderna, QThreads, UX limpia)
 
-### Opción B — Compilar `.exe` (distribución)
+### Opción B — Opciones de Compilación (distribución)
 
-El script `build_exe.ps1` crea un entorno virtual **limpio** (sin librerías del sistema),
-instala solo las dependencias necesarias y genera `dist/FirmadorMasivo.exe`.
+El repositorio incluye automatizaciones para obtener ejecutables independientes de Python.
 
-```powershell
-# Desde la carpeta del proyecto:
-Set-ExecutionPolicy -Scope Process Bypass
-.\build_exe.ps1
-```
+- `build_nuitka.ps1`: Compilación preferida y más optimizada (convierte código Python a C y crea un binario rápido). Requiere gcc/msvc instalado.
+- `build_exe.ps1`: Construye el `.exe` portable standard mediante PyInstaller.
+- `build_setup.ps1`: Genera un instalador formal y un ZIP portable distribuyendo los artefactos con InnoSetup (`installer.iss`).
 
-El ejecutable resultante en `dist\FirmadorMasivo.exe` es **portable** —
-no requiere Python instalado en el equipo destino (~130 MB).
+> NOTA: Para el OCR, la carpeta `assets/tessdata/` debe ser distribuida junto con el ejecutable generado o empaquetada e instruido a Tesseract sobre su ubicación en ejecución temporal.
 
-> **Sobre los `WARNING: Library not found` durante la compilación:**  
-> Son normales. PyInstaller analiza todos los plugins de Qt6 (3D, WebEngine, QML, etc.)
-> que no están instalados en el entorno limpio porque la app no los usa.
-> El ejecutable funciona correctamente sin ellos.
+## Flujo de Trabajo y Arquitectura
 
-## Uso
-
-```bash
-python main.py
-```
-
-Flujo:
-
-1. **Documentos**: carga uno o más PDFs.
-2. **Firma & Posición**: carga una imagen PNG con fondo transparente. Arrástrala sobre la página, ajusta tamaño con las esquinas y rota con el handle superior.
-3. **Variación**: ajusta los rangos de variación con los sliders.
-4. **Procesar**: define la carpeta de salida y ejecuta. Se procesa en un thread separado con barra de progreso.
-5. **Resultados**: revisa página por página el resultado final, con indicadores de páginas donde la firma fue reposicionada para evitar texto.
-
-## Arquitectura
+PDFlex se conforma por tres capas principales:
 
 ```
-firmador_masivo/
-├── main.py                    # Punto de entrada
-├── requirements.txt
-├── README.md
-├── core/                      # Lógica de negocio
-│   ├── pdf_analyzer.py        # Análisis de texto + márgenes + líneas
-│   ├── safe_zone.py           # Búsqueda de zona segura (espiral)
-│   ├── variation.py           # Generador determinista de variaciones
-│   └── signature_engine.py    # Motor principal (combina todo)
-└── ui/                        # Interfaz
-    ├── main_window.py         # Ventana principal + sidebar + secciones
-    ├── pdf_preview.py         # Vista previa con firma arrastrable
-    ├── results_viewer.py      # Visor de páginas firmadas
-    └── styles.py              # Tema oscuro (QSS)
+PDFlex/
+├── main.py                    # Bootstrap y punto de entrada visual
+├── core/                      # Lógica de procesamiento y motores
+│   ├── ocr_engine.py          # Multiprocessing OCR
+│   ├── signature_engine.py    # Motor inteligente de inserción
+│   └── background_removal_engine.py
+├── shell/                     # Núcleo modular del sistema
+│   ├── launcher.py            # Orquestador del Grid de Herramientas
+│   └── tool_registry.py       # Registro dinámico de herramientas
+└── ui/                        # Implementación gráfica (PyQt6)
+    ├── main_window.py         # Home (Grid Menu)
+    └── common/                # Flujo estándar paso a paso (Files -> Config -> Result)
 ```
 
-## Algoritmo de zona segura
+**Arquitectura "Tool Scaffold":** 
+Todas las herramientas internas comparten una UI Wizard consistente bajo `ui/common/tool_scaffold.py`: (1) Carga de Documentos, (2) Configuración Específica, (3) Confirmación, y (4) Resultados. El resultado nunca altera el original en primera fase, los arroja en el grid de Resultados desde Temp y el usuario ejecuta la acción `Guardar como` sobre local.
 
-1. La firma deseada se calcula a partir de:
-   - Posición base normalizada en el preview (fracción 0..1 de la página)
-   - Tamaño base en puntos PDF
-   - Ángulo base
-   - **+ variación pseudoaleatoria** determinista por (documento, página, seed)
+## Notas Técnicas (Firmador Inteligente/Foleador)
 
-2. Si el bounding box rotado de la firma:
-   - **No se sale** de los márgenes Y
-   - **No intersecta** ningún bloque de texto (con padding)
-   
-   → se acepta esa posición.
-
-3. Si **sí choca**, se ejecuta una **búsqueda en espiral cuadrada** alrededor del punto deseado, probando candidatos a paso configurable hasta encontrar uno válido (máx. 80 intentos).
-
-4. Si la espiral no encuentra nada, se hace un **barrido en grilla** del cuarto inferior derecho.
-
-5. Si hay una **línea de firma** (línea horizontal larga y delgada, o secuencia de `_`) a menos de 40 pt de la posición candidata, se hace **snap** centrando la firma sobre ella.
-
-## Notas técnicas
-
-- El previsualizador renderiza el PDF a 144 DPI para nitidez. Las coordenadas se convierten automáticamente a puntos PDF (72 DPI).
-- La rotación se aplica pre-rotando la imagen con PIL (`expand=True`) y luego insertándola en el bbox correspondiente, lo que permite ángulos arbitrarios (no solo múltiplos de 90).
-- El procesamiento corre en un `QThread` separado para no bloquear la UI.
-- Misma semilla = mismo resultado exacto: útil si necesitas reproducir un firmado.
+1. El previsualizador renderiza el PDF a 144 DPI para nitidez. Las coordenadas se convierten a puntos PDF (72 DPI).
+2. Algoritmos como `safe_zone.py` implementan bounding-box collisions: si un foleo o firma caerá sobre un bloque de texto que el PDF declara o en una zona prohibida (márgenes estrictos), busca en espiral la zona válida más cercana intentando no alterar la legibilidad.
+3. El OCR es de alto consumo. Se aísla por `multiprocessing` con colas y señales cruzadas para evitar crashes en el loop principal de PyQt6. Se implementa auto-healing por crash.

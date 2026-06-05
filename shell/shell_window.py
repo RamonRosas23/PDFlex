@@ -12,10 +12,11 @@ Estructura:
 from __future__ import annotations
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt, QPoint, QTimer
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout,
-    QPushButton, QLabel, QStackedWidget,
+    QPushButton, QLabel, QStackedWidget, QMenu, QMessageBox,
 )
 
 from shell.context import ShellContext
@@ -23,6 +24,12 @@ from shell.tray import PdfTray, TrayPopup
 from shell.word_to_pdf import WordToPdfConverter
 from shell.launcher import LauncherWidget
 from shell.tool_registry import TOOLS, get_tool
+from ui.common.output_settings import (
+    add_tool_suffix_enabled,
+    set_add_tool_suffix_enabled,
+)
+from ui.common.icons import set_button_icon
+from core.update_config import UPDATE_STARTUP_DELAY_MS
 
 
 class ShellWindow(QMainWindow):
@@ -30,6 +37,8 @@ class ShellWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("PDFlex — Suite de herramientas PDF")
+        from ui.common.icons import app_qicon
+        self.setWindowIcon(app_qicon())
         self.setMinimumSize(1320, 820)
         self.showMaximized()
         self.setAcceptDrops(True)
@@ -45,7 +54,14 @@ class ShellWindow(QMainWindow):
 
         self._tool_widgets: Dict[str, QWidget] = {}   # lazy instances
 
+        self._update_check_thread = None   # referencia para evitar GC prematuro
+        self._update_check_worker = None
+        self._manual_update_check = False
+
         self._build_ui()
+
+        # Comprobación de actualización diferida (no bloquea el arranque)
+        QTimer.singleShot(UPDATE_STARTUP_DELAY_MS, self._start_update_check)
 
     # ------------------------------------------------------------------ #
     # UI
@@ -74,10 +90,17 @@ class ShellWindow(QMainWindow):
         h.setContentsMargins(20, 0, 20, 0)
         h.setSpacing(12)
 
-        # Logo
+        # Logo: ícono + texto
+        from ui.common.icons import app_pixmap
+        logo_icon = QLabel()
+        logo_icon.setPixmap(app_pixmap(24))
+        logo_icon.setFixedSize(24, 24)
+        logo_icon.setStyleSheet("background: transparent;")
+        h.addWidget(logo_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+
         logo = QLabel("PDFlex")
         logo.setObjectName("TopbarLogo")
-        h.addWidget(logo)
+        h.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Divisor
         sep = QFrame()
@@ -93,18 +116,45 @@ class ShellWindow(QMainWindow):
 
         h.addStretch(1)
 
-        # Botón ← Inicio
-        self._home_btn = QPushButton("← Inicio")
+        # Botón Inicio
+        self._home_btn = QPushButton("Inicio")
         self._home_btn.setProperty("class", "Ghost")
         self._home_btn.setFixedHeight(32)
+        set_button_icon(self._home_btn, "arrow-left", size=15)
         self._home_btn.setVisible(False)
         self._home_btn.clicked.connect(self._go_home)
         h.addWidget(self._home_btn)
+
+        self._options_btn = QPushButton("Opciones")
+        self._options_btn.setProperty("class", "Ghost")
+        self._options_btn.setFixedHeight(32)
+        set_button_icon(self._options_btn, "settings", size=15)
+        options_menu = QMenu(self._options_btn)
+        self._suffix_action = QAction(
+            "Agregar sufijo de herramienta al nombre de salida",
+            self._options_btn,
+        )
+        self._suffix_action.setCheckable(True)
+        self._suffix_action.setChecked(add_tool_suffix_enabled())
+        self._suffix_action.toggled.connect(set_add_tool_suffix_enabled)
+        options_menu.addAction(self._suffix_action)
+        options_menu.addSeparator()
+        self._check_updates_action = QAction(
+            "Buscar actualizaciones",
+            self._options_btn,
+        )
+        self._check_updates_action.triggered.connect(
+            lambda: self._start_update_check(manual=True)
+        )
+        options_menu.addAction(self._check_updates_action)
+        self._options_btn.setMenu(options_menu)
+        h.addWidget(self._options_btn)
 
         # Botón bandeja
         self._tray_btn = QPushButton("Bandeja (0)")
         self._tray_btn.setObjectName("TrayBtn")
         self._tray_btn.setFixedHeight(32)
+        set_button_icon(self._tray_btn, "folder", size=15)
         self._tray_btn.clicked.connect(self._toggle_tray)
         h.addWidget(self._tray_btn)
 
@@ -134,11 +184,13 @@ class ShellWindow(QMainWindow):
 
         self._main_stack.setCurrentWidget(widget)
         self._tool_name_lbl.setText(tool.title)
+        self._tool_name_lbl.setStyleSheet(f"color: {tool.accent_color};")
         self._tool_name_lbl.setVisible(True)
         self._home_btn.setVisible(True)
 
     def _go_home(self) -> None:
         self._main_stack.setCurrentIndex(0)
+        self._tool_name_lbl.setStyleSheet("")
         self._tool_name_lbl.setVisible(False)
         self._home_btn.setVisible(False)
 
@@ -164,6 +216,89 @@ class ShellWindow(QMainWindow):
         self._tray_popup.move(pos)
         self._tray_popup.show()
         self._tray_popup.raise_()
+
+    # ------------------------------------------------------------------ #
+    # Auto-update
+    # ------------------------------------------------------------------ #
+
+    def _start_update_check(self, manual: bool = False) -> None:
+        """Lanza la comprobación de actualizaciones en segundo plano."""
+        from core.updater import UpdateCheckWorker, UpdateCheckThread
+
+        if (
+            self._update_check_thread is not None
+            and self._update_check_thread.isRunning()
+        ):
+            if manual:
+                QMessageBox.information(
+                    self,
+                    "Actualizaciones",
+                    "Ya hay una comprobación de actualizaciones en curso.",
+                )
+            return
+
+        self._manual_update_check = manual
+        self._update_check_worker = UpdateCheckWorker()
+        self._update_check_thread = UpdateCheckThread(
+            self._update_check_worker, self
+        )
+        self._update_check_worker.update_available.connect(self._on_update_found)
+        self._update_check_worker.up_to_date.connect(self._on_update_up_to_date)
+        self._update_check_worker.check_error.connect(self._on_update_check_error)
+        self._update_check_thread.finished.connect(self._update_check_thread.deleteLater)
+        self._update_check_thread.finished.connect(self._on_update_check_finished)
+        self._update_check_thread.start()
+
+    def _on_update_found(self, info: object) -> None:
+        """Muestra el diálogo de actualización cuando hay una versión nueva."""
+        from ui.updater_dialog import UpdaterDialog
+        UpdaterDialog.show_update(info, self)  # type: ignore[arg-type]
+
+    def _on_update_up_to_date(self, version: str) -> None:
+        if self._manual_update_check:
+            QMessageBox.information(
+                self,
+                "Actualizaciones",
+                f"PDFlex ya está actualizado.\n\nVersión instalada: {version}",
+            )
+
+    def _on_update_check_error(self, message: str) -> None:
+        if self._manual_update_check:
+            from core.updater import update_log_path
+            QMessageBox.warning(
+                self,
+                "Actualizaciones",
+                "No se pudo comprobar si hay actualizaciones.\n\n"
+                f"{message}\n\nLog: {update_log_path()}",
+            )
+
+    def _on_update_check_finished(self) -> None:
+        self._manual_update_check = False
+        self._update_check_worker = None
+        self._update_check_thread = None
+
+    # ------------------------------------------------------------------ #
+    # Cierre limpio
+    # ------------------------------------------------------------------ #
+
+    def closeEvent(self, event) -> None:
+        """Limpia workers activos antes de cerrar para evitar procesos huérfanos."""
+        for widget in self._tool_widgets.values():
+            # OCR y otros tools exponen _shutdown_worker() para limpiar
+            shutdown = getattr(widget, "_shutdown_worker", None)
+            if callable(shutdown):
+                try:
+                    shutdown()
+                except Exception:
+                    pass
+            # Workers genéricos con cancel()
+            worker = getattr(widget, "_worker", None)
+            if worker and callable(getattr(worker, "cancel", None)):
+                try:
+                    worker.cancel()
+                except Exception:
+                    pass
+        event.accept()
 
     # ------------------------------------------------------------------ #
     # Drag & drop — forwarding a la herramienta activa

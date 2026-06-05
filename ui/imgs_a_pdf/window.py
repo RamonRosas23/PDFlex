@@ -1,0 +1,954 @@
+"""ImgsAPdfWindow — convierte una colección de imágenes en un PDF.
+
+Pipeline:
+    01 Imágenes  →  02 Opciones  →  03 Procesar  →  04 Resultados
+
+Formatos soportados: PNG, JPG/JPEG, WEBP, BMP, TIFF, GIF (primer fotograma).
+"""
+from __future__ import annotations
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import List, Optional, Tuple
+
+import fitz
+from PIL import Image
+from PyQt6.QtCore import (
+    Qt, QObject, QThread, pyqtSignal, QSize, QEvent,
+)
+from PyQt6.QtGui import (
+    QPixmap, QImage, QIcon, QColor,
+    QDragEnterEvent, QDropEvent, QKeyEvent, QDesktopServices,
+)
+from PyQt6.QtWidgets import (
+    QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
+    QFrame, QLineEdit,
+    QCheckBox, QComboBox, QScrollArea, QListWidget,
+    QListWidgetItem, QDoubleSpinBox, QGridLayout, QSizePolicy,
+)
+from PyQt6.QtCore import QUrl
+
+from shell.context import ShellContext
+from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
+from ui.common.cards import make_card, card_layout, make_page_header
+from ui.common.tool_scaffold import PipelineWindow
+from ui.common.process_step import ProcessStep
+from ui.common.pdf_viewer import GenericPdfViewer
+from ui.common.send_to_tool import SendToToolButton
+from ui.common.dialogs import show_error, show_warning
+from ui.common.file_dialogs import get_open_file_names
+from ui.common.icons import set_button_icon
+
+
+# ── Constantes ───────────────────────────────────────────────────────── #
+
+IMAGE_FILTER = (
+    "Imágenes (*.png *.jpg *.jpeg *.webp *.bmp *.tiff *.tif *.gif);;"
+    "PNG (*.png);;"
+    "JPEG (*.jpg *.jpeg);;"
+    "WebP (*.webp);;"
+    "Todos los archivos (*)"
+)
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif"}
+
+# Tamaños de página en puntos (72 pt = 1 pulgada)
+PAGE_SIZES: dict[str, Tuple[float, float]] = {
+    "A4  (210 × 297 mm)":    (595.28, 841.89),
+    "A3  (297 × 420 mm)":    (841.89, 1190.55),
+    "A5  (148 × 210 mm)":    (419.53, 595.28),
+    "Carta  (216 × 279 mm)": (612.0,  792.0),
+    "Legal  (216 × 356 mm)": (612.0,  1008.0),
+    "Adaptado a la imagen":  (0.0,    0.0),   # especial
+}
+
+FIT_MODES = [
+    "Ajustar (mantener proporción)",
+    "Rellenar página (recortar bordes)",
+    "Tamaño original (1:1)",
+]
+
+
+# ====================================================================== #
+#  Resultado
+# ====================================================================== #
+
+@dataclass
+class ImgsPdfResult:
+    output_path: str
+    success: bool
+    error: str = ""
+    total_pages: int = 0
+    source_count: int = 0
+
+
+# ====================================================================== #
+#  Worker
+# ====================================================================== #
+
+def _pil_to_fitz_rect(
+    img_w: int, img_h: int,
+    page_w: float, page_h: float,
+    margin: float,
+    fit_mode: str,
+    auto_rotate: bool,
+) -> fitz.Rect:
+    """
+    Calcula el rectángulo de colocación y devuelve la imagen (posiblemente rotada).
+    """
+    # Rotar imagen si page y imagen tienen orientaciones opuestas
+    if auto_rotate:
+        page_landscape = page_w > page_h
+        img_landscape = img_w > img_h
+        if page_landscape != img_landscape:
+            pass  # se rota abajo
+
+    available_w = page_w - 2 * margin
+    available_h = page_h - 2 * margin
+
+    if fit_mode == FIT_MODES[0]:  # Ajustar
+        scale = min(available_w / img_w, available_h / img_h)
+        draw_w = img_w * scale
+        draw_h = img_h * scale
+        x0 = margin + (available_w - draw_w) / 2
+        y0 = margin + (available_h - draw_h) / 2
+        return fitz.Rect(x0, y0, x0 + draw_w, y0 + draw_h)
+
+    elif fit_mode == FIT_MODES[1]:  # Rellenar
+        scale = max(available_w / img_w, available_h / img_h)
+        draw_w = img_w * scale
+        draw_h = img_h * scale
+        x0 = margin + (available_w - draw_w) / 2
+        y0 = margin + (available_h - draw_h) / 2
+        return fitz.Rect(x0, y0, x0 + draw_w, y0 + draw_h)
+
+    else:  # Tamaño original
+        # 1 px = 1/96 pulgada = 72/96 pt
+        pt_per_px = 72.0 / 96.0
+        draw_w = img_w * pt_per_px
+        draw_h = img_h * pt_per_px
+        x0 = margin + (available_w - draw_w) / 2
+        y0 = margin + (available_h - draw_h) / 2
+        return fitz.Rect(x0, y0, x0 + draw_w, y0 + draw_h)
+
+
+class ImgsToPdfWorker(QObject):
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(object)    # ImgsPdfResult
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        image_paths: List[str],
+        output_path: str,
+        page_size_key: str,
+        orientation: str,        # "Vertical" / "Horizontal"
+        margin_mm: float,
+        fit_mode: str,
+        auto_rotate: bool,
+        one_per_page: bool,
+        dpi: int,
+    ) -> None:
+        super().__init__()
+        self.image_paths = image_paths
+        self.output_path = output_path
+        self.page_size_key = page_size_key
+        self.orientation = orientation
+        self.margin_mm = margin_mm
+        self.fit_mode = fit_mode
+        self.auto_rotate = auto_rotate
+        self.one_per_page = one_per_page
+        self.dpi = dpi
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    # ── helpers ─────────────────────────────────────────────────────── #
+
+    def _page_dims(self, img_w: int, img_h: int) -> Tuple[float, float]:
+        """Devuelve (width_pt, height_pt) de la página para esta imagen."""
+        size_w, size_h = PAGE_SIZES[self.page_size_key]
+
+        # Modo adaptado: la página tiene exactamente las dimensiones de la imagen
+        if size_w == 0 and size_h == 0:
+            pt_per_px = 72.0 / self.dpi
+            return img_w * pt_per_px, img_h * pt_per_px
+
+        if self.orientation == "Horizontal":
+            size_w, size_h = max(size_w, size_h), min(size_w, size_h)
+        else:
+            size_w, size_h = min(size_w, size_h), max(size_w, size_h)
+
+        if self.auto_rotate:
+            img_landscape = img_w > img_h
+            page_landscape = size_w > size_h
+            if img_landscape != page_landscape:
+                size_w, size_h = size_h, size_w
+
+        return size_w, size_h
+
+    def _margin_pt(self) -> float:
+        return self.margin_mm * 72.0 / 25.4
+
+    # ── run ─────────────────────────────────────────────────────────── #
+
+    def run(self) -> None:
+        try:
+            out_doc = fitz.open()
+            total = len(self.image_paths)
+            margin_pt = (
+                0.0
+                if PAGE_SIZES[self.page_size_key] == (0.0, 0.0)
+                else self._margin_pt()
+            )
+
+            for i, img_path in enumerate(self.image_paths):
+                if self._cancel:
+                    out_doc.close()
+                    self.error.emit("Operación cancelada.")
+                    return
+
+                name = Path(img_path).name
+                self.progress.emit(i + 1, total, f"Procesando {name}…")
+
+                try:
+                    img = Image.open(img_path)
+                    img.load()  # fuerza lectura del GIF/TIFF animado
+                    img = img.convert("RGB")
+                except Exception as exc:
+                    out_doc.close()
+                    self.error.emit(f"No se pudo abrir «{name}»: {exc}")
+                    return
+
+                img_w, img_h = img.size
+                page_w, page_h = self._page_dims(img_w, img_h)
+
+                page = out_doc.new_page(width=page_w, height=page_h)
+
+                rect = _pil_to_fitz_rect(
+                    img_w, img_h, page_w, page_h, margin_pt,
+                    self.fit_mode, self.auto_rotate,
+                )
+
+                # Convertir PIL → bytes PNG para insertar con fitz
+                import io
+                buf = io.BytesIO()
+                img.save(buf, format="PNG")
+                buf.seek(0)
+                page.insert_image(rect, stream=buf.read())
+
+            self.progress.emit(total, total, "Guardando…")
+            Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
+            out_doc.save(self.output_path, garbage=4, deflate=True)
+            total_pages = out_doc.page_count
+            out_doc.close()
+
+            self.finished.emit(ImgsPdfResult(
+                output_path=self.output_path,
+                success=True,
+                total_pages=total_pages,
+                source_count=len(self.image_paths),
+            ))
+        except Exception as exc:
+            self.error.emit(str(exc))
+
+
+# ====================================================================== #
+#  Tarjeta de imágenes (reemplaza DocumentsCard para imágenes)
+# ====================================================================== #
+
+def _make_img_thumb(path: str, size: int = 72) -> Optional[QPixmap]:
+    try:
+        img = Image.open(path).convert("RGBA")
+        img.thumbnail((size, size), Image.LANCZOS)
+        data = img.tobytes("raw", "RGBA")
+        qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+        return QPixmap.fromImage(qimg.copy())
+    except Exception:
+        return None
+
+
+class ImageListCard(QFrame):
+    """Tarjeta de carga y reordenado de imágenes."""
+
+    files_changed = pyqtSignal(list)   # list[str]
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setProperty("class", "Card")
+        self._paths: List[str] = []
+        self._path_set: set = set()
+        self._build()
+
+    def _build(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        # ── Botones ───────────────────────────────────────────────────
+        row = QHBoxLayout()
+        row.setSpacing(8)
+
+        add_btn = QPushButton("Agregar imágenes")
+        add_btn.setProperty("class", "Primary")
+        add_btn.clicked.connect(self._on_browse)
+        row.addWidget(add_btn)
+
+        clear_btn = QPushButton("Vaciar")
+        clear_btn.setProperty("class", "Ghost")
+        clear_btn.clicked.connect(self.clear)
+        row.addWidget(clear_btn)
+
+        self._remove_btn = QPushButton("Quitar")
+        self._remove_btn.setProperty("class", "Ghost")
+        self._remove_btn.setToolTip("Quita del lote las imágenes seleccionadas. No borra archivos del disco.")
+        self._remove_btn.clicked.connect(self.remove_selected)
+        self._remove_btn.setEnabled(False)
+        row.addWidget(self._remove_btn)
+
+        row.addStretch()
+
+        self._count_lbl = QLabel("0 imágenes")
+        self._count_lbl.setProperty("class", "CardHint")
+        row.addWidget(self._count_lbl)
+
+        layout.addLayout(row)
+
+        hint = QLabel("Arrastra para reordenar · selecciona y usa Quitar o Supr")
+        hint.setProperty("class", "CardHint")
+        layout.addWidget(hint)
+
+        # ── Lista ─────────────────────────────────────────────────────
+        self.list_widget = QListWidget()
+        self.list_widget.setMinimumHeight(300)
+        self.list_widget.setIconSize(QSize(80, 80))
+        self.list_widget.setSpacing(3)
+        self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.list_widget.itemSelectionChanged.connect(self._update_remove_btn)
+        self.list_widget.setDragDropMode(QListWidget.DragDropMode.InternalMove)
+        self.list_widget.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.list_widget.model().rowsMoved.connect(
+            self._sync_after_reorder
+        )
+        self.list_widget.installEventFilter(self)
+        layout.addWidget(self.list_widget, 1)
+
+    # ── eventFilter (Delete key) ─────────────────────────────────────
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.list_widget and event.type() == QEvent.Type.KeyPress:
+            if isinstance(event, QKeyEvent):
+                if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                    self._delete_selected()
+                    return True
+        return super().eventFilter(obj, event)
+
+    def _delete_selected(self) -> None:
+        self.remove_selected()
+
+    def remove_selected(self) -> None:
+        """Quita las imágenes seleccionadas del lote sin borrar archivos."""
+        rows = sorted(
+            {self.list_widget.row(item) for item in self.list_widget.selectedItems()},
+            reverse=True,
+        )
+        if not rows:
+            return
+        next_row = min(rows[-1], max(0, self.list_widget.count() - len(rows) - 1))
+        for row in rows:
+            if 0 <= row < self.list_widget.count():
+                item = self.list_widget.item(row)
+                p = item.data(Qt.ItemDataRole.UserRole) if item else None
+                if p:
+                    self._path_set.discard(p)
+                self.list_widget.takeItem(row)
+        self._sync_paths_from_list()
+        if self.list_widget.count() > 0:
+            self.list_widget.setCurrentRow(next_row)
+        self._update_count()
+        self._update_remove_btn()
+        self.files_changed.emit(self.paths())
+
+    def _sync_paths_from_list(self) -> None:
+        self._paths = self.paths()
+        self._path_set = set(self._paths)
+
+    def _sync_after_reorder(self) -> None:
+        self._sync_paths_from_list()
+        self.files_changed.emit(self.paths())
+
+    def _update_remove_btn(self) -> None:
+        selected = len(self.list_widget.selectedItems())
+        self._remove_btn.setEnabled(selected > 0)
+        if selected > 1:
+            self._remove_btn.setText(f"Quitar ({selected})")
+        else:
+            self._remove_btn.setText("Quitar")
+
+    # ── API pública ──────────────────────────────────────────────────
+
+    def paths(self) -> List[str]:
+        result = []
+        for i in range(self.list_widget.count()):
+            p = self.list_widget.item(i).data(Qt.ItemDataRole.UserRole)
+            if p:
+                result.append(p)
+        return result
+
+    def add_paths(self, raw_paths: List[str]) -> None:
+        changed = False
+        for p in raw_paths:
+            path = Path(p)
+            if path.suffix.lower() not in IMAGE_EXTS or not path.is_file():
+                continue
+            if p not in self._path_set:
+                self._path_set.add(p)
+                self._paths.append(p)
+                item = QListWidgetItem(path.name)
+                item.setData(Qt.ItemDataRole.UserRole, p)
+                item.setToolTip(p)
+                thumb = _make_img_thumb(p)
+                if thumb:
+                    item.setIcon(QIcon(thumb))
+                self.list_widget.addItem(item)
+                changed = True
+        if changed:
+            self._update_count()
+            self._update_remove_btn()
+            self.files_changed.emit(self.paths())
+
+    def clear(self) -> None:
+        self._paths.clear()
+        self._path_set.clear()
+        self.list_widget.clear()
+        self._update_count()
+        self._update_remove_btn()
+        self.files_changed.emit([])
+
+    def count(self) -> int:
+        return self.list_widget.count()
+
+    def _update_count(self) -> None:
+        n = self.list_widget.count()
+        self._count_lbl.setText(f"{n} imagen" + ("es" if n != 1 else ""))
+
+    def _on_browse(self) -> None:
+        files, _ = get_open_file_names(
+            self.window(), "Seleccionar imágenes", "", IMAGE_FILTER
+        )
+        if files:
+            self.add_paths(files)
+
+
+# ====================================================================== #
+#  Ventana principal
+# ====================================================================== #
+
+class ImgsAPdfWindow(PipelineWindow):
+
+    SECTIONS = [
+        ("01", "Imágenes",  "Agrega y ordena las imágenes"),
+        ("02", "Opciones",  "Tamaño de página, márgenes y ajuste"),
+        ("03", "Procesar",  "Genera el PDF"),
+        ("04", "Resultados","Revisa el PDF generado"),
+    ]
+    BRAND = "Imágenes a PDF"
+    TAGLINE = "Convierte y combina imágenes en un solo PDF"
+    ACCENT_COLOR = "#E040FB"
+
+    def __init__(self, ctx: ShellContext, parent=None) -> None:
+        super().__init__(ctx, parent)
+
+        self._img_paths: List[str] = []
+        self._last_result: Optional[ImgsPdfResult] = None
+        self._worker: Optional[ImgsToPdfWorker] = None
+        self._worker_thread: Optional[QThread] = None
+
+        self._build_pages()
+        self._switch_section(0)
+        self.setAcceptDrops(True)
+
+    # ------------------------------------------------------------------ #
+    # Build
+    # ------------------------------------------------------------------ #
+
+    def _build_pages(self) -> None:
+        self.stack.addWidget(self._build_images_section())
+        self.stack.addWidget(self._build_options_section())
+        self.stack.addWidget(self._build_process_section())
+        self.stack.addWidget(self._build_results_section())
+
+    # ------------------------------------------------------------------ #
+    # Paso 01: Imágenes
+    # ------------------------------------------------------------------ #
+
+    def _build_images_section(self) -> QWidget:
+        page = QWidget()
+        page.setProperty("class", "PageContainer")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(36, 32, 36, 32)
+        outer.setSpacing(20)
+
+        outer.addLayout(make_page_header(
+            "Imágenes",
+            "Agrega las imágenes que quieres convertir a PDF. "
+            "El orden aquí es el orden de las páginas. "
+            "Puedes reordenar arrastrando filas o eliminar con Supr.",
+        ))
+
+        self._img_card = ImageListCard()
+        self._img_card.files_changed.connect(self._on_files_changed)
+        outer.addWidget(self._img_card, 1)
+
+        # Resumen
+        self._imgs_summary_lbl = QLabel("Sin imágenes cargadas.")
+        self._imgs_summary_lbl.setProperty("class", "CardHint")
+        outer.addWidget(self._imgs_summary_lbl)
+
+        nav = QHBoxLayout()
+        nav.addStretch()
+        nxt = QPushButton("Continuar")
+        nxt.setProperty("class", "Primary")
+        nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
+        nxt.clicked.connect(lambda: self._switch_section(1))
+        nav.addWidget(nxt)
+        outer.addLayout(nav)
+
+        return page
+
+    # ------------------------------------------------------------------ #
+    # Paso 02: Opciones
+    # ------------------------------------------------------------------ #
+
+    def _build_options_section(self) -> QWidget:
+        page = QWidget()
+        page.setProperty("class", "PageContainer")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(36, 32, 36, 32)
+        outer.setSpacing(16)
+
+        outer.addLayout(make_page_header(
+            "Opciones de página",
+            "Configura el tamaño, orientación y cómo se ajusta cada imagen.",
+        ))
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setSpacing(16)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+
+        # ── Nombre del archivo ──────────────────────────────────────
+        name_card = make_card(
+            "Nombre del archivo resultante",
+            "Nombre sin extensión. Se guardará temporalmente como .pdf.",
+        )
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+        self._out_name_edit = QLineEdit("imagenes_a_pdf")
+        self._out_name_edit.setPlaceholderText("ej: fotos_viaje")
+        pdf_lbl = QLabel(".pdf")
+        pdf_lbl.setStyleSheet("color: #6B6F7A;")
+        name_row.addWidget(self._out_name_edit)
+        name_row.addWidget(pdf_lbl)
+        name_row.addStretch()
+        card_layout(name_card).addLayout(name_row)
+        inner_layout.addWidget(name_card)
+
+        options_grid = QGridLayout()
+        options_grid.setSpacing(16)
+        options_grid.setColumnStretch(0, 1)
+        options_grid.setColumnStretch(1, 1)
+
+        # ── Tamaño de página ────────────────────────────────────────
+        size_card = make_card(
+            "Tamaño de página",
+            "«Adaptado a la imagen» usa exactamente las dimensiones de cada imagen (sin márgenes).",
+        )
+        sl = card_layout(size_card)
+        sl.setSpacing(12)
+
+        size_row = QHBoxLayout()
+        size_row.setSpacing(10)
+        size_lbl = QLabel("Tamaño:")
+        size_lbl.setStyleSheet("color: #9094A0;")
+        self._page_size_combo = QComboBox()
+        self._page_size_combo.addItems(list(PAGE_SIZES.keys()))
+        self._page_size_combo.setCurrentIndex(0)
+        self._page_size_combo.currentTextChanged.connect(self._on_size_changed)
+        size_row.addWidget(size_lbl)
+        size_row.addWidget(self._page_size_combo)
+        size_row.addStretch()
+        sl.addLayout(size_row)
+
+        orient_row = QHBoxLayout()
+        orient_row.setSpacing(10)
+        orient_lbl = QLabel("Orientación:")
+        orient_lbl.setStyleSheet("color: #9094A0;")
+        self._orient_combo = QComboBox()
+        self._orient_combo.addItems(["Vertical", "Horizontal"])
+        orient_row.addWidget(orient_lbl)
+        orient_row.addWidget(self._orient_combo)
+        orient_row.addStretch()
+        sl.addLayout(orient_row)
+
+        self._autorotate_chk = QCheckBox(
+            "Rotar página automáticamente según la orientación de la imagen"
+        )
+        self._autorotate_chk.setChecked(True)
+        sl.addWidget(self._autorotate_chk)
+
+        options_grid.addWidget(size_card, 0, 0)
+
+        # ── Márgenes ────────────────────────────────────────────────
+        margin_card = make_card("Márgenes", "Espacio blanco en cada borde de la página (mm).")
+        margin_row = QHBoxLayout()
+        margin_row.setSpacing(8)
+        margin_lbl = QLabel("Margen:")
+        margin_lbl.setStyleSheet("color: #9094A0;")
+        self._margin_spin = QDoubleSpinBox()
+        self._margin_spin.setRange(0.0, 50.0)
+        self._margin_spin.setValue(10.0)
+        self._margin_spin.setSuffix(" mm")
+        self._margin_spin.setSingleStep(1.0)
+        self._margin_spin.setDecimals(1)
+        self._margin_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+        self._margin_spin.setFixedWidth(132)
+        margin_row.addWidget(margin_lbl)
+        margin_row.addWidget(self._margin_spin)
+        margin_row.addStretch()
+        card_layout(margin_card).addLayout(margin_row)
+        options_grid.addWidget(margin_card, 0, 1)
+
+        # ── Ajuste de imagen ────────────────────────────────────────
+        fit_card = make_card(
+            "Ajuste de imagen",
+            "Cómo se escala cada imagen dentro de la página.",
+        )
+        fl = card_layout(fit_card)
+        fl.setSpacing(8)
+        self._fit_combo = QComboBox()
+        self._fit_combo.addItems(FIT_MODES)
+        self._fit_combo.setCurrentIndex(0)
+        fl.addWidget(self._fit_combo)
+
+        fit_descs = [
+            "Ajustar: reduce o amplía la imagen para que quepa completa con sus proporciones.",
+            "Rellenar: la imagen cubre toda el área disponible (puede recortar bordes).",
+            "Original: inserta la imagen a su resolución nativa (1 px = 1/96 in).",
+        ]
+        self._fit_desc_lbl = QLabel(fit_descs[0])
+        self._fit_desc_lbl.setProperty("class", "CardHint")
+        self._fit_desc_lbl.setWordWrap(True)
+        fl.addWidget(self._fit_desc_lbl)
+
+        def _update_fit_desc(idx):
+            self._fit_desc_lbl.setText(fit_descs[idx])
+        self._fit_combo.currentIndexChanged.connect(_update_fit_desc)
+
+        options_grid.addWidget(fit_card, 1, 0)
+
+        # ── DPI de referencia (para modo original) ──────────────────
+        dpi_card = make_card(
+            "DPI de referencia",
+            "Usado solo en modo «Tamaño original» y «Adaptado a la imagen» para "
+            "convertir píxeles a puntos (pt). 96 dpi es el estándar de pantalla.",
+        )
+        dpi_row = QHBoxLayout()
+        dpi_row.setSpacing(8)
+        dpi_lbl = QLabel("DPI:")
+        dpi_lbl.setStyleSheet("color: #9094A0;")
+        self._dpi_combo = QComboBox()
+        self._dpi_combo.addItems(["72", "96", "150", "200", "300"])
+        self._dpi_combo.setCurrentText("96")
+        dpi_row.addWidget(dpi_lbl)
+        dpi_row.addWidget(self._dpi_combo)
+        dpi_row.addStretch()
+        card_layout(dpi_card).addLayout(dpi_row)
+        options_grid.addWidget(dpi_card, 1, 1)
+
+        inner_layout.addLayout(options_grid)
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
+
+        nav = QHBoxLayout()
+        back = QPushButton("Imágenes")
+        back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
+        back.clicked.connect(lambda: self._switch_section(0))
+        nav.addWidget(back)
+        nav.addStretch()
+        nxt = QPushButton("Continuar")
+        nxt.setProperty("class", "Primary")
+        nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
+        nxt.clicked.connect(lambda: self._switch_section(2))
+        nav.addWidget(nxt)
+        outer.addLayout(nav)
+
+        return page
+
+    # ------------------------------------------------------------------ #
+    # Paso 03: Procesar
+    # ------------------------------------------------------------------ #
+
+    def _build_process_section(self) -> QWidget:
+        page = QWidget()
+        page.setProperty("class", "PageContainer")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(36, 32, 36, 32)
+        outer.setSpacing(20)
+
+        outer.addLayout(make_page_header(
+            "Procesar",
+            "Genera el PDF en temporal; usa \"Guardar como\" para conservarlo.",
+        ))
+
+        self._proc_step = ProcessStep(
+            run_label="Generar PDF",
+            show_output_dir=False,
+        )
+        self._proc_step.run_requested.connect(self._on_run)
+        self._proc_step.cancel_requested.connect(self._on_cancel)
+        self._proc_step.set_run_enabled(True)
+        outer.addWidget(self._proc_step, 1)
+
+        nav = QHBoxLayout()
+        back = QPushButton("Opciones")
+        back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
+        back.clicked.connect(lambda: self._switch_section(1))
+        nav.addWidget(back)
+        outer.addLayout(nav)
+
+        return page
+
+    # ------------------------------------------------------------------ #
+    # Paso 04: Resultados
+    # ------------------------------------------------------------------ #
+
+    def _build_results_section(self) -> QWidget:
+        page = QWidget()
+        page.setProperty("class", "PageContainer")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(36, 32, 36, 32)
+        outer.setSpacing(20)
+
+        outer.addLayout(make_page_header(
+            "Resultado",
+            "El PDF generado está listo.",
+        ))
+
+        self._result_viewer = GenericPdfViewer("PDF generado")
+        self._result_viewer.openInExplorer.connect(self._open_in_explorer)
+        outer.addWidget(self._result_viewer, 1)
+
+        nav = QHBoxLayout()
+        back = QPushButton("Procesar")
+        back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
+        back.clicked.connect(lambda: self._switch_section(2))
+        nav.addWidget(back)
+        nav.addStretch()
+
+        self._send_btn = SendToToolButton(self.ctx, "imgs_a_pdf")
+        nav.addWidget(self._send_btn)
+
+        restart_btn = QPushButton("Nueva sesión")
+        restart_btn.setProperty("class", "Primary")
+        restart_btn.setMinimumWidth(180)
+        set_button_icon(restart_btn, "refresh-cw")
+        restart_btn.clicked.connect(self._reset_session)
+        nav.addWidget(restart_btn)
+        outer.addLayout(nav)
+
+        return page
+
+    # ------------------------------------------------------------------ #
+    # Hooks de navegación
+    # ------------------------------------------------------------------ #
+
+    def _on_section_activated(self, idx: int) -> None:
+        if idx == 2:
+            self._refresh_summary()
+
+    # ------------------------------------------------------------------ #
+    # API PipelineWindow
+    # ------------------------------------------------------------------ #
+
+    def set_inputs(self, paths: List[str]) -> None:
+        imgs = [p for p in paths if Path(p).suffix.lower() in IMAGE_EXTS]
+        if imgs:
+            self._img_card.add_paths(imgs)
+        self._switch_section(0)
+
+    def handle_drop(self, paths: List[str]) -> None:
+        imgs = [p for p in paths if Path(p).suffix.lower() in IMAGE_EXTS]
+        if imgs:
+            self._img_card.add_paths(imgs)
+
+    # ------------------------------------------------------------------ #
+    # Eventos de lista
+    # ------------------------------------------------------------------ #
+
+    def _on_files_changed(self, paths: List[str]) -> None:
+        self._img_paths = paths
+        n = len(paths)
+        if n == 0:
+            self._imgs_summary_lbl.setText("Sin imágenes cargadas.")
+        else:
+            self._imgs_summary_lbl.setText(
+                f"{n} imagen{'es' if n != 1 else ''} · se generará 1 página por imagen"
+            )
+
+    def _on_size_changed(self, text: str) -> None:
+        is_adaptive = PAGE_SIZES.get(text, (1, 1)) == (0.0, 0.0)
+        self._orient_combo.setEnabled(not is_adaptive)
+        self._autorotate_chk.setEnabled(not is_adaptive)
+        self._margin_spin.setEnabled(not is_adaptive)
+
+    # ------------------------------------------------------------------ #
+    # Resumen
+    # ------------------------------------------------------------------ #
+
+    def _refresh_summary(self) -> None:
+        n = len(self._img_paths)
+        size_key = self._page_size_combo.currentText()
+        orient = self._orient_combo.currentText()
+        margin = self._margin_spin.value()
+        fit = self._fit_combo.currentText()
+        out_name = (self._out_name_edit.text().strip() or "imagenes_a_pdf") + ".pdf"
+
+        rows = [
+            f"<b>Imágenes:</b>&nbsp;&nbsp;{n}",
+            f"<b>Nombre de salida:</b>&nbsp;&nbsp;{out_name}",
+            f"<b>Tamaño de página:</b>&nbsp;&nbsp;{size_key}",
+            f"<b>Orientación:</b>&nbsp;&nbsp;{orient}",
+            f"<b>Margen:</b>&nbsp;&nbsp;{margin:.1f} mm",
+            f"<b>Ajuste:</b>&nbsp;&nbsp;{fit}",
+        ]
+        if n == 0:
+            rows.insert(0, "<span style='color:#E5484D;'>Atención: no hay imágenes cargadas.</span>")
+
+        self._proc_step.set_summary_html("<br>".join(rows))
+
+    # ------------------------------------------------------------------ #
+    # Ejecutar
+    # ------------------------------------------------------------------ #
+
+    def _on_run(self) -> None:
+        if len(self._img_paths) == 0:
+            show_warning(
+                self, "Sin imágenes",
+                "Agrega al menos una imagen antes de generar el PDF.",
+            )
+            return
+        if self._worker_thread is not None:
+            return
+
+        out_dir = make_run_dir("ImgsPDF")
+        out_name = filename_with_suffix(
+            self._out_name_edit.text(),
+            ".pdf",
+            fallback="imagenes_a_pdf",
+        )
+        out_path = str(unique_output_path(out_dir, out_name))
+
+        self._worker = ImgsToPdfWorker(
+            image_paths=list(self._img_paths),
+            output_path=out_path,
+            page_size_key=self._page_size_combo.currentText(),
+            orientation=self._orient_combo.currentText(),
+            margin_mm=self._margin_spin.value(),
+            fit_mode=self._fit_combo.currentText(),
+            auto_rotate=self._autorotate_chk.isChecked(),
+            one_per_page=True,
+            dpi=int(self._dpi_combo.currentText()),
+        )
+        self._worker_thread = QThread(self)
+        self._worker.moveToThread(self._worker_thread)
+        self._worker_thread.started.connect(self._worker.run)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.error.connect(self._on_error)
+
+        self._proc_step.set_running(True)
+        self._result_viewer.clear_results()
+        self._send_btn.set_output_paths([])
+        self._worker_thread.start()
+
+    def _on_cancel(self) -> None:
+        if self._worker:
+            self._worker.cancel()
+
+    def _on_progress(self, current: int, total: int, msg: str) -> None:
+        pct = int(current / total * 100) if total > 0 else 0
+        self._proc_step.set_progress(pct, msg)
+
+    def _on_finished(self, result: ImgsPdfResult) -> None:
+        self._cleanup_thread()
+        self._proc_step.set_running(False)
+        self._proc_step.set_progress(100, "¡Listo!")
+        self._last_result = result
+        self._result_viewer.set_results([result])
+        if self._img_paths:
+            self._result_viewer.set_source_dirs([str(Path(self._img_paths[0]).parent)])
+        output_paths = [result.output_path] if result.success and result.output_path else []
+        self.ctx.tray.add_items(output_paths, "Imágenes a PDF")
+        self._send_btn.set_output_paths(output_paths)
+        self.outputs_ready.emit(output_paths)
+        self._switch_section(3)
+
+    def _on_error(self, msg: str) -> None:
+        self._cleanup_thread()
+        self._proc_step.set_running(False)
+        self._proc_step.set_progress(0, f"Error: {msg}")
+        show_error(self, "Error al generar PDF", msg)
+
+    def _cleanup_thread(self) -> None:
+        if self._worker_thread:
+            self._worker_thread.quit()
+            self._worker_thread.wait()
+            self._worker_thread = None
+        self._worker = None
+
+    # ------------------------------------------------------------------ #
+    # Helpers
+    # ------------------------------------------------------------------ #
+
+    def _open_in_explorer(self, path: str) -> None:
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+
+    # ------------------------------------------------------------------ #
+    # Reset
+    # ------------------------------------------------------------------ #
+
+    def _reset_session(self) -> None:
+        self._img_card.clear()
+        self._img_paths.clear()
+        self._last_result = None
+        self._imgs_summary_lbl.setText("Sin imágenes cargadas.")
+        self._out_name_edit.setText("imagenes_a_pdf")
+        self._result_viewer.clear_results()
+        self._send_btn.set_output_paths([])
+        self._proc_step.reset()
+        self._switch_section(0)
+
+    # ------------------------------------------------------------------ #
+    # Drag & drop (desde el sistema de archivos)
+    # ------------------------------------------------------------------ #
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        imgs = [p for p in paths if Path(p).suffix.lower() in IMAGE_EXTS]
+        if imgs:
+            self._img_card.add_paths(imgs)

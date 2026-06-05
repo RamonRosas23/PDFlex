@@ -4,17 +4,14 @@ Pipeline:
     01 Documentos  →  02 Formato  →  03 Procesar  →  04 Resultados
 """
 from __future__ import annotations
-import tempfile
 from pathlib import Path
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QDragEnterEvent, QDropEvent, QDesktopServices
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QListWidget, QListWidgetItem, QFileDialog, QFrame,
-    QComboBox, QCheckBox, QProgressBar, QMessageBox,
-    QLineEdit, QScrollArea, QProgressDialog, QGridLayout,
+    QComboBox, QCheckBox, QGridLayout,
 )
 
 from ui.common.documents_step import DocumentsCard
@@ -24,12 +21,16 @@ from core.pdf_to_images_engine import (
     PdfToImagesConfig, PdfToImagesJob, PdfToImagesEngine,
     PdfToImagesJobResult, ImageResult,
 )
+from core.output_paths import make_run_dir, unique_name
 from shell.context import ShellContext
-from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_card, card_layout, make_page_header
+from ui.common.image_results_viewer import ImageResultsViewer
 from ui.common.slider import SliderWithValue
 from ui.common.tool_scaffold import PipelineWindow
 from ui.common.send_to_tool import SendToToolButton
+from ui.common.output_settings import add_tool_suffix_enabled
+from ui.common.dialogs import show_error, show_success, show_warning
+from ui.common.icons import set_button_icon
 
 
 # ====================================================================== #
@@ -57,137 +58,14 @@ class PdfToImgsWorker(QObject):
                 self.jobs,
                 self.config,
                 progress=lambda c, t, m: self.progress.emit(c, t, m),
+                should_cancel=lambda: self._cancel,
             )
-            self.finished.emit(results)
+            if self._cancel:
+                self.error.emit("Operación cancelada.")
+            else:
+                self.finished.emit(results)
         except Exception as e:
             self.error.emit(str(e))
-
-
-# ====================================================================== #
-#  Widget de resultados de imágenes
-# ====================================================================== #
-
-class ImageResultsViewer(QWidget):
-    """Visor simplificado para imágenes exportadas: lista + metadata."""
-
-    openInExplorer = pyqtSignal(str)
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self._results: List[ImageResult] = []
-        self._build()
-
-    def _build(self) -> None:
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
-
-        left = QFrame()
-        left.setProperty("class", "Card")
-        left.setFixedWidth(260)
-        lv = QVBoxLayout(left)
-        lv.setContentsMargins(14, 14, 14, 14)
-        lv.setSpacing(10)
-
-        title_lbl = QLabel("Imágenes generadas")
-        title_lbl.setProperty("class", "CardTitle")
-        lv.addWidget(title_lbl)
-
-        self.file_list = QListWidget()
-        self.file_list.itemSelectionChanged.connect(self._on_file_selected)
-        lv.addWidget(self.file_list, 1)
-
-        layout.addWidget(left)
-
-        right = QFrame()
-        right.setProperty("class", "Card")
-        rv = QVBoxLayout(right)
-        rv.setContentsMargins(14, 14, 14, 14)
-        rv.setSpacing(10)
-
-        header = QHBoxLayout()
-        self.title_lbl = QLabel("Selecciona un archivo")
-        self.title_lbl.setProperty("class", "CardTitle")
-        header.addWidget(self.title_lbl, 1)
-        self.open_btn = QPushButton("Abrir carpeta")
-        self.open_btn.setProperty("class", "Ghost")
-        self.open_btn.setEnabled(False)
-        self.open_btn.clicked.connect(self._on_open)
-        header.addWidget(self.open_btn)
-        rv.addLayout(header)
-
-        self.meta_lbl = QLabel("")
-        self.meta_lbl.setProperty("class", "Mono")
-        self.meta_lbl.setWordWrap(True)
-        rv.addWidget(self.meta_lbl)
-
-        self.preview_lbl = QLabel()
-        self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_lbl.setStyleSheet("background: #111114; border-radius: 6px;")
-        rv.addWidget(self.preview_lbl, 1)
-
-        layout.addWidget(right, 1)
-
-    def set_results(self, results: List[ImageResult]) -> None:
-        self._results = results
-        self.file_list.clear()
-        for r in results:
-            name = Path(r.output_path).name if r.output_path else "(error)"
-            item = QListWidgetItem(name)
-            if not r.success:
-                item.setForeground(QBrush(QColor("#E5484D")))
-                item.setText(f"! {name}")
-            self.file_list.addItem(item)
-        if results:
-            self.file_list.setCurrentRow(0)
-
-    def clear_results(self) -> None:
-        self._results = []
-        self.file_list.clear()
-        self.preview_lbl.clear()
-        self.meta_lbl.setText("")
-        self.title_lbl.setText("Selecciona un archivo")
-        self.open_btn.setEnabled(False)
-
-    def _on_file_selected(self) -> None:
-        row = self.file_list.currentRow()
-        if row < 0 or row >= len(self._results):
-            return
-        r = self._results[row]
-        if not r.success or not r.output_path:
-            self.title_lbl.setText("Error en este archivo")
-            self.meta_lbl.setText(r.error or "")
-            self.open_btn.setEnabled(False)
-            return
-
-        path = Path(r.output_path)
-        self.title_lbl.setText(path.name)
-        self.open_btn.setEnabled(True)
-
-        try:
-            from PyQt6.QtGui import QPixmap
-            pix = QPixmap(str(path))
-            if not pix.isNull():
-                scaled = pix.scaled(
-                    self.preview_lbl.width(), self.preview_lbl.height(),
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                self.preview_lbl.setPixmap(scaled)
-                size_kb = path.stat().st_size / 1024
-                size_str = f"{size_kb/1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.0f} KB"
-                self.meta_lbl.setText(
-                    f"{pix.width()} x {pix.height()} px  ·  {size_str}"
-                )
-            else:
-                self.meta_lbl.setText("No se pudo previsualizar")
-        except Exception as e:
-            self.meta_lbl.setText(str(e))
-
-    def _on_open(self) -> None:
-        row = self.file_list.currentRow()
-        if 0 <= row < len(self._results) and self._results[row].output_path:
-            self.openInExplorer.emit(self._results[row].output_path)
 
 
 # ====================================================================== #
@@ -204,6 +82,7 @@ class PdfToImgsWindow(PipelineWindow):
     ]
     BRAND = "PDF a Imágenes"
     TAGLINE = "Exporta páginas PDF como PNG, JPG o WebP"
+    ACCENT_COLOR = "#4CC9F0"
 
     def __init__(self, ctx: ShellContext, parent=None) -> None:
         super().__init__(ctx, parent)
@@ -253,9 +132,10 @@ class PdfToImgsWindow(PipelineWindow):
 
         nav = QHBoxLayout()
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -324,14 +204,16 @@ class PdfToImgsWindow(PipelineWindow):
         outer.addStretch(1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Documentos")
+        back = QPushButton("Documentos")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(0))
         nav.addWidget(back)
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -351,21 +233,22 @@ class PdfToImgsWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Procesar",
-            "Elige la carpeta de salida y ejecuta la conversión.",
+            "Genera las imágenes en temporal; usa \"Guardar como\" para conservarlas.",
         ))
 
         self._proc_step = ProcessStep(
             run_label="Convertir a imágenes",
-            settings_key="pdf_to_imgs/output_dir",
-            default_output=str(Path.home() / "PDFlex" / "PDF a Imagenes"),
+            show_output_dir=False,
         )
         self._proc_step.run_requested.connect(self._on_run)
         self._proc_step.cancel_requested.connect(self._on_cancel)
+        self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Formato")
+        back = QPushButton("Formato")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(back)
         outer.addLayout(nav)
@@ -393,20 +276,21 @@ class PdfToImgsWindow(PipelineWindow):
         outer.addWidget(self._img_viewer, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Procesar")
+        back = QPushButton("Procesar")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(back)
         nav.addStretch()
 
-        # El Separar a imágenes no "envía" PDFs a otras herramientas
-        # (las imágenes no son PDFs), así que SendToToolButton queda oculto por defecto.
+        # Las imágenes generadas sólo se ofrecerán a herramientas compatibles.
         self._send_btn = SendToToolButton(self.ctx, "pdf_to_imgs")
         nav.addWidget(self._send_btn)
 
-        restart_btn = QPushButton("↺  Nueva sesión")
+        restart_btn = QPushButton("Nueva sesión")
         restart_btn.setProperty("class", "Primary")
         restart_btn.setMinimumWidth(180)
+        set_button_icon(restart_btn, "refresh-cw")
         restart_btn.clicked.connect(self._reset_session)
         nav.addWidget(restart_btn)
         outer.addLayout(nav)
@@ -478,33 +362,41 @@ class PdfToImgsWindow(PipelineWindow):
     def _validate_ready(self) -> Optional[str]:
         if self._docs_card.is_empty():
             return "Agrega al menos un documento."
-        if not self._proc_step.output_dir():
-            return "Define una carpeta de salida."
         return None
 
     def _build_jobs(self, cfg: PdfToImagesConfig) -> List[PdfToImagesJob]:
-        base_dir = Path(self._proc_step.output_dir())
+        base_dir = make_run_dir("PDFaImagenes")
         jobs = []
+        reserved: set[str] = set()
+        add_suffix = add_tool_suffix_enabled()
         for p in self._docs_card.paths():
-            stem = Path(p).stem
+            stem = unique_name(
+                Path(p).stem,
+                reserved=reserved,
+                directory=base_dir,
+                fallback="documento",
+            )
             task_dir = base_dir / stem
             task_dir.mkdir(parents=True, exist_ok=True)
             jobs.append(PdfToImagesJob(
                 pdf_path=p,
                 output_dir=str(task_dir),
                 base_name=stem,
+                tool_suffix="imagenes",
+                add_tool_suffix=add_suffix,
             ))
         return jobs
 
     def _on_run(self) -> None:
         err = self._validate_ready()
         if err:
-            QMessageBox.warning(self, "Falta información", err)
+            show_warning(self, "Falta información", err)
             return
         if self._worker_thread is not None:
             return
 
         self._img_viewer.clear_results()
+        self._send_btn.set_output_paths([])
         cfg = self._read_config()
         jobs = self._build_jobs(cfg)
 
@@ -540,17 +432,25 @@ class PdfToImgsWindow(PipelineWindow):
             all_img_results.extend(job_result.image_results)
             ok_files += sum(1 for r in job_result.image_results if r.success)
 
-        self.outputs_ready.emit([r.output_path for r in all_img_results if r.success])
+        output_paths = [r.output_path for r in all_img_results if r.success and r.output_path]
+        self._send_btn.set_output_paths(output_paths)
+        self.outputs_ready.emit(output_paths)
 
-        QMessageBox.information(
+        show_success(
             self, "Conversión completa",
             f"Se generaron {ok_files} imagen{'es' if ok_files != 1 else ''}.",
         )
         self._img_viewer.set_results(all_img_results)
+        src_dirs = [
+            str(Path(jr.job.pdf_path).parent)
+            for jr in results
+            for _ in jr.image_results
+        ]
+        self._img_viewer.set_source_dirs(src_dirs)
         self._switch_section(3)
 
     def _on_worker_error(self, msg: str) -> None:
-        QMessageBox.critical(self, "Error", msg)
+        show_error(self, "Error", msg)
         self._proc_step.set_running(False)
         if self._worker_thread:
             self._worker_thread.quit()
@@ -569,6 +469,7 @@ class PdfToImgsWindow(PipelineWindow):
 
     def _reset_session(self) -> None:
         self._img_viewer.clear_results()
+        self._send_btn.set_output_paths([])
         self.last_results = []
         self._docs_card.clear()
         self._proc_step.reset()
@@ -584,5 +485,5 @@ class PdfToImgsWindow(PipelineWindow):
 
     def dropEvent(self, event: QDropEvent) -> None:
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
-        self._add_file_paths(paths)
+        self._docs_card.add_paths(paths)
         self._switch_section(0)

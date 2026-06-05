@@ -4,7 +4,6 @@ Pipeline:
     01 Documento  →  02 Rangos  →  03 Procesar  →  04 Resultados
 """
 from __future__ import annotations
-import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,8 +16,8 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QFileDialog, QFrame, QProgressBar, QMessageBox,
-    QLineEdit, QScrollArea, QInputDialog, QSpinBox,
+    QFrame, QProgressBar,
+    QLineEdit, QScrollArea, QSpinBox,
     QSizePolicy,
 )
 
@@ -28,6 +27,8 @@ from core.split_ranges import (
     generate_equal_ranges, generate_one_per_page,
 )
 from core.splitter_engine import SplitterJob, SplitterEngine, SplitterJobResult
+from core.output_paths import make_run_dir
+from core.output_naming import output_filename_for_source
 from shell.context import ShellContext
 from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_card, card_layout, make_page_header
@@ -35,6 +36,17 @@ from ui.common.tool_scaffold import PipelineWindow
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
+from ui.common.output_settings import add_tool_suffix_enabled
+from ui.common.dialogs import (
+    ask_int,
+    ask_question,
+    show_error,
+    show_info,
+    show_success,
+    show_warning,
+)
+from ui.common.file_dialogs import get_open_file_name
+from ui.common.icons import set_button_icon
 
 
 # ====================================================================== #
@@ -60,8 +72,12 @@ class SplitterWorker(QObject):
             result = engine.run_job(
                 self.job,
                 progress=lambda c, t, m: self.progress.emit(c, t, m),
+                should_cancel=lambda: self._cancel,
             )
-            self.finished.emit(result)
+            if self._cancel:
+                self.error.emit("Operación cancelada.")
+            else:
+                self.finished.emit(result)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -72,6 +88,8 @@ class SplitterWorker(QObject):
 
 class SeparadorWindow(PipelineWindow):
 
+    SUPPORTED_EXTS = (".pdf", ".doc", ".docx")
+
     SECTIONS = [
         ("01", "Documento",  "Carga el PDF a separar"),
         ("02", "Rangos",     "Define los tramos"),
@@ -80,6 +98,7 @@ class SeparadorWindow(PipelineWindow):
     ]
     BRAND = "Separador"
     TAGLINE = "Divide un PDF en múltiples archivos"
+    ACCENT_COLOR = "#F5A623"
 
     def __init__(self, ctx: ShellContext, parent=None) -> None:
         super().__init__(ctx, parent)
@@ -92,7 +111,6 @@ class SeparadorWindow(PipelineWindow):
         self._worker: Optional[SplitterWorker] = None
         self._conv_thread: Optional[QThread] = None
         self._conv_dlg = None
-        self._word_tmp = Path(tempfile.gettempdir()).resolve() / "PDFlex" / "converted"
 
         self._ranges_layout: Optional[QVBoxLayout] = None  # set during _build
 
@@ -179,9 +197,15 @@ class SeparadorWindow(PipelineWindow):
         self._doc_pages_lbl.setProperty("class", "CardHint")
         self._doc_size_lbl = QLabel("")
         self._doc_size_lbl.setProperty("class", "CardHint")
+        self._remove_doc_btn = QPushButton("Quitar documento")
+        self._remove_doc_btn.setProperty("class", "Ghost")
+        self._remove_doc_btn.setToolTip("Quita este documento del flujo. No borra el archivo del disco.")
+        self._remove_doc_btn.clicked.connect(self._on_remove_document)
+        self._remove_doc_btn.setEnabled(False)
         info_col.addWidget(self._doc_name_lbl)
         info_col.addWidget(self._doc_pages_lbl)
         info_col.addWidget(self._doc_size_lbl)
+        info_col.addWidget(self._remove_doc_btn)
         info_col.addStretch()
         doc_body.addLayout(info_col, 1)
 
@@ -191,9 +215,10 @@ class SeparadorWindow(PipelineWindow):
 
         nav = QHBoxLayout()
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -233,25 +258,26 @@ class SeparadorWindow(PipelineWindow):
         pages_lbl.setStyleSheet("color: #9094A0;")
         self._range_input = QLineEdit()
         self._range_input.setPlaceholderText("ej: 1-11  o  5")
-        self._range_input.setFixedWidth(120)
+        self._range_input.setMinimumWidth(170)
         self._range_input.returnPressed.connect(self._on_add_range)
 
         name_lbl = QLabel("Nombre:")
         name_lbl.setStyleSheet("color: #9094A0;")
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("nombre-salida (opcional)")
-        self._name_input.setFixedWidth(200)
+        self._name_input.setMinimumWidth(260)
         self._name_input.returnPressed.connect(self._on_add_range)
 
-        add_btn = QPushButton("+ Agregar")
+        add_btn = QPushButton("Agregar")
         add_btn.setProperty("class", "Primary")
         add_btn.setFixedHeight(34)
+        set_button_icon(add_btn, "plus")
         add_btn.clicked.connect(self._on_add_range)
 
         add_row.addWidget(pages_lbl)
-        add_row.addWidget(self._range_input)
+        add_row.addWidget(self._range_input, 1)
         add_row.addWidget(name_lbl)
-        add_row.addWidget(self._name_input)
+        add_row.addWidget(self._name_input, 2)
         add_row.addWidget(add_btn)
         add_row.addStretch()
         al.addLayout(add_row)
@@ -267,13 +293,15 @@ class SeparadorWindow(PipelineWindow):
         quick_lbl.setProperty("class", "CardHint")
         quick_row.addWidget(quick_lbl)
 
-        equal_btn = QPushButton("÷  Dividir en N partes iguales")
+        equal_btn = QPushButton("Dividir en N partes iguales")
         equal_btn.setProperty("class", "Ghost")
+        set_button_icon(equal_btn, "divide")
         equal_btn.clicked.connect(self._on_divide_equal)
         quick_row.addWidget(equal_btn)
 
-        one_btn = QPushButton("☰  Una página por archivo")
+        one_btn = QPushButton("Una página por archivo")
         one_btn.setProperty("class", "Ghost")
+        set_button_icon(one_btn, "list")
         one_btn.clicked.connect(self._on_one_per_page)
         quick_row.addWidget(one_btn)
 
@@ -322,14 +350,16 @@ class SeparadorWindow(PipelineWindow):
         outer.addWidget(list_card, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Documento")
+        back = QPushButton("Documento")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(0))
         nav.addWidget(back)
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -349,21 +379,22 @@ class SeparadorWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Procesar",
-            "Elige la carpeta de salida y ejecuta la separación.",
+            "Genera los tramos en temporal; usa \"Guardar como\" para conservarlos.",
         ))
 
         self._proc_step = ProcessStep(
             run_label="Separar documento",
-            settings_key="separador/output_dir",
-            default_output=str(Path.home() / "PDFlex" / "Separador"),
+            show_output_dir=False,
         )
         self._proc_step.run_requested.connect(self._on_run)
         self._proc_step.cancel_requested.connect(self._on_cancel)
+        self._proc_step.set_run_enabled(True)
         outer.addWidget(self._proc_step, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Rangos")
+        back = QPushButton("Rangos")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(back)
         outer.addLayout(nav)
@@ -391,8 +422,9 @@ class SeparadorWindow(PipelineWindow):
         outer.addWidget(self._results_viewer, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Procesar")
+        back = QPushButton("Procesar")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(back)
         nav.addStretch()
@@ -400,9 +432,10 @@ class SeparadorWindow(PipelineWindow):
         self._send_btn = SendToToolButton(self.ctx, "separador")
         nav.addWidget(self._send_btn)
 
-        restart_btn = QPushButton("↺  Nueva sesión")
+        restart_btn = QPushButton("Nueva sesión")
         restart_btn.setProperty("class", "Primary")
         restart_btn.setMinimumWidth(180)
+        set_button_icon(restart_btn, "refresh-cw")
         restart_btn.clicked.connect(self._reset_session)
         nav.addWidget(restart_btn)
         outer.addLayout(nav)
@@ -423,7 +456,7 @@ class SeparadorWindow(PipelineWindow):
 
     def set_inputs(self, paths: List[str]) -> None:
         if paths:
-            self._load_pdf(paths[0])
+            self._add_file_paths(paths)
         self._switch_section(0)
 
     def handle_drop(self, paths: List[str]) -> None:
@@ -436,7 +469,7 @@ class SeparadorWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _on_open_file(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self, "Seleccionar PDF o Word", "",
             "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)",
         )
@@ -444,17 +477,32 @@ class SeparadorWindow(PipelineWindow):
             self._add_file_paths([path])
 
     def _on_load_from_tray(self) -> None:
-        paths = self.ctx.tray.paths()
+        paths = [
+            p for p in self.ctx.tray.paths()
+            if Path(p).suffix.lower() in self.SUPPORTED_EXTS
+        ]
         if paths:
             self._add_file_paths(paths[:1])  # solo el primero
+        else:
+            show_info(
+                self,
+                "Sin documentos compatibles",
+                "La bandeja no contiene archivos PDF o Word para separar.",
+            )
 
     def _add_file_paths(self, paths: List[str]) -> None:
-        pdfs = [p for p in paths if p.lower().endswith(".pdf")]
-        words = [p for p in paths if p.lower().endswith((".doc", ".docx"))]
+        pdfs = [p for p in paths if Path(p).suffix.lower() == ".pdf"]
+        words = [p for p in paths if Path(p).suffix.lower() in (".doc", ".docx")]
         if pdfs:
             self._load_pdf(pdfs[0])
         elif words:
             self._handle_word_files(words[:1])
+        elif paths:
+            show_info(
+                self,
+                "Archivo no compatible",
+                "Selecciona un archivo PDF, DOC o DOCX.",
+            )
 
     def _load_pdf(self, path: str) -> None:
         try:
@@ -478,7 +526,7 @@ class SeparadorWindow(PipelineWindow):
 
             doc.close()
         except Exception as e:
-            QMessageBox.warning(self, "Error al abrir", str(e))
+            show_warning(self, "Error al abrir", str(e))
             return
 
         self._pdf_path = path
@@ -488,54 +536,96 @@ class SeparadorWindow(PipelineWindow):
         self._doc_name_lbl.setText(Path(path).name)
         self._doc_pages_lbl.setText(f"{self._total_pages} páginas")
         self._doc_size_lbl.setText(size_str)
+        self._remove_doc_btn.setEnabled(True)
 
         # Actualizar validación de rangos existentes
         if self._ranges:
             self._rebuild_ranges_ui()
+
+    def _on_remove_document(self) -> None:
+        if not self._pdf_path:
+            return
+        if self._ranges:
+            if not ask_question(
+                self,
+                "Quitar documento",
+                "Se quitará el documento cargado y se perderán los tramos configurados.\n\n"
+                "¿Continuar?",
+                accept_text="Quitar",
+                cancel_text="Cancelar",
+                danger=True,
+            ):
+                return
+        self._clear_loaded_document()
+
+    def _clear_loaded_document(self) -> None:
+        self._results_viewer.clear_results()
+        self._send_btn.set_output_paths([])
+        self.last_result = None
+        self._pdf_path = None
+        self._total_pages = 0
+        self._ranges.clear()
+        self._doc_name_lbl.setText("—")
+        self._doc_pages_lbl.setText("")
+        self._doc_size_lbl.setText("")
+        self._remove_doc_btn.setEnabled(False)
+        self._thumb_lbl.clear()
+        self._thumb_lbl.setText("Sin PDF")
+        self._thumb_lbl.setStyleSheet(
+            "background: #16161A; border: 1px dashed #33333B; border-radius: 6px;"
+            " color: #6B6F7A; font-size: 11px;"
+        )
+        self._proc_step.reset()
+        self._rebuild_ranges_ui()
 
     # ------------------------------------------------------------------ #
     # Word → PDF
     # ------------------------------------------------------------------ #
 
     def _handle_word_files(self, paths: List[str]) -> None:
+        if self._conv_thread is not None:
+            return
         if not self.ctx.word_converter.is_available():
-            QMessageBox.information(
+            show_info(
                 self, "Microsoft Office requerido",
                 "Para convertir archivos Word a PDF se necesita "
                 "Microsoft Office instalado.\n\nEl archivo .doc/.docx ha sido omitido.",
             )
             return
-        from PyQt6.QtWidgets import QProgressDialog
-        self._conv_dlg = QProgressDialog("Convirtiendo Word a PDF…", None, 0, 1, self)
-        self._conv_dlg.setWindowModality(Qt.WindowModality.WindowModal)
-        self._conv_dlg.setMinimumDuration(0)
-        self._conv_dlg.setValue(0)
-        self._conv_dlg.show()
-        worker = WordConvertWorker(self.ctx.word_converter, paths, self._word_tmp)
+
+        from ui.common.word_convert_dialog import WordConvertDialog
+
+        self._conv_dlg = WordConvertDialog(self, paths)
+
+        worker = WordConvertWorker(
+            self.ctx.word_converter,
+            paths,
+            make_run_dir("converted"),
+        )
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
+        worker.progress.connect(self._conv_dlg.on_progress)
+        worker.finished.connect(self._conv_dlg.on_finished)
+        worker.error.connect(self._conv_dlg.on_error)
         worker.finished.connect(thread.quit)
         worker.error.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
         worker.finished.connect(self._on_word_convert_done)
         worker.error.connect(self._on_word_convert_error)
         self._conv_thread = thread
         thread.start()
+        self._conv_dlg.exec()
 
     def _on_word_convert_done(self, paths: List[str]) -> None:
-        if self._conv_dlg:
-            self._conv_dlg.close()
-            self._conv_dlg = None
         self._conv_thread = None
         if paths:
             self._load_pdf(paths[0])
 
     def _on_word_convert_error(self, msg: str) -> None:
-        if self._conv_dlg:
-            self._conv_dlg.close()
-            self._conv_dlg = None
         self._conv_thread = None
-        QMessageBox.warning(self, "Error en conversión Word", msg)
 
     # ------------------------------------------------------------------ #
     # Editor de rangos
@@ -602,24 +692,27 @@ class SeparadorWindow(PipelineWindow):
         h.addWidget(pages_lbl, 1)
 
         # Botones de reordenado
-        up_btn = QPushButton("↑")
+        up_btn = QPushButton()
         up_btn.setProperty("class", "IconBtn")
         up_btn.setFixedSize(28, 28)
+        set_button_icon(up_btn, "chevron-up", size=14, icon_only=True)
         up_btn.setEnabled(idx > 0)
         up_btn.clicked.connect(lambda _, i=idx: self._move_range(i, -1))
         h.addWidget(up_btn)
 
-        down_btn = QPushButton("↓")
+        down_btn = QPushButton()
         down_btn.setProperty("class", "IconBtn")
         down_btn.setFixedSize(28, 28)
+        set_button_icon(down_btn, "chevron-down", size=14, icon_only=True)
         down_btn.setEnabled(idx < len(self._ranges) - 1)
         down_btn.clicked.connect(lambda _, i=idx: self._move_range(i, +1))
         h.addWidget(down_btn)
 
         # Botón eliminar
-        del_btn = QPushButton("✕")
+        del_btn = QPushButton()
         del_btn.setProperty("class", "IconBtn")
         del_btn.setFixedSize(28, 28)
+        set_button_icon(del_btn, "x", size=14, icon_only=True)
         del_btn.clicked.connect(lambda _, i=idx: self._delete_range(i))
         h.addWidget(del_btn)
 
@@ -637,19 +730,19 @@ class SeparadorWindow(PipelineWindow):
         covered = sum(r.page_count for r in self._ranges)
 
         if errors:
-            self._validation_lbl.setText(f"⚠  {errors[0].message}")
+            self._validation_lbl.setText(f"Error: {errors[0].message}")
             self._validation_lbl.setStyleSheet("color: #E5484D; font-size: 12px;")
         elif warnings:
             total_str = f"/{self._total_pages}" if self._total_pages > 0 else ""
             self._validation_lbl.setText(
-                f"⚠  {len(self._ranges)} tramos · "
+                f"Atención: {len(self._ranges)} tramos · "
                 f"{covered}{total_str} págs · {warnings[0].message}"
             )
             self._validation_lbl.setStyleSheet("color: #F5A623; font-size: 12px;")
         else:
             total_str = f"/{self._total_pages}" if self._total_pages > 0 else ""
             self._validation_lbl.setText(
-                f"✓  {len(self._ranges)} tramos · "
+                f"{len(self._ranges)} tramos · "
                 f"{covered}{total_str} páginas cubiertas · Sin solapamientos"
             )
             self._validation_lbl.setStyleSheet("color: #3BD37C; font-size: 12px;")
@@ -703,11 +796,11 @@ class SeparadorWindow(PipelineWindow):
 
     def _on_divide_equal(self) -> None:
         if self._total_pages == 0:
-            QMessageBox.information(self, "Sin documento", "Carga primero un PDF.")
+            show_info(self, "Sin documento", "Carga primero un PDF.")
             return
-        n, ok = QInputDialog.getInt(
+        n, ok = ask_int(
             self, "Dividir en N partes", "¿En cuántas partes iguales?",
-            value=2, min=2, max=min(self._total_pages, 500),
+            value=2, minimum=2, maximum=min(self._total_pages, 500),
         )
         if ok and n >= 2:
             self._sync_names()
@@ -716,16 +809,16 @@ class SeparadorWindow(PipelineWindow):
 
     def _on_one_per_page(self) -> None:
         if self._total_pages == 0:
-            QMessageBox.information(self, "Sin documento", "Carga primero un PDF.")
+            show_info(self, "Sin documento", "Carga primero un PDF.")
             return
         if self._total_pages > 50:
-            reply = QMessageBox.question(
+            if not ask_question(
                 self, "Confirmar",
                 f"Esto creará {self._total_pages} archivos (uno por página). "
                 "¿Continuar?",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            )
-            if reply != QMessageBox.StandardButton.Yes:
+                accept_text="Continuar",
+                cancel_text="Cancelar",
+            ):
                 return
         self._sync_names()
         self._ranges = generate_one_per_page(self._total_pages)
@@ -748,15 +841,25 @@ class SeparadorWindow(PipelineWindow):
         rows.append(f"<b>Tramos:</b> &nbsp; {len(self._ranges)}")
         rows.append(f"<b>Páginas cubiertas:</b> &nbsp; {covered}")
         if errors:
-            rows.append(f"<b style='color:#E5484D'>⚠ Errores:</b> &nbsp; {errors[0].message}")
+            rows.append(f"<b style='color:#E5484D'>Errores:</b> &nbsp; {errors[0].message}")
         else:
-            rows.append("<b>Validación:</b> &nbsp; ✓ Sin errores")
+            rows.append("<b>Validación:</b> &nbsp; Sin errores")
         if self._ranges:
             rows.append("<b>Archivos a generar:</b>")
+            add_suffix = add_tool_suffix_enabled()
+            src_stem = Path(self._pdf_path).stem if self._pdf_path else "documento"
             for i, r in enumerate(self._ranges[:5]):
+                name = output_filename_for_source(
+                    src_stem,
+                    extension=".pdf",
+                    tool_suffix="separado",
+                    add_tool_suffix=add_suffix,
+                    technical_suffix=r.name or f"parte-{i+1:02d}",
+                    fallback="documento",
+                )
                 rows.append(
                     f"<span style='color:#9094A0;font-family:monospace'>"
-                    f"  {r.name or f'parte-{i+1:02d}'}.pdf"
+                    f"  {name}"
                     f"  (págs {r.start}–{r.end})</span>"
                 )
             if len(self._ranges) > 5:
@@ -774,8 +877,6 @@ class SeparadorWindow(PipelineWindow):
         errors = [i for i in issues if i.kind == "error"]
         if errors:
             return errors[0].message
-        if not self._proc_step.output_dir():
-            return "Define una carpeta de salida."
         return None
 
     def _on_cancel(self) -> None:
@@ -786,24 +887,25 @@ class SeparadorWindow(PipelineWindow):
     def _on_run(self) -> None:
         err = self._validate_ready()
         if err:
-            QMessageBox.warning(self, "Falta información", err)
+            show_warning(self, "Falta información", err)
             return
         if self._worker_thread is not None:
             return
 
         self._sync_names()
         self._results_viewer.clear_results()
+        self._send_btn.set_output_paths([])
 
-        base_dir = Path(self._proc_step.output_dir())
         src_stem = Path(self._pdf_path).stem
-        task_dir = base_dir / src_stem
-        task_dir.mkdir(parents=True, exist_ok=True)
+        task_dir = make_run_dir("Separador")
 
         job = SplitterJob(
             pdf_path=self._pdf_path,
             output_dir=str(task_dir),
             ranges=list(self._ranges),
             base_name=src_stem,
+            tool_suffix="separado",
+            add_tool_suffix=add_tool_suffix_enabled(),
         )
 
         self._proc_step.set_running(True)
@@ -840,16 +942,18 @@ class SeparadorWindow(PipelineWindow):
         self._send_btn.set_output_paths(output_paths)
         self.outputs_ready.emit(output_paths)
 
-        QMessageBox.information(
+        show_success(
             self, "Separación completa",
             f"Se generaron {ok} archivo{'s' if ok != 1 else ''}.\n"
             + (f"Con error: {fail}" if fail else ""),
         )
         self._results_viewer.set_results(result.split_results)
+        src_dir = str(Path(result.job.pdf_path).parent)
+        self._results_viewer.set_source_dirs([src_dir] * len(result.split_results))
         self._switch_section(3)
 
     def _on_worker_error(self, msg: str) -> None:
-        QMessageBox.critical(self, "Error", msg)
+        show_error(self, "Error", msg)
         self._proc_step.set_running(False)
         if self._worker_thread:
             self._worker_thread.quit()
@@ -867,18 +971,7 @@ class SeparadorWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _reset_session(self) -> None:
-        self._results_viewer.clear_results()
-        self.last_result = None
-        self._pdf_path = None
-        self._total_pages = 0
-        self._ranges.clear()
-        self._doc_name_lbl.setText("—")
-        self._doc_pages_lbl.setText("")
-        self._doc_size_lbl.setText("")
-        self._thumb_lbl.clear()
-        self._thumb_lbl.setText("Sin PDF")
-        self._proc_step.reset()
-        self._rebuild_ranges_ui()
+        self._clear_loaded_document()
         self._switch_section(0)
 
     # ------------------------------------------------------------------ #

@@ -4,7 +4,6 @@ Pipeline:
     01 Membrete  →  02 Documentos  →  03 Márgenes  →  04 Procesar  →  05 Resultados
 """
 from __future__ import annotations
-import tempfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,12 +16,14 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QFileDialog, QFrame, QProgressBar, QMessageBox,
-    QScrollArea, QProgressDialog,
+    QFrame, QProgressBar,
+    QScrollArea,
 )
 
 from core.margin_detector import MembreteMargins, detect_margins
 from core.membrete_engine import MembreteJob, MembreteEngine, MembreteJobResult
+from core.output_paths import make_run_dir
+from core.output_naming import unique_output_path_for_source
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.slider import SliderWithValue
@@ -31,6 +32,10 @@ from ui.common.send_to_tool import SendToToolButton
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.documents_step import DocumentsCard
 from ui.common.process_step import ProcessStep
+from ui.common.output_settings import add_tool_suffix_enabled
+from ui.common.dialogs import show_error, show_info, show_success, show_warning
+from ui.common.file_dialogs import get_open_file_name
+from ui.common.icons import set_button_icon
 
 
 # ====================================================================== #
@@ -65,8 +70,12 @@ class MembreteWorker(QObject):
                 self.letterhead_path,
                 self.margins,
                 progress=lambda c, t, m: self.progress.emit(c, t, m),
+                should_cancel=lambda: self._cancel,
             )
-            self.finished.emit(results)
+            if self._cancel:
+                self.error.emit("Operación cancelada.")
+            else:
+                self.finished.emit(results)
         except Exception as e:
             self.error.emit(str(e))
 
@@ -95,6 +104,12 @@ class MarginPreviewWidget(QWidget):
         self._lh_pixmap = pixmap
         self._page_w_pt = page_w_pt
         self._page_h_pt = page_h_pt
+        self.update()
+
+    def clear_letterhead(self) -> None:
+        self._lh_pixmap = None
+        self._page_w_pt = 0.0
+        self._page_h_pt = 0.0
         self.update()
 
     def set_margins(self, top: float, bottom: float, left: float, right: float) -> None:
@@ -184,13 +199,13 @@ class MarginPreviewWidget(QWidget):
             p.drawText(
                 QRectF(x0, y0, sw, t * sy),
                 Qt.AlignmentFlag.AlignCenter,
-                f"↑ {t:.0f} pt",
+                f"Sup. {t:.0f} pt",
             )
         if b * sy > 14:
             p.drawText(
                 QRectF(x0, safe_y1, sw, b * sy),
                 Qt.AlignmentFlag.AlignCenter,
-                f"↓ {b:.0f} pt",
+                f"Inf. {b:.0f} pt",
             )
 
         p.end()
@@ -211,6 +226,7 @@ class MembretadoWindow(PipelineWindow):
     ]
     BRAND = "Membretado"
     TAGLINE = "Superpone PDFs sobre hojas membretadas"
+    ACCENT_COLOR = "#B87FF5"
 
     def __init__(self, ctx: ShellContext, parent=None) -> None:
         super().__init__(ctx, parent)
@@ -308,9 +324,10 @@ class MembretadoWindow(PipelineWindow):
 
         nav = QHBoxLayout()
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -342,14 +359,16 @@ class MembretadoWindow(PipelineWindow):
         outer.addWidget(self._docs_card, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Membrete")
+        back = QPushButton("Membrete")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(0))
         nav.addWidget(back)
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -374,31 +393,47 @@ class MembretadoWindow(PipelineWindow):
         ))
 
         body = QHBoxLayout()
-        body.setSpacing(24)
+        body.setSpacing(20)
 
-        # ---- Columna izquierda: sliders ----
-        left_card = make_card("Márgenes de seguridad (pt)")
-        ll = card_layout(left_card)
-        ll.setSpacing(16)
+        # ---- Columna izquierda: card unificada con sliders ─────────
+        ctrl_card = make_card("Márgenes de seguridad")
+        ll = card_layout(ctrl_card)
+        ll.setSpacing(14)
 
-        def _margin_slider(label, hint, default):
-            c = make_card(label, hint)
+        def _row_slider(label_text: str, tooltip: str, default: float):
+            """Fila compacta: etiqueta + slider + valor."""
+            row_w = QWidget()
+            row_w.setStyleSheet("background: transparent;")
+            row_l = QVBoxLayout(row_w)
+            row_l.setContentsMargins(0, 0, 0, 0)
+            row_l.setSpacing(4)
+            lbl = QLabel(label_text)
+            lbl.setStyleSheet("color: #9094A0; font-size: 11px; font-weight: 600; "
+                              "letter-spacing: 0.6px; text-transform: uppercase; "
+                              "background: transparent;")
+            lbl.setToolTip(tooltip)
             s = SliderWithValue(0.0, 250.0, default, step=1.0, suffix="pt", decimals=0)
-            card_layout(c).addWidget(s)
-            ll.addWidget(c)
+            row_l.addWidget(lbl)
+            row_l.addWidget(s)
+            ll.addWidget(row_w)
             return s
 
-        self._s_top = _margin_slider(
-            "Superior", "Espacio del encabezado (logo, empresa)", 72.0
-        )
-        self._s_bottom = _margin_slider(
-            "Inferior", "Espacio del pie de página (dirección, teléfonos)", 54.0
-        )
-        self._s_left = _margin_slider("Izquierdo", "Margen lateral izquierdo", 18.0)
-        self._s_right = _margin_slider("Derecho", "Margen lateral derecho", 18.0)
+        self._s_top    = _row_slider("Superior",    "Espacio para encabezado (logo, empresa)", 72.0)
+        self._s_bottom = _row_slider("Inferior",    "Espacio para pie de página (dirección, tel.)", 54.0)
 
-        reset_btn = QPushButton("↺  Restablecer detección automática")
+        # Divisor lateral
+        hor_div = QFrame()
+        hor_div.setFixedHeight(1)
+        hor_div.setStyleSheet("background: #1E1E24; border: none;")
+        ll.addWidget(hor_div)
+
+        self._s_left  = _row_slider("Izquierdo", "Margen lateral izquierdo", 18.0)
+        self._s_right = _row_slider("Derecho",   "Margen lateral derecho", 18.0)
+
+        ll.addSpacing(4)
+        reset_btn = QPushButton("Restablecer detección automática")
         reset_btn.setProperty("class", "Ghost")
+        set_button_icon(reset_btn, "refresh-cw")
         reset_btn.clicked.connect(self._on_reset_margins)
         ll.addWidget(reset_btn)
         ll.addStretch()
@@ -408,37 +443,38 @@ class MembretadoWindow(PipelineWindow):
             s.valueChanged.connect(self._on_margin_slider_changed)
 
         left_scroll = QScrollArea()
-        left_scroll.setWidget(left_card)
+        left_scroll.setWidget(ctrl_card)
         left_scroll.setWidgetResizable(True)
-        left_scroll.setFixedWidth(340)
+        left_scroll.setFixedWidth(360)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         body.addWidget(left_scroll)
 
-        # ---- Columna derecha: preview ----
+        # ---- Columna derecha: preview ─────────────────────────────
         right_col = QVBoxLayout()
-        right_col.setSpacing(12)
+        right_col.setSpacing(10)
 
-        preview_title = QLabel("Vista previa del membrete con márgenes")
-        preview_title.setProperty("class", "CardHint")
-        right_col.addWidget(preview_title)
-
+        prev_card = make_card("Vista previa")
+        pc = card_layout(prev_card)
         self._margin_preview = MarginPreviewWidget()
-        self._margin_preview.setMinimumWidth(280)
-        right_col.addWidget(self._margin_preview, 1)
+        self._margin_preview.setMinimumWidth(260)
+        pc.addWidget(self._margin_preview, 1)
+        right_col.addWidget(prev_card, 1)
 
         body.addLayout(right_col, 1)
         outer.addLayout(body, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Documentos")
+        back = QPushButton("Documentos")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(1))
         nav.addWidget(back)
         nav.addStretch()
-        nxt = QPushButton("Continuar  →")
+        nxt = QPushButton("Continuar")
         nxt.setProperty("class", "Primary")
         nxt.setMinimumWidth(160)
+        set_button_icon(nxt, "arrow-right")
         nxt.clicked.connect(lambda: self._switch_section(3))
         nav.addWidget(nxt)
         outer.addLayout(nav)
@@ -458,21 +494,22 @@ class MembretadoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Procesar",
-            "Elige la carpeta de salida y ejecuta el membretado masivo.",
+            "Genera los documentos en temporal; usa \"Guardar como\" para conservarlos.",
         ))
 
         self._proc_step = ProcessStep(
             run_label="Membretar documentos",
-            settings_key="membretado/output_dir",
-            default_output=str(Path.home() / "PDFlex" / "Membretado"),
+            show_output_dir=False,
         )
         self._proc_step.run_requested.connect(self._on_run)
         self._proc_step.cancel_requested.connect(self._on_cancel)
+        self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Márgenes")
+        back = QPushButton("Márgenes")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(back)
         outer.addLayout(nav)
@@ -500,8 +537,9 @@ class MembretadoWindow(PipelineWindow):
         outer.addWidget(self._results_viewer, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("←  Procesar")
+        back = QPushButton("Procesar")
         back.setProperty("class", "Ghost")
+        set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(3))
         nav.addWidget(back)
         nav.addStretch()
@@ -509,9 +547,10 @@ class MembretadoWindow(PipelineWindow):
         self._send_btn = SendToToolButton(self.ctx, "membretado")
         nav.addWidget(self._send_btn)
 
-        restart_btn = QPushButton("↺  Nueva sesión")
+        restart_btn = QPushButton("Nueva sesión")
         restart_btn.setProperty("class", "Primary")
         restart_btn.setMinimumWidth(180)
+        set_button_icon(restart_btn, "refresh-cw")
         restart_btn.clicked.connect(self._reset_session)
         nav.addWidget(restart_btn)
         outer.addLayout(nav)
@@ -544,7 +583,7 @@ class MembretadoWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _on_open_membrete(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
+        path, _ = get_open_file_name(
             self, "Seleccionar membrete PDF", "",
             "PDF (*.pdf)",
         )
@@ -552,9 +591,15 @@ class MembretadoWindow(PipelineWindow):
             self._load_membrete(path)
 
     def _on_membrete_from_tray(self) -> None:
-        paths = self.ctx.tray.paths()
+        paths = [p for p in self.ctx.tray.paths() if Path(p).suffix.lower() == ".pdf"]
         if paths:
             self._load_membrete(paths[0])
+        else:
+            show_info(
+                self,
+                "Sin PDFs compatibles",
+                "La bandeja no contiene un PDF para usar como membrete.",
+            )
 
     def _load_membrete(self, path: str) -> None:
         try:
@@ -585,7 +630,7 @@ class MembretadoWindow(PipelineWindow):
 
             doc.close()
         except Exception as e:
-            QMessageBox.warning(self, "Error al abrir membrete", str(e))
+            show_warning(self, "Error al abrir membrete", str(e))
             return
 
         self._lh_path = path
@@ -599,8 +644,8 @@ class MembretadoWindow(PipelineWindow):
         # Detección automática de márgenes
         self._margins = detect_margins(path)
         self._lh_margins_lbl.setText(
-            f"Márgenes detectados: ↑{self._margins.top_pt:.0f} pt  "
-            f"↓{self._margins.bottom_pt:.0f} pt"
+            f"Márgenes detectados: sup. {self._margins.top_pt:.0f} pt  "
+            f"inf. {self._margins.bottom_pt:.0f} pt"
         )
         self._apply_margins_to_sliders(self._margins)
 
@@ -612,6 +657,8 @@ class MembretadoWindow(PipelineWindow):
                 self._lh_page_h_pt,
             )
             self._on_margin_slider_changed()
+        else:
+            self._margin_preview.clear_letterhead()
 
     def _get_doc_paths(self) -> List[str]:
         return self._docs_card.paths()
@@ -630,7 +677,7 @@ class MembretadoWindow(PipelineWindow):
 
     def _on_reset_margins(self) -> None:
         if not self._lh_path:
-            QMessageBox.information(self, "Sin membrete", "Carga primero un membrete.")
+            show_info(self, "Sin membrete", "Carga primero un membrete.")
             return
         self._margins = detect_margins(self._lh_path)
         self._apply_margins_to_sliders(self._margins)
@@ -667,8 +714,8 @@ class MembretadoWindow(PipelineWindow):
         rows.append(f"<b>Documentos:</b> &nbsp; {n}")
         rows.append(
             f"<b>Márgenes:</b> &nbsp; "
-            f"↑{m.top_pt:.0f} pt &nbsp;·&nbsp; ↓{m.bottom_pt:.0f} pt &nbsp;·&nbsp; "
-            f"←{m.left_pt:.0f} pt &nbsp;·&nbsp; {m.right_pt:.0f}→ pt"
+            f"sup. {m.top_pt:.0f} pt &nbsp;·&nbsp; inf. {m.bottom_pt:.0f} pt &nbsp;·&nbsp; "
+            f"izq. {m.left_pt:.0f} pt &nbsp;·&nbsp; der. {m.right_pt:.0f} pt"
         )
         html = "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         self._proc_step.set_summary_html(html)
@@ -678,29 +725,44 @@ class MembretadoWindow(PipelineWindow):
             return "Carga primero la hoja membretada (Paso 01)."
         if self._docs_card.is_empty():
             return "Agrega al menos un documento a membretar (Paso 02)."
-        if not self._proc_step.output_dir():
-            return "Define una carpeta de salida."
+        m = self._read_margins()
+        page_w = getattr(self, "_lh_page_w_pt", 0.0)
+        page_h = getattr(self, "_lh_page_h_pt", 0.0)
+        if page_w > 0 and m.left_pt + m.right_pt >= page_w:
+            return "Los márgenes izquierdo y derecho dejan la zona útil sin ancho."
+        if page_h > 0 and m.top_pt + m.bottom_pt >= page_h:
+            return "Los márgenes superior e inferior dejan la zona útil sin alto."
         return None
 
     def _build_jobs(self) -> List[MembreteJob]:
-        out_dir = Path(self._proc_step.output_dir())
-        out_dir.mkdir(parents=True, exist_ok=True)
+        out_dir = make_run_dir("Membretado")
         jobs = []
+        reserved: set[str] = set()
+        add_suffix = add_tool_suffix_enabled()
         for p in self._get_doc_paths():
             in_path = Path(p)
-            out_path = out_dir / f"{in_path.stem}_membretado.pdf"
+            out_path = unique_output_path_for_source(
+                out_dir,
+                in_path,
+                extension=".pdf",
+                tool_suffix="membretado",
+                add_tool_suffix=add_suffix,
+                reserved=reserved,
+                fallback="documento",
+            )
             jobs.append(MembreteJob(pdf_path=str(in_path), output_path=str(out_path)))
         return jobs
 
     def _on_run(self) -> None:
         err = self._validate_ready()
         if err:
-            QMessageBox.warning(self, "Falta información", err)
+            show_warning(self, "Falta información", err)
             return
         if self._worker_thread is not None:
             return
 
         self._results_viewer.clear_results()
+        self._send_btn.set_output_paths([])
         jobs = self._build_jobs()
         margins = self._read_margins()
 
@@ -738,7 +800,7 @@ class MembretadoWindow(PipelineWindow):
         self._send_btn.set_output_paths(output_paths)
         self.outputs_ready.emit(output_paths)
 
-        QMessageBox.information(
+        show_success(
             self, "Hecho",
             f"Se membretaron {ok} documento{'s' if ok != 1 else ''}.\n"
             + (f"Con error: {fail}" if fail else ""),
@@ -747,7 +809,7 @@ class MembretadoWindow(PipelineWindow):
         self._switch_section(4)
 
     def _on_worker_error(self, msg: str) -> None:
-        QMessageBox.critical(self, "Error", msg)
+        show_error(self, "Error", msg)
         self._proc_step.set_running(False)
         if self._worker_thread:
             self._worker_thread.quit()
@@ -766,13 +828,24 @@ class MembretadoWindow(PipelineWindow):
 
     def _reset_session(self) -> None:
         self._results_viewer.clear_results()
+        self._send_btn.set_output_paths([])
         self.last_results = []
         self._lh_path = None
+        self._lh_preview_pixmap = None
+        self._lh_page_w_pt = 0.0
+        self._lh_page_h_pt = 0.0
+        self._margins = MembreteMargins()
         self._lh_thumb.clear()
         self._lh_thumb.setText("Sin membrete")
+        self._lh_thumb.setStyleSheet(
+            "background: #16161A; border: 1px dashed #33333B; "
+            "border-radius: 6px; color: #6B6F7A; font-size: 11px;"
+        )
         self._lh_name_lbl.setText("—")
         self._lh_pages_lbl.setText("")
         self._lh_margins_lbl.setText("")
+        self._margin_preview.clear_letterhead()
+        self._apply_margins_to_sliders(self._margins)
         self._docs_card.clear()
         self._proc_step.reset()
         self._switch_section(0)
@@ -788,3 +861,21 @@ class MembretadoWindow(PipelineWindow):
     def dropEvent(self, event: QDropEvent) -> None:
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
         self._add_file_paths_smart(paths)
+
+    def _add_file_paths_smart(self, paths: List[str]) -> None:
+        if not paths:
+            return
+
+        current_idx = self.stack.currentIndex()
+        pdfs = [p for p in paths if Path(p).suffix.lower() == ".pdf"]
+
+        if current_idx == 0 and not self._lh_path and pdfs:
+            self._load_membrete(pdfs[0])
+            remaining = [p for p in paths if p != pdfs[0]]
+            if remaining:
+                self._docs_card.add_paths(remaining)
+                self._switch_section(1)
+            return
+
+        self._docs_card.add_paths(paths)
+        self._switch_section(1)

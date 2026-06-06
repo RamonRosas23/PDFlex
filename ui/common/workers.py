@@ -1,3 +1,4 @@
+# Deprecated: usar ui/common/base_worker.py
 """BaseWorker — patrón QObject/QThread reutilizable para todas las herramientas."""
 from __future__ import annotations
 from PyQt6.QtCore import QObject, pyqtSignal

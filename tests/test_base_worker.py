@@ -41,12 +41,6 @@ def _make_sleeping_worker(sleep_ms: int = 5000):
     return SleepingWorker()
 
 
-def _make_notimpl_worker():
-    """Subclase de BaseWorker que no implementa run()."""
-    from ui.common.base_worker import BaseWorker
-    return BaseWorker()
-
-
 # ---------------------------------------------------------------------------
 # Test 1: cancel_and_wait() detiene un worker que duerme en loop
 # ---------------------------------------------------------------------------
@@ -106,7 +100,7 @@ def test_fast_worker_emits_finished(app):
     wt.start()
 
     # Esperar a que el thread termine (max 3s)
-    wt._thread.wait(3000)
+    wt.wait(3000)
 
     assert results_received == ["ok"], f"Se esperaba ['ok'], se obtuvo {results_received}"
     assert not wt.is_running()

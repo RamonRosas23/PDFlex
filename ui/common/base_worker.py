@@ -98,8 +98,15 @@ class WorkerThread:
             True si el thread terminó dentro del timeout, False si agotó el tiempo.
         """
         self.worker.cancel()
+        self._thread.quit()
         finished = self._thread.wait(timeout_ms)
         return finished
+
+    def wait(self, timeout_ms: int = 5000) -> bool:
+        """Espera terminación sin cancelar. Para uso en tests."""
+        if self._thread is None:
+            return True
+        return self._thread.wait(timeout_ms)
 
     def is_running(self) -> bool:
         """Retorna True si el thread está actualmente en ejecución."""

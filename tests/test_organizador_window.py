@@ -24,52 +24,37 @@ class OrganizadorWindowTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
-    def test_page_grid_rotates_duplicates_and_removes_pages(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            pdf_path = self._make_pdf(Path(tmp) / "input.pdf", pages=2)
-            window = OrganizadorWindow(
-                ShellContext(
-                    tray=PdfTray(),
-                    word_converter=WordToPdfConverter(),
-                    open_tool=lambda *_: None,
-                )
-            )
-            try:
-                window._page_grid.add_paths([str(pdf_path)])
-                self.assertEqual(window._page_grid.count(), 2)
-
-                window._page_grid.list_widget.setCurrentRow(0)
-                window._page_grid.rotate_selected(90)
-                self.assertEqual(window._page_grid.page_refs()[0].rotation_deg, 90)
-
-                window._page_grid.duplicate_selected()
-                self.assertEqual(window._page_grid.count(), 3)
-
-                window._page_grid.list_widget.clearSelection()
-                window._page_grid.list_widget.setCurrentRow(1)
-                window._page_grid.remove_selected()
-                self.assertEqual(window._page_grid.count(), 2)
-            finally:
-                window.deleteLater()
-                self.app.processEvents()
+    def _make_ctx(self):
+        return ShellContext(
+            tray=PdfTray(),
+            word_converter=WordToPdfConverter(),
+            open_tool=lambda *_: None,
+        )
 
     def test_tool_registry_exposes_organizer_for_pdfs(self) -> None:
         tool = get_tool("organizador")
-
         self.assertIsNotNone(tool)
         self.assertTrue(tool.enabled)
         self.assertEqual(tool.title, "Organizador visual")
         self.assertIn(".pdf", tool.input_extensions)
 
-    @staticmethod
-    def _make_pdf(path: Path, pages: int) -> Path:
-        doc = fitz.open()
-        for index in range(pages):
-            page = doc.new_page(width=300, height=200)
-            page.insert_text((36, 72), f"Pagina {index + 1}")
-        doc.save(path)
-        doc.close()
-        return path
+    def test_window_loads_pdfs_into_separate_lanes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = Path(tmp) / "input.pdf"
+            doc = fitz.open()
+            for i in range(2):
+                doc.new_page().insert_text((36, 72), f"Page {i+1}")
+            doc.save(pdf_path)
+            doc.close()
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window.set_inputs([str(pdf_path)])
+                self.assertEqual(window._lane_container.total_lanes(), 1)
+                self.assertEqual(window._lane_container.total_pages(), 2)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
 
 
 class ThumbnailCacheTests(unittest.TestCase):
@@ -349,6 +334,61 @@ class LaneContainerTests(unittest.TestCase):
         names = [lane.display_name for lane in container.lanes()]
         self.assertEqual(names, ["B", "A"])
         container.deleteLater()
+
+
+class OrganizadorWindowV2Tests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def _make_ctx(self):
+        return ShellContext(
+            tray=PdfTray(),
+            word_converter=WordToPdfConverter(),
+            open_tool=lambda *_: None,
+        )
+
+    def test_window_creates_two_lanes_for_two_pdfs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_a = Path(tmp) / "a.pdf"
+            pdf_b = Path(tmp) / "b.pdf"
+            for path, label in [(pdf_a, "A"), (pdf_b, "B")]:
+                doc = fitz.open()
+                doc.new_page().insert_text((36, 72), label)
+                doc.save(path)
+                doc.close()
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window.set_inputs([str(pdf_a), str(pdf_b)])
+                self.assertEqual(window._lane_container.total_lanes(), 2)
+                pages = sum(lane.count() for lane in window._lane_container.lanes())
+                self.assertEqual(pages, 2)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_build_multi_job_separate_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_a = Path(tmp) / "a.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.new_page()
+            doc.save(pdf_a)
+            doc.close()
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window.set_inputs([str(pdf_a)])
+                # Refresh output table so _build_multi_job can read it
+                window._refresh_output_table()
+                job = window._build_multi_job()
+                self.assertEqual(len(job.lanes), 1)
+                self.assertEqual(len(job.lanes[0].pages), 2)
+                self.assertFalse(job.merge_all)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
 
 
 if __name__ == "__main__":

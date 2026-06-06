@@ -19,7 +19,7 @@ from ui.common.process_step import ProcessStep
 
 from core.pdf_to_images_engine import (
     PdfToImagesConfig, PdfToImagesJob, PdfToImagesEngine,
-    PdfToImagesJobResult, ImageResult,
+    PdfToImagesJobResult,
 )
 from core.output_paths import make_run_dir, unique_name
 from shell.context import ShellContext
@@ -426,13 +426,15 @@ class PdfToImgsWindow(PipelineWindow):
         self._worker_thread = None
         self._worker = None
 
-        all_img_results: List[ImageResult] = []
-        ok_files = 0
-        for job_result in results:
-            all_img_results.extend(job_result.image_results)
-            ok_files += sum(1 for r in job_result.image_results if r.success)
-
-        output_paths = [r.output_path for r in all_img_results if r.success and r.output_path]
+        ok_files = sum(
+            1 for jr in results for r in jr.image_results if r.success
+        )
+        output_paths = [
+            r.output_path
+            for jr in results
+            for r in jr.image_results
+            if r.success and r.output_path
+        ]
         self._send_btn.set_output_paths(output_paths)
         self.outputs_ready.emit(output_paths)
 
@@ -440,13 +442,7 @@ class PdfToImgsWindow(PipelineWindow):
             self, "Conversión completa",
             f"Se generaron {ok_files} imagen{'es' if ok_files != 1 else ''}.",
         )
-        self._img_viewer.set_results(all_img_results)
-        src_dirs = [
-            str(Path(jr.job.pdf_path).parent)
-            for jr in results
-            for _ in jr.image_results
-        ]
-        self._img_viewer.set_source_dirs(src_dirs)
+        self._img_viewer.set_grouped_results(results)
         self._switch_section(3)
 
     def _on_worker_error(self, msg: str) -> None:

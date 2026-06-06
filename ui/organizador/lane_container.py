@@ -136,6 +136,7 @@ class LaneContainer(QWidget):
 
     def clear(self) -> None:
         for lane in list(self._lanes):
+            self._container_layout.removeWidget(lane)
             lane.deleteLater()
         self._lanes.clear()
         self.layout_changed.emit()

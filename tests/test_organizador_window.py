@@ -176,5 +176,86 @@ class PageMimeTests(unittest.TestCase):
         self.assertIsNone(decode_drag(mime))
 
 
+from ui.organizador.lane_widget import DocLane, LANE_COLORS
+from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailWorker
+
+
+class DocLaneTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+        cls.cache = ThumbnailCache(max_size=10)
+        cls.worker = ThumbnailWorker(cls.cache)
+
+    def _make_lane(self, name: str = "Test") -> DocLane:
+        return DocLane("lane-1", name, LANE_COLORS[0], self.cache, self.worker)
+
+    def test_add_pdf_creates_items_with_correct_count(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "test.pdf"
+            doc = fitz.open()
+            for i in range(3):
+                p = doc.new_page()
+                p.insert_text((36, 72), f"Pag {i+1}")
+            doc.save(pdf)
+            doc.close()
+
+            lane = self._make_lane()
+            lane.add_pages_from_pdf(str(pdf))
+
+            self.assertEqual(lane.count(), 3)
+            refs = lane.page_refs()
+            self.assertEqual(refs[0].page_index, 0)
+            self.assertEqual(refs[2].page_index, 2)
+            self.assertEqual(refs[0].source_path, str(pdf))
+
+    def test_rotate_selected_updates_ref(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "rot.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            lane = self._make_lane()
+            lane.add_pages_from_pdf(str(pdf))
+            lane._list.setCurrentRow(0)
+            lane.rotate_selected(90)
+
+            self.assertEqual(lane.page_refs()[0].rotation_deg, 90)
+
+    def test_duplicate_selected_inserts_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "dup.pdf"
+            doc = fitz.open()
+            for i in range(2):
+                doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            lane = self._make_lane()
+            lane.add_pages_from_pdf(str(pdf))
+            lane._list.setCurrentRow(0)
+            lane.duplicate_selected()
+
+            self.assertEqual(lane.count(), 3)
+            self.assertEqual(lane.page_refs()[1].page_index, 0)
+            self.assertNotEqual(lane.page_refs()[0].page_id, lane.page_refs()[1].page_id)
+
+    def test_clear_empties_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "clear.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            lane = self._make_lane()
+            lane.add_pages_from_pdf(str(pdf))
+            self.assertEqual(lane.count(), 1)
+            lane.clear()
+            self.assertEqual(lane.count(), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

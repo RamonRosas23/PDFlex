@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -104,7 +104,7 @@ class ThumbnailWorker(QObject):
     def __init__(self, cache: ThumbnailCache, parent=None) -> None:
         super().__init__(parent)
         self._cache = cache
-        self._queue: list[_ThumbRequest] = []
+        self._queue: deque[_ThumbRequest] = deque()
         self._lock = threading.Lock()
         self._running = True
 
@@ -124,6 +124,11 @@ class ThumbnailWorker(QObject):
             self.thumb_ready.emit(lane_id, page_id, cached)
             return
         with self._lock:
+            # Re-check after acquiring queue lock — background run() may have filled cache
+            cached = self._cache.get(key)
+            if cached is not None:
+                self.thumb_ready.emit(lane_id, page_id, cached)
+                return
             self._queue.append(
                 _ThumbRequest(lane_id, page_id, source_path, page_index, rotation_deg, width)
             )
@@ -137,7 +142,7 @@ class ThumbnailWorker(QObject):
             req: Optional[_ThumbRequest] = None
             with self._lock:
                 if self._queue:
-                    req = self._queue.pop(0)
+                    req = self._queue.popleft()
             if req is None:
                 QThread.msleep(20)
                 continue

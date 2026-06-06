@@ -174,12 +174,17 @@ class LaneContainer(QWidget):
         """Restaura el estado anterior de la pila de deshacer."""
         if not self._undo_stack:
             return
+        # Recordar qué lane tenía foco para restaurarlo después
+        focused_id: str | None = None
+        for lane in self._lanes:
+            if lane._list.hasFocus():
+                focused_id = lane.lane_id
+                break
         snapshot = self._undo_stack.pop()
-        self._restore_snapshot(snapshot)
+        self._restore_snapshot(snapshot, focused_id)
 
-    def _restore_snapshot(self, snapshot: list) -> None:
+    def _restore_snapshot(self, snapshot: list, restore_focus_id: str | None = None) -> None:
         """Reconstruye lanes desde un snapshot guardado."""
-        # Deshabilitar temporalmente callbacks de mutación durante restauración
         for lane in list(self._lanes):
             lane.set_before_mutation_cb(None)
             self._container_layout.removeWidget(lane)
@@ -192,6 +197,14 @@ class LaneContainer(QWidget):
 
         self._refresh_siblings()
         self.layout_changed.emit()
+
+        # Restaurar foco al lane que lo tenía antes del undo (o al primero)
+        if self._lanes:
+            target = next(
+                (l for l in self._lanes if l.lane_id == restore_focus_id),
+                self._lanes[0],
+            )
+            target._list.setFocus()
 
     # ── Cross-lane drag coordinator ───────────────────────────────────────
 

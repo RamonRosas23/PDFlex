@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 import fitz
-from PyQt6.QtCore import Qt, QEvent, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QPoint, QSize, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QDrag, QDragEnterEvent, QDropEvent, QIcon,
+    QColor, QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon,
     QKeyEvent, QPixmap,
 )
 from PyQt6.QtWidgets import (
@@ -77,22 +77,39 @@ class _PageStrip(QListWidget):
         self.model().rowsMoved.connect(lambda *_: self.internal_reorder_done.emit())
 
     def startDrag(self, supported_actions) -> None:
-        selected_refs = [
-            self.item(i).data(Qt.ItemDataRole.UserRole)
+        selected_items = [
+            self.item(i)
             for i in range(self.count())
             if self.item(i) and self.item(i).isSelected()
+        ]
+        selected_refs = [
+            item.data(Qt.ItemDataRole.UserRole) for item in selected_items
         ]
         if not selected_refs:
             return
         mime = encode_drag(self._lane_id, selected_refs)
         drag = QDrag(self)
         drag.setMimeData(mime)
+        # Mostrar miniatura de la primera página seleccionada como cursor de drag
+        if selected_items:
+            icon = selected_items[0].icon()
+            if not icon.isNull():
+                pix = icon.pixmap(QSize(THUMB_W // 2, THUMB_H // 2))
+                drag.setPixmap(pix)
+                drag.setHotSpot(QPoint(pix.width() // 2, pix.height() // 2))
         drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(MIME_TYPE) or event.mimeData().hasUrls():
             event.acceptProposedAction()
             self._set_highlight(True)
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:
+        # El base QAbstractItemView rechaza MIME personalizados — debemos aceptar explícitamente
+        if event.mimeData().hasFormat(MIME_TYPE) or event.mimeData().hasUrls():
+            event.acceptProposedAction()
         else:
             event.ignore()
 
@@ -166,9 +183,13 @@ class _PageStrip(QListWidget):
         if item not in self.selectedItems():
             self.clearSelection()
             item.setSelected(True)
-        parent = self.parent()
-        if isinstance(parent, QWidget) and hasattr(parent, "_show_page_context_menu"):
-            parent._show_page_context_menu(event.globalPos())
+        # _list está dentro de _strip_wrap, que está dentro de DocLane
+        p = self.parent()
+        while p is not None:
+            if hasattr(p, "_show_page_context_menu"):
+                p._show_page_context_menu(event.globalPos())
+                return
+            p = p.parent()
 
 
 class DocLane(QFrame):

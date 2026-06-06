@@ -55,6 +55,7 @@ class ShellWindow(QMainWindow):
         )
 
         self._tool_widgets: Dict[str, QWidget] = {}   # lazy instances
+        self._pending_tool_id: Optional[str] = None  # guard para re-entry en apertura
 
         self._update_check_thread = None   # referencia para evitar GC prematuro
         self._update_check_worker = None
@@ -198,11 +199,9 @@ class ShellWindow(QMainWindow):
         if tool_id not in self._tool_widgets:
             # Mostrar loading inmediatamente (feedback visual antes del freeze)
             self._main_stack.setCurrentWidget(self._loading_widget)
-            self._tool_name_lbl.setText(tool.title)
-            self._tool_name_lbl.setStyleSheet(f"color: {tool.accent_color};")
-            self._tool_name_lbl.setVisible(True)
-            self._home_btn.setVisible(True)
+            self._set_topbar_tool(tool)
             # Diferir construcción 1 frame para que Qt renderice el loading primero
+            self._pending_tool_id = tool_id
             QTimer.singleShot(
                 0,
                 lambda tid=tool_id, t=tool, i=inputs: self._finish_open_tool(tid, t, i),
@@ -218,6 +217,9 @@ class ShellWindow(QMainWindow):
         inputs: Optional[List[str]],
     ) -> None:
         """Construye e instancia la herramienta (ejecutado tras 1 frame de diferimiento)."""
+        if self._pending_tool_id != tool_id:
+            return  # otra herramienta fue solicitada mientras este timer estaba pendiente
+        self._pending_tool_id = None
         try:
             widget = tool.window_factory(self._ctx)
         except Exception as exc:
@@ -240,6 +242,10 @@ class ShellWindow(QMainWindow):
         if inputs:
             widget.set_inputs(inputs)
         self._main_stack.setCurrentWidget(widget)
+        self._set_topbar_tool(tool)
+
+    def _set_topbar_tool(self, tool: object) -> None:
+        """Actualiza topbar con nombre y color de la herramienta activa."""
         self._tool_name_lbl.setText(tool.title)
         self._tool_name_lbl.setStyleSheet(f"color: {tool.accent_color};")
         self._tool_name_lbl.setVisible(True)

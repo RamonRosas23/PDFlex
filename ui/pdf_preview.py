@@ -69,6 +69,7 @@ class SignatureItem(QGraphicsObject):
         self._pixmap = pixmap
         self._color = color
         self._active: bool = False
+        self._excluded: bool = False
 
         # Tamaño inicial provisional; PdfPreviewView.add_sig() ajusta al PDF real
         target_w = 220
@@ -107,6 +108,19 @@ class SignatureItem(QGraphicsObject):
     def set_pixmap(self, pixmap) -> None:
         """Actualiza la imagen de la firma sin mover ni redimensionar el ítem."""
         self._pixmap = pixmap
+        self.update()
+
+    def set_exclusion_state(self, excluded: bool) -> None:
+        """Toggle the excluded visual: dim opacity + red X overlay."""
+        if self._excluded == excluded:
+            return
+        self._excluded = excluded
+        self.setOpacity(0.28 if excluded else 1.0)
+        self.setToolTip(
+            "Esta firma está excluida en esta página.\n"
+            "Clic derecho → Restaurar para incluirla."
+            if excluded else ""
+        )
         self.update()
 
     def uid(self) -> str:
@@ -181,6 +195,21 @@ class SignatureItem(QGraphicsObject):
 
         if self._active:
             self._draw_handles(painter)
+
+        if self._excluded:
+            x_pen = QPen(QColor("#E5484D"), 2.5)
+            x_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(x_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            inset = 6.0
+            painter.drawLine(
+                QPointF(inset, inset),
+                QPointF(self._w - inset, self._h - inset),
+            )
+            painter.drawLine(
+                QPointF(self._w - inset, inset),
+                QPointF(inset, self._h - inset),
+            )
 
     def _draw_handles(self, painter: QPainter) -> None:
         R = self.HANDLE_RADIUS
@@ -461,6 +490,8 @@ class PdfPreviewView(QGraphicsView):
     drag_finished = pyqtSignal()
     # Cambio de página
     pageChanged = pyqtSignal(int, int)   # current, total
+    # Emitida cuando el usuario hace clic derecho sobre una firma
+    sig_context_requested = pyqtSignal(str, int, object)  # uid, page_0based, QPoint
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -643,6 +674,23 @@ class PdfPreviewView(QGraphicsView):
         self._active_uid = uid
         for u, item in self._sig_items.items():
             item.set_active(u == uid)
+
+    def contextMenuEvent(self, event) -> None:
+        """Forward right-clicks on signature items as sig_context_requested signals."""
+        scene_pos = self.mapToScene(event.pos())
+        for item in self._scene.items(scene_pos):
+            if isinstance(item, SignatureItem):
+                self.sig_context_requested.emit(
+                    item.uid(), self._page_index, event.globalPos()
+                )
+                event.accept()
+                return
+        super().contextMenuEvent(event)
+
+    def refresh_page_exclusions(self, excluded_uids: set) -> None:
+        """Set visual exclusion state on all signature items for the current page."""
+        for uid, item in self._sig_items.items():
+            item.set_exclusion_state(uid in excluded_uids)
 
     def restore_placement(
         self,

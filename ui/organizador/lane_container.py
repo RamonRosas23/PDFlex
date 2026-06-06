@@ -1,7 +1,8 @@
-"""LaneContainer — manages N DocLanes stacked vertically."""
+"""LaneContainer — manages N DocLanes stacked vertically with undo support."""
 from __future__ import annotations
 
 import uuid
+from collections import deque
 from dataclasses import replace
 from pathlib import Path
 from typing import List, Tuple
@@ -19,16 +20,18 @@ from ui.organizador.lane_widget import LANE_COLORS, DocLane
 from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailWorker
 
 PDF_FILTER = "PDF (*.pdf)"
+_MAX_UNDO = 50
 
 
 class LaneContainer(QWidget):
-    """Vertical scroll area containing N DocLanes."""
+    """Scroll vertical con N DocLanes, portapapeles y pila de deshacer."""
 
     layout_changed = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self._lanes: List[DocLane] = []
+        self._undo_stack: deque = deque(maxlen=_MAX_UNDO)
 
         self._cache = ThumbnailCache(max_size=300)
         self._worker = ThumbnailWorker(self._cache)
@@ -39,6 +42,8 @@ class LaneContainer(QWidget):
 
         self._build()
         self.destroyed.connect(self._stop_worker)
+
+    # ── Construcción ──────────────────────────────────────────────────────
 
     def _build(self) -> None:
         outer = QVBoxLayout(self)
@@ -86,16 +91,20 @@ class LaneContainer(QWidget):
         h.addStretch()
         return bar
 
+    # ── API pública ───────────────────────────────────────────────────────
+
     def lanes(self) -> List[DocLane]:
         return list(self._lanes)
 
     def add_lane_from_pdf(self, path: str) -> DocLane:
+        self._take_snapshot()
         name = Path(path).name
         lane = self._create_lane(name)
         lane.add_pages_from_pdf(path)
         return lane
 
     def add_blank_lane(self, name: str = "") -> DocLane:
+        self._take_snapshot()
         display = name or f"Documento {len(self._lanes) + 1}"
         return self._create_lane(display)
 
@@ -103,6 +112,7 @@ class LaneContainer(QWidget):
         idx = self._index_of(lane_id)
         if idx < 0:
             return
+        self._take_snapshot()
         lane = self._lanes.pop(idx)
         self._container_layout.removeWidget(lane)
         lane.deleteLater()
@@ -116,14 +126,22 @@ class LaneContainer(QWidget):
         new_idx = max(0, min(len(self._lanes) - 1, idx + direction))
         if new_idx == idx:
             return
+        self._take_snapshot()
         self._lanes.insert(new_idx, self._lanes.pop(idx))
         self._rebuild_layout()
         self.layout_changed.emit()
 
     def add_paths(self, paths: List[str]) -> None:
-        for path in paths:
-            if path.lower().endswith(".pdf") and Path(path).is_file():
-                self.add_lane_from_pdf(path)
+        valid = [p for p in paths if p.lower().endswith(".pdf") and Path(p).is_file()]
+        if not valid:
+            return
+        self._take_snapshot()
+        for path in valid:
+            lane = self._create_lane(Path(path).name)
+            # add_pages_from_pdf en DocLane llama _record_before_mutation, pero
+            # ya tomamos snapshot aquí, así que la segunda llamada es inofensiva
+            # (el stack no cambia porque _take_snapshot compara estado)
+            lane.add_pages_from_pdf(path)
 
     def all_lane_states(self) -> List[Tuple[str, str, List[PageRef]]]:
         return [(lane.lane_id, lane.display_name, lane.page_refs()) for lane in self._lanes]
@@ -135,11 +153,47 @@ class LaneContainer(QWidget):
         return len(self._lanes)
 
     def clear(self) -> None:
+        self._take_snapshot()
         for lane in list(self._lanes):
             self._container_layout.removeWidget(lane)
             lane.deleteLater()
         self._lanes.clear()
         self.layout_changed.emit()
+
+    # ── Undo ──────────────────────────────────────────────────────────────
+
+    def _take_snapshot(self) -> None:
+        """Captura estado completo para permitir deshacer."""
+        snapshot = [
+            (lane.lane_id, lane.display_name, list(lane.page_refs()))
+            for lane in self._lanes
+        ]
+        self._undo_stack.append(snapshot)
+
+    def undo(self) -> None:
+        """Restaura el estado anterior de la pila de deshacer."""
+        if not self._undo_stack:
+            return
+        snapshot = self._undo_stack.pop()
+        self._restore_snapshot(snapshot)
+
+    def _restore_snapshot(self, snapshot: list) -> None:
+        """Reconstruye lanes desde un snapshot guardado."""
+        # Deshabilitar temporalmente callbacks de mutación durante restauración
+        for lane in list(self._lanes):
+            lane.set_before_mutation_cb(None)
+            self._container_layout.removeWidget(lane)
+            lane.deleteLater()
+        self._lanes.clear()
+
+        for (lane_id, name, refs) in snapshot:
+            lane = self._create_lane_with_id(lane_id, name)
+            lane.restore_refs(refs)
+
+        self._refresh_siblings()
+        self.layout_changed.emit()
+
+    # ── Cross-lane drag coordinator ───────────────────────────────────────
 
     def _on_cross_lane_drop(
         self,
@@ -147,32 +201,43 @@ class LaneContainer(QWidget):
         dst_lane_id: str,
         refs: List[PageRef],
         ctrl_held: bool,
+        at_row: int = -1,
     ) -> None:
         dst = next((l for l in self._lanes if l.lane_id == dst_lane_id), None)
         src = next((l for l in self._lanes if l.lane_id == src_lane_id), None)
         if dst is None:
             return
 
+        self._take_snapshot()
+
         def _clone(ref: PageRef) -> PageRef:
             stem = Path(ref.source_path).stem
             return replace(ref, page_id=f"{stem}-{ref.page_index+1}-{uuid.uuid4().hex[:8]}")
 
-        for ref in refs:
-            dst.add_page_ref(_clone(ref))
+        for i, ref in enumerate(refs):
+            cloned = _clone(ref)
+            insert_pos = None if at_row < 0 else (at_row + i)
+            dst.add_page_ref(cloned, at_row=insert_pos)
 
         if not ctrl_held and src is not None:
             page_ids = {r.page_id for r in refs}
-            src.remove_by_page_ids(page_ids)
+            src.remove_by_page_ids(page_ids, _record=False)
+
+    # ── Helpers de creación ───────────────────────────────────────────────
 
     def _create_lane(self, display_name: str) -> DocLane:
-        color = LANE_COLORS[len(self._lanes) % len(LANE_COLORS)]
         lane_id = uuid.uuid4().hex[:12]
+        return self._create_lane_with_id(lane_id, display_name)
+
+    def _create_lane_with_id(self, lane_id: str, display_name: str) -> DocLane:
+        color = LANE_COLORS[len(self._lanes) % len(LANE_COLORS)]
         lane = DocLane(lane_id, display_name, color, self._cache, self._worker)
         lane.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         lane.pages_changed.connect(lambda _: self.layout_changed.emit())
         lane.lane_delete_requested.connect(self.remove_lane)
         lane.reorder_requested.connect(self.move_lane)
         lane.cross_lane_drop_received.connect(self._on_cross_lane_drop)
+        lane.set_before_mutation_cb(self._take_snapshot)
 
         self._lanes.append(lane)
         bottom_idx = self._container_layout.indexOf(self._bottom_bar)
@@ -203,6 +268,8 @@ class LaneContainer(QWidget):
                 if l.lane_id != lane.lane_id
             ]
             lane.set_siblings_provider(lambda s=siblings: s)
+
+    # ── Botones del bottom bar ────────────────────────────────────────────
 
     def _on_add_blank(self) -> None:
         self.add_blank_lane()

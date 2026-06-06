@@ -346,22 +346,35 @@ class ShellWindow(QMainWindow):
     # ------------------------------------------------------------------ #
 
     def closeEvent(self, event) -> None:
-        """Limpia workers activos antes de cerrar para evitar procesos huérfanos."""
+        """Cancela workers activos y espera terminación antes de cerrar."""
+        threads_to_wait = []
+
         for widget in self._tool_widgets.values():
-            # OCR y otros tools exponen _shutdown_worker() para limpiar
+            # Herramientas con shutdown explícito (OCR, etc.)
             shutdown = getattr(widget, "_shutdown_worker", None)
             if callable(shutdown):
                 try:
                     shutdown()
                 except Exception:
                     pass
-            # Workers genéricos con cancel()
+
+            # Patrón legado: _worker + _worker_thread separados
             worker = getattr(widget, "_worker", None)
             if worker and callable(getattr(worker, "cancel", None)):
                 try:
                     worker.cancel()
                 except Exception:
                     pass
+
+            thread = getattr(widget, "_worker_thread", None)
+            if thread is not None and hasattr(thread, "isRunning") and thread.isRunning():
+                threads_to_wait.append(thread)
+
+        # Esperar terminación de todos los threads (máximo 3s por thread)
+        for t in threads_to_wait:
+            if hasattr(t, "wait"):
+                t.wait(3000)
+
         event.accept()
 
     # ------------------------------------------------------------------ #

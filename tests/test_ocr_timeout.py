@@ -17,7 +17,7 @@ def test_ocr_timeout_retorna_vacio_si_excede(app):
     from core.document_classifier_engine import _ocr_page_text_with_timeout
 
     def slow_ocr(page):
-        time.sleep(60)
+        time.sleep(3)
         return "texto"
 
     with patch(

@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QCheckBox, QProgressBar,
     QGridLayout, QComboBox, QScrollArea, QLineEdit,
     QRadioButton, QButtonGroup, QAbstractItemView,
+    QMenu, QDialog,
 )
 
 from core.signature_engine import (
@@ -413,6 +414,7 @@ class FirmadorWindow(PipelineWindow):
         self._active_uid: Optional[str] = None
         self._placements: Dict[str, Dict[Optional[str], Tuple[float,float,float,float,float]]] = {}
         self._sig_disabled: Dict[str, Set[str]] = {}
+        self._sig_page_exclusions: Dict[str, Dict[str, Set[int]]] = {}  # uid → doc_path → {page_0based}
         self._doc_page_sizes: Dict[str, Tuple[float, float]] = {}
         self._updating_sig_list: bool = False
         self._updating_options: bool = False
@@ -816,6 +818,7 @@ class FirmadorWindow(PipelineWindow):
         self.preview.sig_placement_changed.connect(self._on_placement_changed)
         self.preview.item_activated.connect(self._on_item_activated)
         self.preview.pageChanged.connect(self._on_page_changed)
+        self.preview.sig_context_requested.connect(self._on_sig_context_menu)
         self._canvas_stack.addWidget(self.preview)  # idx 0
 
         # Empty state
@@ -2459,6 +2462,8 @@ class FirmadorWindow(PipelineWindow):
             self._placements[uid].pop(doc_path, None)
         for uid in self._sig_disabled:
             self._sig_disabled[uid].discard(doc_path)
+        for uid in self._sig_page_exclusions:
+            self._sig_page_exclusions[uid].pop(doc_path, None)
         self._doc_page_sizes.pop(doc_path, None)
         self._page_interval_specific.discard(doc_path)
         self._page_interval_texts.pop(doc_path, None)
@@ -2655,6 +2660,125 @@ class FirmadorWindow(PipelineWindow):
 
     def _on_page_changed(self, cur: int, total: int) -> None:
         self._update_status_bar()
+        self._refresh_page_exclusion_view()
+
+    # ================================================================== #
+    # Paso 02: Exclusión de páginas por firma (click derecho)
+    # ================================================================== #
+
+    def _get_excluded_uids_for_page(self, doc_path: str, page_idx: int) -> set:
+        result = set()
+        for uid, doc_map in self._sig_page_exclusions.items():
+            if page_idx in doc_map.get(doc_path, set()):
+                result.add(uid)
+        return result
+
+    def _refresh_page_exclusion_view(self) -> None:
+        if self._active_doc_idx < 0:
+            self.preview.refresh_page_exclusions(set())
+            return
+        doc_path = self.pdf_paths[self._active_doc_idx]
+        cur_page = self.preview.current_page()
+        excluded_uids = self._get_excluded_uids_for_page(doc_path, cur_page)
+        self.preview.refresh_page_exclusions(excluded_uids)
+
+    def _on_exclude_current_page(self, uid: str, page_idx: int) -> None:
+        if self._active_doc_idx < 0:
+            return
+        doc_path = self.pdf_paths[self._active_doc_idx]
+        doc_map = self._sig_page_exclusions.setdefault(uid, {})
+        page_set = doc_map.setdefault(doc_path, set())
+        if page_idx in page_set:
+            page_set.discard(page_idx)
+        else:
+            page_set.add(page_idx)
+        self._refresh_page_exclusion_view()
+        self._update_status_bar()
+
+    def _on_exclude_interval_dialog(self, uid: str) -> None:
+        if self._active_doc_idx < 0:
+            return
+        doc_path = self.pdf_paths[self._active_doc_idx]
+        total = self._page_count_for_doc(doc_path)
+        entry = self._entry_for_uid(uid)
+        dlg = _PageExclusionDialog(
+            uid, entry.label if entry else uid, total, parent=self
+        )
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        new_pages = set(dlg.selected_pages())
+        self._sig_page_exclusions.setdefault(uid, {})[doc_path] = new_pages
+        self._refresh_page_exclusion_view()
+        self._update_status_bar()
+
+    def _on_restore_sig_exclusions(self, uid: str) -> None:
+        if self._active_doc_idx < 0:
+            return
+        doc_path = self.pdf_paths[self._active_doc_idx]
+        self._sig_page_exclusions.get(uid, {}).pop(doc_path, None)
+        self._refresh_page_exclusion_view()
+        self._update_status_bar()
+
+    def _on_sig_context_menu(self, uid: str, page_idx: int, pos: object) -> None:
+        if self._active_doc_idx < 0:
+            return
+        doc_path = self.pdf_paths[self._active_doc_idx]
+        entry = self._entry_for_uid(uid)
+        label = entry.label if entry else uid
+
+        excl_set = self._sig_page_exclusions.get(uid, {}).get(doc_path, set())
+        excluded_now = page_idx in excl_set
+        any_excluded = bool(excl_set)
+
+        menu = QMenu(self)
+        menu.setStyleSheet(
+            "QMenu {"
+            "  background-color: #1E1E26;"
+            "  border: 1px solid #32323C;"
+            "  border-radius: 6px;"
+            "  padding: 4px 0;"
+            "  color: #ECEDEE;"
+            "  font-size: 12px;"
+            "}"
+            "QMenu::item {"
+            "  padding: 6px 20px 6px 14px;"
+            "  border-radius: 4px;"
+            "  margin: 1px 4px;"
+            "}"
+            "QMenu::item:selected {"
+            "  background-color: #2E2E3A;"
+            "}"
+            "QMenu::item:disabled {"
+            "  color: #5A5A6A;"
+            "}"
+            "QMenu::separator {"
+            "  height: 1px;"
+            "  background-color: #32323C;"
+            "  margin: 3px 8px;"
+            "}"
+        )
+
+        header_act = menu.addAction(f"  {label}  ·  pág. {page_idx + 1}")
+        header_act.setEnabled(False)
+        menu.addSeparator()
+
+        if excluded_now:
+            toggle_act = menu.addAction("✓  Volver a firmar esta página")
+        else:
+            toggle_act = menu.addAction("✕  No firmar esta página")
+
+        interval_act = menu.addAction("Excluir intervalo de páginas…")
+        menu.addSeparator()
+        restore_act = menu.addAction("Restaurar exclusiones")
+        restore_act.setEnabled(any_excluded)
+
+        chosen = menu.exec(pos)
+        if chosen == toggle_act:
+            self._on_exclude_current_page(uid, page_idx)
+        elif chosen == interval_act:
+            self._on_exclude_interval_dialog(uid)
+        elif chosen == restore_act:
+            self._on_restore_sig_exclusions(uid)
 
     def _update_status_bar(self) -> None:
         n = self.preview.page_count()
@@ -2684,6 +2808,18 @@ class FirmadorWindow(PipelineWindow):
         r = entry.color.red()
         g = entry.color.green()
         b = entry.color.blue()
+        badge = ""
+        if self._active_doc_idx >= 0:
+            doc_path = self.pdf_paths[self._active_doc_idx]
+            excl = self._sig_page_exclusions.get(entry.uid, {}).get(doc_path, set())
+            if excl:
+                n_excl = len(excl)
+                pg_word = "página excluida" if n_excl == 1 else "páginas excluidas"
+                badge = (
+                    f"&nbsp;&nbsp;<span style='background:#3A1212; color:#E5484D;"
+                    f" border-radius:4px; padding:2px 7px; font-size:11px;'>"
+                    f"✕&nbsp;{n_excl}&nbsp;{pg_word}</span>"
+                )
         self._sb_sig_info.setText(
             f"<b style='color:rgb({r},{g},{b});'>{entry.label}</b>"
             f"&nbsp;&nbsp;·&nbsp;&nbsp;"
@@ -2691,6 +2827,7 @@ class FirmadorWindow(PipelineWindow):
             f"&nbsp;&nbsp;·&nbsp;&nbsp;"
             f"{w_pt:.0f}&thinsp;×&thinsp;{h_pt:.0f}&nbsp;pt"
             f"&nbsp;&nbsp;·&nbsp;&nbsp;{angle:+.1f}°"
+            f"{badge}"
         )
 
     # ================================================================== #
@@ -2841,6 +2978,9 @@ class FirmadorWindow(PipelineWindow):
                     base_width_pt=w_frac * page_w_pt,
                     base_height_pt=h_frac * page_h_pt,
                     base_angle=angle,
+                    excluded_pages=frozenset(
+                        self._sig_page_exclusions.get(e.uid, {}).get(pdf_path, set())
+                    ),
                 ))
 
             if sig_placements:
@@ -2999,6 +3139,7 @@ class FirmadorWindow(PipelineWindow):
         self.sigs_list.clear()
         self._placements.clear()
         self._sig_disabled.clear()
+        self._sig_page_exclusions.clear()
         self._doc_page_sizes.clear()
         self._page_interval_texts.clear()
         self._page_interval_specific.clear()
@@ -3038,3 +3179,99 @@ class FirmadorWindow(PipelineWindow):
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
         self._docs_card.add_paths(paths)
         self._switch_section(0)
+
+
+# ====================================================================== #
+#  Diálogo de exclusión por intervalo
+# ====================================================================== #
+
+class _PageExclusionDialog(QDialog):
+    """Mini-dialog for selecting page intervals to exclude from signing."""
+
+    def __init__(
+        self, uid: str, sig_label: str, total_pages: int, parent=None
+    ) -> None:
+        super().__init__(parent)
+        self._uid = uid
+        self._total_pages = total_pages
+        self._pages: List[int] = []
+
+        self.setWindowTitle("Excluir intervalo de páginas")
+        self.setMinimumWidth(420)
+        self.setModal(True)
+        self.setWindowFlags(
+            self.windowFlags() & ~Qt.WindowType.WindowContextHelpButtonHint
+        )
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(14)
+
+        title = QLabel(f"Excluir páginas de:  <b>{sig_label}</b>")
+        title.setStyleSheet("font-size:14px; color:#ECEDEE;")
+        layout.addWidget(title)
+
+        hint = QLabel(
+            f"Ingresa las páginas o intervalos a <b>no firmar</b> en este documento "
+            f"({total_pages} páginas).<br>"
+            f"Ej:&nbsp;&nbsp;<code>1</code>&nbsp;&nbsp;<code>3-5</code>&nbsp;&nbsp;"
+            f"<code>8, 10-última</code>&nbsp;&nbsp;<code>pares</code>"
+        )
+        hint.setStyleSheet("color:#9094A0; font-size:12px;")
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("Ej. 1-3, 5, 8-final")
+        self._edit.setClearButtonEnabled(True)
+        self._edit.textChanged.connect(self._validate)
+        layout.addWidget(self._edit)
+
+        self._status_lbl = QLabel("Ingresa páginas o un intervalo para excluir.")
+        self._status_lbl.setStyleSheet("font-size:12px; color:#9094A0;")
+        self._status_lbl.setWordWrap(True)
+        layout.addWidget(self._status_lbl)
+
+        btns = QHBoxLayout()
+        btns.setSpacing(10)
+        btns.addStretch()
+
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setProperty("class", "Ghost")
+        cancel_btn.clicked.connect(self.reject)
+        btns.addWidget(cancel_btn)
+
+        self._ok_btn = QPushButton("Excluir páginas")
+        self._ok_btn.setProperty("class", "Danger")
+        self._ok_btn.setEnabled(False)
+        self._ok_btn.clicked.connect(self.accept)
+        btns.addWidget(self._ok_btn)
+        layout.addLayout(btns)
+
+        self._edit.setFocus()
+
+    def _validate(self, text: str) -> None:
+        if not text.strip():
+            self._status_lbl.setText("Ingresa páginas o un intervalo para excluir.")
+            self._status_lbl.setStyleSheet("font-size:12px; color:#9094A0;")
+            self._ok_btn.setEnabled(False)
+            self._pages = []
+            return
+        try:
+            pages = parse_page_intervals(text, self._total_pages)
+            count = len(pages)
+            compact = compact_page_intervals(pages)
+            pg_word = "página" if count == 1 else "páginas"
+            self._status_lbl.setText(f"{count} {pg_word} a excluir: {compact}")
+            self._status_lbl.setStyleSheet("font-size:12px; color:#3BD37C;")
+            self._ok_btn.setEnabled(True)
+            self._pages = pages
+        except ValueError as exc:
+            self._status_lbl.setText(str(exc))
+            self._status_lbl.setStyleSheet("font-size:12px; color:#E5484D;")
+            self._ok_btn.setEnabled(False)
+            self._pages = []
+
+    def selected_pages(self) -> List[int]:
+        return list(self._pages)

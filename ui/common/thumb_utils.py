@@ -7,10 +7,11 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen
 
 
-def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QPixmap]:
+def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QImage]:
     """Renderiza la primera página del PDF como thumbnail.
 
     Retorna None si el archivo no se puede abrir o no es un PDF válido.
+    Retorna QImage (seguro en cualquier hilo) — convertir a QPixmap en el GUI thread.
     """
     try:
         import fitz
@@ -25,7 +26,7 @@ def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QPixmap]:
         data = img.tobytes("raw", "RGBA")
         qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
         doc.close()
-        return QPixmap.fromImage(qimg.copy())
+        return qimg.copy()   # QImage — seguro en cualquier hilo
     except Exception:
         return None
 
@@ -50,11 +51,12 @@ class ThumbnailLoader(QObject):
     """Cargador asíncrono de thumbnails PDF.
 
     Signals:
-        ready(str, QPixmap | None): Emitida con (path, pixmap) cuando termina.
-            pixmap es None si el archivo no se pudo procesar.
+        ready(str, QImage | None): Emitida con (path, image) cuando termina.
+            image es None si el archivo no se pudo procesar.
+            Convertir a QPixmap en el slot receptor (GUI thread).
     """
 
-    ready = pyqtSignal(str, object)  # (path, QPixmap | None)
+    ready = pyqtSignal(str, object)  # (path, QImage | None)
 
     def __init__(self, pdf_path: str, width: int = 72) -> None:
         super().__init__()

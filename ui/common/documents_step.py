@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QSize, QEvent
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QKeyEvent
+from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QStackedWidget,
@@ -453,12 +453,16 @@ class DocumentsCard(QFrame):
         thread.start()
 
     def _apply_thumb(self, item: "QListWidgetItem", pix) -> None:
-        """Actualiza icono del item si aún existe en la lista."""
+        """Actualiza icono del item si aún existe en la lista.
+
+        pix es QImage (generado en hilo secundario); se convierte a QPixmap
+        aquí en el GUI thread antes de pasarlo a QIcon.
+        """
         if pix is None:
             return
         for i in range(self.list_widget.count()):
             if self.list_widget.item(i) is item:
-                item.setIcon(QIcon(pix))
+                item.setIcon(QIcon(QPixmap.fromImage(pix)))
                 return
 
     # ------------------------------------------------------------------ #

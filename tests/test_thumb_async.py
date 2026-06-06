@@ -30,8 +30,9 @@ def test_thumbnail_loader_archivo_invalido_emite_none(app):
     assert received[0][0] == "/ruta/que/no/existe.pdf"
     assert received[0][1] is None
 
-def test_thumbnail_loader_pdf_valido_emite_pixmap(app, tmp_path):
+def test_thumbnail_loader_pdf_valido_emite_qimage(app, tmp_path):
     import fitz
+    from PyQt6.QtGui import QImage
     from ui.common.thumb_utils import ThumbnailLoader
     pdf_path = str(tmp_path / "test.pdf")
     doc = fitz.open()
@@ -43,4 +44,4 @@ def test_thumbnail_loader_pdf_valido_emite_pixmap(app, tmp_path):
     loader.ready.connect(lambda path, pix: received.append((path, pix)))
     loader.run()
     assert len(received) == 1
-    assert received[0][1] is not None
+    assert isinstance(received[0][1], QImage)

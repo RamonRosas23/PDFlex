@@ -147,5 +147,34 @@ class ThumbnailCacheTests(unittest.TestCase):
             self.assertIsNotNone(cache.get(key))
 
 
+class PageMimeTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_encode_decode_round_trip(self) -> None:
+        from ui.organizador.page_mime import encode_drag, decode_drag
+        from core.page_organizer_engine import PageRef
+        refs = [
+            PageRef(source_path="/doc/a.pdf", page_index=0, rotation_deg=0, page_id="p1"),
+            PageRef(source_path="/doc/a.pdf", page_index=2, rotation_deg=90, page_id="p2"),
+        ]
+        mime = encode_drag("lane-abc", refs)
+        result = decode_drag(mime)
+        self.assertIsNotNone(result)
+        lane_id, decoded_refs = result
+        self.assertEqual(lane_id, "lane-abc")
+        self.assertEqual(len(decoded_refs), 2)
+        self.assertEqual(decoded_refs[0].page_id, "p1")
+        self.assertEqual(decoded_refs[1].rotation_deg, 90)
+
+    def test_decode_returns_none_for_foreign_mime(self) -> None:
+        from ui.organizador.page_mime import decode_drag
+        from PyQt6.QtCore import QMimeData
+        mime = QMimeData()
+        mime.setText("hello")
+        self.assertIsNone(decode_drag(mime))
+
+
 if __name__ == "__main__":
     unittest.main()

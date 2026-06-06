@@ -1,10 +1,11 @@
 """Reusable image results viewer for PDFlex tools."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
@@ -14,14 +15,21 @@ from PyQt6.QtWidgets import (
 from ui.common.file_dialogs import get_save_file_name
 from ui.common.icons import icon, set_button_icon
 from ui.common.result_ui import ElidedLabel, configure_result_list
-from ui.common.save_utils import save_files_as_batch
+from ui.common.save_utils import save_files_as_batch, save_grouped_files_as_batch
+
+
+@dataclass
+class _ResultGroup:
+    doc_name: str      # e.g. "contrato.pdf"
+    output_dir: str    # per-doc temp subfolder path
+    results: list      # List[ImageResult]
 
 
 class ImageResultsViewer(QWidget):
     """List and preview image outputs with save/open actions.
 
     Accepts any result object with ``output_path``, ``success`` and ``error``
-    attributes.
+    attributes.  Also accepts grouped results via ``set_grouped_results``.
     """
 
     openInExplorer = pyqtSignal(str)
@@ -31,6 +39,11 @@ class ImageResultsViewer(QWidget):
         self._list_title = list_title
         self._results: list = []
         self._source_dirs: list = []
+        # Grouped-mode state
+        self._grouped: bool = False
+        self._flat_results: list = []
+        self._row_map: list = []   # per list row: None = header, int = idx into _flat_results
+        self._groups: list = []    # List[_ResultGroup]
         self._build()
 
     def _build(self) -> None:
@@ -116,7 +129,15 @@ class ImageResultsViewer(QWidget):
 
         layout.addWidget(right, 1)
 
+    # ------------------------------------------------------------------ #
+    # Public API — flat results (backward compat)
+    # ------------------------------------------------------------------ #
+
     def set_results(self, results: list) -> None:
+        self._grouped = False
+        self._flat_results = []
+        self._row_map = []
+        self._groups = []
         self._results = list(results)
         self._source_dirs = []
         self.file_list.clear()
@@ -134,9 +155,78 @@ class ImageResultsViewer(QWidget):
         else:
             self.clear_results()
 
+    # ------------------------------------------------------------------ #
+    # Public API — grouped results (PDF-to-Images multi-doc)
+    # ------------------------------------------------------------------ #
+
+    def set_grouped_results(self, job_results: list) -> None:
+        """Display results grouped by source PDF document.
+
+        Accepts List[PdfToImagesJobResult].  Renders non-selectable group
+        header items followed by indented image entries per document.
+        """
+        self._grouped = True
+        self._groups = []
+        self._flat_results = []
+        self._row_map = []
+        self._results = []
+        self._source_dirs = []
+
+        self.file_list.clear()
+
+        for job_result in job_results:
+            doc_name = Path(job_result.job.pdf_path).name
+            out_dir = str(job_result.job.output_dir)
+            group_results = list(job_result.image_results)
+            self._groups.append(_ResultGroup(doc_name, out_dir, group_results))
+
+            success_count = sum(
+                1 for r in group_results if getattr(r, "success", False)
+            )
+            img_word = "imagen" if success_count == 1 else "imágenes"
+
+            # ── Group header (non-selectable) ────────────────────────────
+            header = QListWidgetItem()
+            header.setText(f"  {doc_name}  ·  {success_count} {img_word}")
+            header.setIcon(icon("file-text", "#9094A0", 13))
+            header.setFlags(Qt.ItemFlag.NoItemFlags)
+            header.setSizeHint(QSize(200, 26))
+            header.setForeground(QBrush(QColor("#9094A0")))
+            header.setBackground(QBrush(QColor("#1A1A20")))
+            font = header.font()
+            font.setPointSize(9)
+            header.setFont(font)
+            self.file_list.addItem(header)
+            self._row_map.append(None)
+
+            # ── Result items ─────────────────────────────────────────────
+            for r in group_results:
+                out = getattr(r, "output_path", "") or ""
+                name = "   " + Path(out).name if out else "   (error)"
+                item = QListWidgetItem(name)
+                item.setToolTip(out or name.strip())
+                if not getattr(r, "success", False):
+                    item.setForeground(QBrush(QColor("#E5484D")))
+                    item.setIcon(icon("warning", "#E5484D", 16))
+                self.file_list.addItem(item)
+                self._row_map.append(len(self._flat_results))
+                self._flat_results.append(r)
+
+        if self._flat_results:
+            for i, v in enumerate(self._row_map):
+                if v is not None:
+                    self.file_list.setCurrentRow(i)
+                    break
+        else:
+            self.clear_results()
+
     def clear_results(self) -> None:
         self._results = []
         self._source_dirs = []
+        self._grouped = False
+        self._flat_results = []
+        self._row_map = []
+        self._groups = []
         self.file_list.clear()
         self.preview_lbl.clear()
         self.meta_lbl.setText("")
@@ -150,11 +240,42 @@ class ImageResultsViewer(QWidget):
         """Associate one source directory per result for Save As defaults."""
         self._source_dirs = list(dirs)
 
+    # ------------------------------------------------------------------ #
+    # Internal helpers
+    # ------------------------------------------------------------------ #
+
+    def _result_at_row(self, row: int):
+        """Returns the ImageResult at the given list row, or None (header / OOB)."""
+        if not self._grouped:
+            if 0 <= row < len(self._results):
+                return self._results[row]
+            return None
+        if 0 <= row < len(self._row_map):
+            idx = self._row_map[row]
+            if idx is not None and 0 <= idx < len(self._flat_results):
+                return self._flat_results[idx]
+        return None
+
+    # ------------------------------------------------------------------ #
+    # Slots
+    # ------------------------------------------------------------------ #
+
     def _on_file_selected(self) -> None:
         row = self.file_list.currentRow()
-        if row < 0 or row >= len(self._results):
+        if row < 0:
             return
-        r = self._results[row]
+        r = self._result_at_row(row)
+        if r is None:
+            # Header row — clear preview, keep save-all enabled if possible
+            self.title_lbl.setText("Selecciona un archivo")
+            self.meta_lbl.setText("")
+            self.preview_lbl.clear()
+            self.open_file_btn.setEnabled(False)
+            self.open_btn.setEnabled(False)
+            self.save_as_btn.setEnabled(False)
+            self.save_all_btn.setEnabled(self._has_saveable_results())
+            return
+
         out = getattr(r, "output_path", "") or ""
         if not getattr(r, "success", False) or not out:
             self.title_lbl.setText("Error en este archivo")
@@ -203,9 +324,10 @@ class ImageResultsViewer(QWidget):
             self._on_file_selected()
 
     def _saveable_paths(self) -> List[str]:
+        source = self._flat_results if self._grouped else self._results
         return [
             getattr(r, "output_path", "")
-            for r in self._results
+            for r in source
             if (
                 getattr(r, "success", False)
                 and getattr(r, "output_path", "")
@@ -218,17 +340,15 @@ class ImageResultsViewer(QWidget):
 
     def _on_save_as(self) -> None:
         row = self.file_list.currentRow()
-        if row < 0 or row >= len(self._results):
+        if row < 0:
             return
-        r = self._results[row]
+        r = self._result_at_row(row)
+        if r is None:
+            return
         out = getattr(r, "output_path", "") or ""
         if not getattr(r, "success", False) or not out or not Path(out).exists():
             return
-        src_dir = (
-            self._source_dirs[row]
-            if row < len(self._source_dirs)
-            else str(Path(out).parent)
-        )
+        src_dir = str(Path(out).parent)
         suffix = Path(out).suffix.lower()
         filter_map = {
             ".png": "PNG (*.png)",
@@ -248,6 +368,29 @@ class ImageResultsViewer(QWidget):
             shutil.copy2(out, new_path)
 
     def _on_save_all(self) -> None:
+        if self._grouped:
+            groups: list[tuple[str, list[str]]] = []
+            for g in self._groups:
+                paths = [
+                    getattr(r, "output_path", "")
+                    for r in g.results
+                    if (
+                        getattr(r, "success", False)
+                        and getattr(r, "output_path", "")
+                        and Path(getattr(r, "output_path", "")).exists()
+                    )
+                ]
+                if paths:
+                    stem = Path(g.output_dir).name
+                    groups.append((stem, paths))
+            save_grouped_files_as_batch(
+                self,
+                groups,
+                title="Guardar todo",
+                start_dir=str(Path.home()),
+            )
+            return
+
         row = self.file_list.currentRow()
         start_dir = (
             self._source_dirs[row]
@@ -263,17 +406,18 @@ class ImageResultsViewer(QWidget):
 
     def _on_open_file(self) -> None:
         row = self.file_list.currentRow()
-        if 0 <= row < len(self._results):
-            out = getattr(self._results[row], "output_path", "") or ""
+        r = self._result_at_row(row)
+        if r is not None:
+            out = getattr(r, "output_path", "") or ""
             if out and Path(out).exists():
                 from PyQt6.QtCore import QUrl
                 from PyQt6.QtGui import QDesktopServices
-
                 QDesktopServices.openUrl(QUrl.fromLocalFile(out))
 
     def _on_open(self) -> None:
         row = self.file_list.currentRow()
-        if 0 <= row < len(self._results):
-            out = getattr(self._results[row], "output_path", "") or ""
+        r = self._result_at_row(row)
+        if r is not None:
+            out = getattr(r, "output_path", "") or ""
             if out:
                 self.openInExplorer.emit(out)

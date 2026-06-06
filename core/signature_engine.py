@@ -47,6 +47,7 @@ class SigPlacement:
     base_width_pt: float     # ancho en puntos PDF
     base_height_pt: float    # alto en puntos PDF
     base_angle: float = 0.0  # ángulo base en grados
+    excluded_pages: frozenset = field(default_factory=frozenset)  # 0-based indices a omitir
 
 
 @dataclass
@@ -134,6 +135,8 @@ class SignatureEngine:
                 for page_idx in target_pages:
                     page = doc[page_idx]
                     for sig_conf in job.signatures:
+                        if page_idx in sig_conf.excluded_pages:
+                            continue
                         desired = self._desired_placement(
                             sig_conf,
                             page.rect.width,
@@ -183,6 +186,8 @@ class SignatureEngine:
                 occupied_rects: List[fitz.Rect] = []
 
                 for sig_conf in job.signatures:
+                    if page_idx in sig_conf.excluded_pages:
+                        continue
                     base_img = self._get_image(sig_conf.signature_path)
                     placement, variation = self._compute_placement(
                         sig_conf, analysis, job.pdf_path, page_idx, occupied_rects,

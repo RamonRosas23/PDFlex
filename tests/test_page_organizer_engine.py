@@ -118,6 +118,38 @@ class MultiOrganizerEngineTests(unittest.TestCase):
             self.assertEqual(doc.page_count, 3)
             doc.close()
 
+    def test_run_multi_job_cancel_stops_early(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdf_a = self._make_pdf(root / "a.pdf", ["A1"])
+            pdf_b = self._make_pdf(root / "b.pdf", ["B1"])
+            pdf_c = self._make_pdf(root / "c.pdf", ["C1"])
+            out_a = root / "out" / "a.pdf"
+            out_b = root / "out" / "b.pdf"
+            out_c = root / "out" / "c.pdf"
+
+            call_count = [0]
+
+            def should_cancel():
+                call_count[0] += 1
+                # Cancel before the second lane starts
+                return call_count[0] > 1
+
+            job = MultiOrganizerJob(
+                lanes=[
+                    OrganizerJob(pages=[PageRef(str(pdf_a), 0)], output_path=str(out_a)),
+                    OrganizerJob(pages=[PageRef(str(pdf_b), 0)], output_path=str(out_b)),
+                    OrganizerJob(pages=[PageRef(str(pdf_c), 0)], output_path=str(out_c)),
+                ],
+                merge_all=False,
+            )
+            result = PageOrganizerEngine().run_multi_job(job, should_cancel=should_cancel)
+
+            self.assertFalse(result.success)
+            self.assertIn("cancelad", result.error.lower())
+            # Only the first lane ran before cancel
+            self.assertLess(len(result.results), 3)
+
     @staticmethod
     def _make_pdf(path: Path, labels: list[str]) -> Path:
         doc = fitz.open()

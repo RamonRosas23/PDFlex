@@ -45,7 +45,7 @@ class MultiOrganizerJob:
 class MultiOrganizerResult:
     results: List[OrganizerResult]
     merged_output_path: str = ""
-    success: bool = True
+    success: bool = False
     error: str = ""
 
 

@@ -3,7 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtGui import QPixmap, QImage
+from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen
 
 
 def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QPixmap]:
@@ -27,3 +28,39 @@ def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QPixmap]:
         return QPixmap.fromImage(qimg.copy())
     except Exception:
         return None
+
+
+def make_placeholder_pixmap(width: int, height: int) -> QPixmap:
+    """Crea un QPixmap placeholder gris para usar mientras se genera el thumbnail.
+
+    Fondo #2A2A33 con borde #444454.
+    """
+    pix = QPixmap(width, height)
+    pix.fill(QColor("#2A2A33"))
+    painter = QPainter(pix)
+    pen = QPen(QColor("#444454"))
+    pen.setWidth(1)
+    painter.setPen(pen)
+    painter.drawRect(0, 0, width - 1, height - 1)
+    painter.end()
+    return pix
+
+
+class ThumbnailLoader(QObject):
+    """Cargador asíncrono de thumbnails PDF.
+
+    Signals:
+        ready(str, QPixmap | None): Emitida con (path, pixmap) cuando termina.
+            pixmap es None si el archivo no se pudo procesar.
+    """
+
+    ready = pyqtSignal(str, object)  # (path, QPixmap | None)
+
+    def __init__(self, pdf_path: str, width: int = 72) -> None:
+        super().__init__()
+        self._pdf_path = pdf_path
+        self._width = width
+
+    def run(self) -> None:
+        pix = make_pdf_thumb(self._pdf_path, self._width)
+        self.ready.emit(self._pdf_path, pix)

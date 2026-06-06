@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
     QListWidget, QListWidgetItem, QStackedWidget,
 )
 
-from ui.common.thumb_utils import make_pdf_thumb
+from ui.common.thumb_utils import make_pdf_thumb, ThumbnailLoader, make_placeholder_pixmap
 from ui.common.icons import make_icon_label, set_button_icon
 from ui.common.dialogs import show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
@@ -71,6 +71,7 @@ class DocumentsCard(QFrame):
         self._conv_thread: Optional[QThread] = None
         self._conv_worker = None
         self._conv_dlg = None
+        self._thumb_threads: list = []  # threads de generación de thumbnails activos
 
         self._build(allow_reorder)
 
@@ -314,6 +315,40 @@ class DocumentsCard(QFrame):
     def count(self) -> int:
         return self.list_widget.count()
 
+    def reorder_paths(self, ordered_paths: List[str]) -> None:
+        """Reordena los documentos existentes segun una lista externa de paths."""
+        current = self.paths()
+        if not current:
+            return
+        current_set = set(current)
+        seen: set[str] = set()
+        normalized = []
+        for path in ordered_paths:
+            if path in current_set and path not in seen:
+                normalized.append(path)
+                seen.add(path)
+        normalized.extend(path for path in current if path not in seen)
+        if normalized == current:
+            return
+
+        self._paths = list(normalized)
+        self._path_set = set(normalized)
+        self.list_widget.clear()
+        for path in normalized:
+            item = QListWidgetItem(Path(path).name)
+            item.setData(Qt.ItemDataRole.UserRole, path)
+            item.setToolTip(path)
+            if self._show_thumbnails:
+                placeholder = make_placeholder_pixmap(self._thumb_w, self._thumb_h)
+                item.setIcon(QIcon(placeholder))
+                self.list_widget.addItem(item)
+                self._schedule_thumb(path, item)
+            else:
+                self.list_widget.addItem(item)
+        self._update_count()
+        self._update_remove_btn()
+        self.files_changed.emit(self.paths())
+
     def is_empty(self) -> bool:
         return self.list_widget.count() == 0
 
@@ -356,10 +391,12 @@ class DocumentsCard(QFrame):
                 item.setData(Qt.ItemDataRole.UserRole, p)
                 item.setToolTip(p)
                 if self._show_thumbnails:
-                    thumb = make_pdf_thumb(p, width=self._thumb_w)
-                    if thumb:
-                        item.setIcon(QIcon(thumb))
-                self.list_widget.addItem(item)
+                    placeholder = make_placeholder_pixmap(self._thumb_w, self._thumb_h)
+                    item.setIcon(QIcon(placeholder))
+                    self.list_widget.addItem(item)
+                    self._schedule_thumb(p, item)
+                else:
+                    self.list_widget.addItem(item)
                 changed = True
 
         if changed:
@@ -397,6 +434,32 @@ class DocumentsCard(QFrame):
 
     def _refresh_tray_btn(self) -> None:
         self._tray_btn.setVisible(self._ctx.tray.count() > 0)
+
+    def _schedule_thumb(self, pdf_path: str, item: "QListWidgetItem") -> None:
+        """Lanza generación de thumbnail en hilo secundario."""
+        from PyQt6.QtCore import QThread
+        loader = ThumbnailLoader(pdf_path, self._thumb_w)
+        thread = QThread(self)
+        loader.moveToThread(thread)
+        thread.started.connect(loader.run)
+        loader.ready.connect(lambda path, pix, _item=item: self._apply_thumb(_item, pix))
+        loader.ready.connect(thread.quit)
+        thread.finished.connect(loader.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(
+            lambda t=thread: self._thumb_threads.remove(t) if t in self._thumb_threads else None
+        )
+        self._thumb_threads.append(thread)
+        thread.start()
+
+    def _apply_thumb(self, item: "QListWidgetItem", pix) -> None:
+        """Actualiza icono del item si aún existe en la lista."""
+        if pix is None:
+            return
+        for i in range(self.list_widget.count()):
+            if self.list_widget.item(i) is item:
+                item.setIcon(QIcon(pix))
+                return
 
     # ------------------------------------------------------------------ #
     # Word → PDF

@@ -257,5 +257,99 @@ class DocLaneTests(unittest.TestCase):
             self.assertEqual(lane.count(), 0)
 
 
+from ui.organizador.lane_container import LaneContainer
+
+
+class LaneContainerTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_add_blank_lane_creates_empty_lane(self) -> None:
+        container = LaneContainer()
+        lane = container.add_blank_lane("Mi doc")
+        self.assertEqual(len(container.lanes()), 1)
+        self.assertEqual(lane.display_name, "Mi doc")
+        self.assertEqual(lane.count(), 0)
+        container.deleteLater()
+
+    def test_add_pdf_lane_populates_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "x.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            container = LaneContainer()
+            lane = container.add_lane_from_pdf(str(pdf))
+            self.assertEqual(lane.count(), 2)
+            container.deleteLater()
+
+    def test_cross_lane_move_removes_from_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "m.pdf"
+            doc = fitz.open()
+            for _ in range(3):
+                doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            container = LaneContainer()
+            src_lane = container.add_lane_from_pdf(str(pdf))
+            dst_lane = container.add_blank_lane("destino")
+
+            refs_to_move = src_lane.page_refs()[:2]
+            container._on_cross_lane_drop(
+                src_lane.lane_id, dst_lane.lane_id, refs_to_move, ctrl_held=False
+            )
+
+            self.assertEqual(src_lane.count(), 1)
+            self.assertEqual(dst_lane.count(), 2)
+            container.deleteLater()
+
+    def test_cross_lane_copy_keeps_source_intact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "c.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            container = LaneContainer()
+            src_lane = container.add_lane_from_pdf(str(pdf))
+            dst_lane = container.add_blank_lane("copia")
+
+            refs = src_lane.page_refs()
+            container._on_cross_lane_drop(
+                src_lane.lane_id, dst_lane.lane_id, refs, ctrl_held=True
+            )
+
+            self.assertEqual(src_lane.count(), 1)
+            self.assertEqual(dst_lane.count(), 1)
+            self.assertNotEqual(
+                src_lane.page_refs()[0].page_id,
+                dst_lane.page_refs()[0].page_id,
+            )
+            container.deleteLater()
+
+    def test_remove_lane_removes_widget(self) -> None:
+        container = LaneContainer()
+        lane = container.add_blank_lane("borrar")
+        container.remove_lane(lane.lane_id)
+        self.assertEqual(len(container.lanes()), 0)
+        container.deleteLater()
+
+    def test_move_lane_changes_order(self) -> None:
+        container = LaneContainer()
+        lane_a = container.add_blank_lane("A")
+        lane_b = container.add_blank_lane("B")
+        container.move_lane(lane_b.lane_id, -1)
+        names = [lane.display_name for lane in container.lanes()]
+        self.assertEqual(names, ["B", "A"])
+        container.deleteLater()
+
+
 if __name__ == "__main__":
     unittest.main()

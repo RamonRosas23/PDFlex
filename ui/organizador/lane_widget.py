@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 import fitz
-from PyQt6.QtCore import Qt, QEvent, QPoint, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QEvent, QPoint, QRect, QSize, pyqtSignal
 from PyQt6.QtGui import (
-    QColor, QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon,
-    QKeyEvent, QPixmap,
+    QBrush, QColor, QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent,
+    QFont, QIcon, QKeyEvent, QPainter, QPixmap,
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QLabel, QLineEdit,
@@ -40,6 +40,9 @@ LANE_COLORS: List[QColor] = [
     QColor(236, 72, 153),   # rosa
 ]
 
+_COLOR_MOVE = "#14B8A6"   # teal  — operación mover
+_COLOR_COPY = "#5E6AD2"   # índigo — operación copiar
+
 
 def _placeholder_pixmap() -> QPixmap:
     pix = QPixmap(THUMB_W, THUMB_H)
@@ -48,10 +51,10 @@ def _placeholder_pixmap() -> QPixmap:
 
 
 class _PageStrip(QListWidget):
-    """Horizontal QListWidget with custom drag/drop for intra- and cross-lane operations."""
+    """Horizontal QListWidget con drag/drop intra- y cross-lane mejorado."""
 
     cross_lane_drop_received = pyqtSignal(str, str, list, bool)  # src_id, dst_id, refs, ctrl
-    pdf_file_dropped = pyqtSignal(str)                           # file path
+    pdf_file_dropped = pyqtSignal(str)
     internal_reorder_done = pyqtSignal()
 
     def __init__(self, lane_id: str, parent=None) -> None:
@@ -70,11 +73,40 @@ class _PageStrip(QListWidget):
         self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
+        self.setDropIndicatorShown(False)  # usamos el nuestro
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.setDefaultDropAction(Qt.DropAction.MoveAction)
         self.viewport().setAcceptDrops(True)
         self.model().rowsMoved.connect(lambda *_: self.internal_reorder_done.emit())
+
+        # ── Indicador de posición de drop (línea vertical)
+        self._drop_indicator = QFrame(self.viewport())
+        self._drop_indicator.setFixedWidth(3)
+        self._drop_indicator.setStyleSheet(
+            f"background: {_COLOR_MOVE}; border-radius: 1px;"
+        )
+        self._drop_indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._drop_indicator.hide()
+
+        # ── Badge MOVER / COPIAR junto al indicador
+        self._mode_badge = QLabel(self.viewport())
+        self._mode_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._mode_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._mode_badge.hide()
+
+        # ── Hint de estado vacío (siempre presente, visible cuando count=0)
+        self._empty_hint = QLabel(self.viewport())
+        self._empty_hint.setText("Arrastra páginas aquí\no usa  + Agregar  en el encabezado")
+        self._empty_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_hint.setWordWrap(True)
+        self._empty_hint.setStyleSheet(
+            "color: #3A3E4A; font-size: 12px; background: transparent;"
+        )
+        self._empty_hint.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._empty_hint.setVisible(True)
+        self.viewport().installEventFilter(self)  # para resize del viewport
+
+    # ── Drag iniciado desde este strip ───────────────────────────────────
 
     def startDrag(self, supported_actions) -> None:
         selected_items = [
@@ -82,50 +114,94 @@ class _PageStrip(QListWidget):
             for i in range(self.count())
             if self.item(i) and self.item(i).isSelected()
         ]
-        selected_refs = [
-            item.data(Qt.ItemDataRole.UserRole) for item in selected_items
-        ]
+        selected_refs = [item.data(Qt.ItemDataRole.UserRole) for item in selected_items]
         if not selected_refs:
             return
+
         mime = encode_drag(self._lane_id, selected_refs)
         drag = QDrag(self)
         drag.setMimeData(mime)
-        # Mostrar miniatura de la primera página seleccionada como cursor de drag
-        if selected_items:
-            icon = selected_items[0].icon()
-            if not icon.isNull():
-                pix = icon.pixmap(QSize(THUMB_W // 2, THUMB_H // 2))
-                drag.setPixmap(pix)
-                drag.setHotSpot(QPoint(pix.width() // 2, pix.height() // 2))
+
+        pix = self._make_drag_pixmap(selected_items)
+        if pix:
+            drag.setPixmap(pix)
+            drag.setHotSpot(QPoint(pix.width() // 2, pix.height() // 2))
+
         drag.exec(Qt.DropAction.MoveAction | Qt.DropAction.CopyAction)
+
+    def _make_drag_pixmap(self, items: list) -> Optional[QPixmap]:
+        """Miniatura semitransparente con badge de conteo si hay múltiples páginas."""
+        if not items:
+            return None
+        icon = items[0].icon()
+        if icon.isNull():
+            return None
+
+        w, h = THUMB_W // 2, THUMB_H // 2
+        base = icon.pixmap(QSize(w, h))
+
+        # Con una sola página, devolvemos directo (semitransparente)
+        result = QPixmap(w, h)
+        result.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(result)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setOpacity(0.88)
+        painter.drawPixmap(0, 0, base)
+        painter.setOpacity(1.0)
+
+        if len(items) > 1:
+            # Badge de conteo en esquina inferior derecha
+            badge_w, badge_h = 34, 20
+            bx, by = w - badge_w - 2, h - badge_h - 2
+            painter.setBrush(QBrush(QColor(_COLOR_COPY)))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QRect(bx, by, badge_w, badge_h), 5, 5)
+            font = QFont()
+            font.setPixelSize(10)
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(QColor("white"))
+            painter.drawText(QRect(bx, by, badge_w, badge_h),
+                             Qt.AlignmentFlag.AlignCenter,
+                             f"+{len(items)}")
+
+        painter.end()
+        return result
+
+    # ── Eventos de drag sobre este strip (como destino) ───────────────────
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasFormat(MIME_TYPE) or event.mimeData().hasUrls():
             event.acceptProposedAction()
-            self._set_highlight(True)
+            ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            self._set_highlight(True, copy_mode=ctrl)
         else:
             event.ignore()
 
     def dragMoveEvent(self, event: QDragMoveEvent) -> None:
-        # El base QAbstractItemView rechaza MIME personalizados — debemos aceptar explícitamente
         if event.mimeData().hasFormat(MIME_TYPE) or event.mimeData().hasUrls():
             event.acceptProposedAction()
+            ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+            self._update_drop_ui(event.position().toPoint(), ctrl)
         else:
             event.ignore()
 
     def dragLeaveEvent(self, event) -> None:
         self._set_highlight(False)
+        self._drop_indicator.hide()
+        self._mode_badge.hide()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event: QDropEvent) -> None:
         self._set_highlight(False)
-        decoded = decode_drag(event.mimeData())
+        self._drop_indicator.hide()
+        self._mode_badge.hide()
 
+        decoded = decode_drag(event.mimeData())
         if decoded is not None:
             src_id, refs = decoded
             if src_id == self._lane_id:
-                target_item = self.itemAt(event.position().toPoint())
-                target_row = self.row(target_item) if target_item else self.count()
+                _, target_row = self._insertion_for_pos(event.position().toPoint())
                 self._reorder_to(refs, target_row)
             else:
                 ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
@@ -143,6 +219,62 @@ class _PageStrip(QListWidget):
 
         event.ignore()
 
+    # ── Helpers de drop UI ────────────────────────────────────────────────
+
+    def _update_drop_ui(self, pos: QPoint, copy_mode: bool) -> None:
+        """Actualiza indicador de posición y badge MOVER/COPIAR."""
+        color = _COLOR_COPY if copy_mode else _COLOR_MOVE
+        x, row = self._insertion_for_pos(pos)
+        h = self.viewport().height()
+
+        # Línea indicadora
+        self._drop_indicator.setStyleSheet(
+            f"background: {color}; border-radius: 1px;"
+        )
+        self._drop_indicator.setGeometry(x - 1, 2, 3, h - 4)
+        self._drop_indicator.show()
+        self._drop_indicator.raise_()
+
+        # Badge de modo
+        label = "COPIAR" if copy_mode else "MOVER"
+        self._mode_badge.setText(label)
+        self._mode_badge.setStyleSheet(f"""
+            QLabel {{
+                background: {color};
+                color: white;
+                font-size: 9px;
+                font-weight: 700;
+                border-radius: 4px;
+                padding: 2px 7px;
+                letter-spacing: 0.8px;
+            }}
+        """)
+        self._mode_badge.adjustSize()
+        bw = self._mode_badge.width()
+        bh = self._mode_badge.height()
+        bx = max(4, min(x - bw // 2, self.viewport().width() - bw - 4))
+        by = h - bh - 6
+        self._mode_badge.move(bx, by)
+        self._mode_badge.show()
+        self._mode_badge.raise_()
+
+        # Actualizar borde
+        self._set_highlight(True, copy_mode=copy_mode)
+
+    def _insertion_for_pos(self, pos: QPoint) -> Tuple[int, int]:
+        """Devuelve (x_pixel_en_viewport, row_index) para el indicador de drop."""
+        n = self.count()
+        if n == 0:
+            return 8, 0
+        for i in range(n):
+            rect = self.visualItemRect(self.item(i))
+            if not rect.isValid():
+                continue
+            if pos.x() <= rect.center().x():
+                return max(2, rect.left() - 4), i
+        last = self.visualItemRect(self.item(n - 1))
+        return last.right() + 2, n
+
     def _reorder_to(self, refs: List[PageRef], target_row: int) -> None:
         page_ids = {r.page_id for r in refs}
         moving_rows = sorted(
@@ -159,14 +291,17 @@ class _PageStrip(QListWidget):
             self.insertItem(adj + offset, item)
         self.internal_reorder_done.emit()
 
-    def _set_highlight(self, active: bool) -> None:
+    def _set_highlight(self, active: bool, copy_mode: bool = False) -> None:
         if active:
+            color = _COLOR_COPY if copy_mode else _COLOR_MOVE
+            bg_alpha = "0.07"
+            r, g, b = (94, 106, 210) if copy_mode else (20, 184, 166)
             self.setStyleSheet(
-                "QListWidget#DocLaneStrip {"
-                "  border: 2px solid #14B8A6;"
-                "  border-radius: 4px;"
-                "  background: rgba(20,184,166,0.06);"
-                "}"
+                f"QListWidget#DocLaneStrip {{"
+                f"  border: 2px solid {color};"
+                f"  border-radius: 4px;"
+                f"  background: rgba({r},{g},{b},{bg_alpha});"
+                f"}}"
             )
         else:
             self.setStyleSheet(
@@ -176,6 +311,24 @@ class _PageStrip(QListWidget):
                 "}"
             )
 
+    # ── Empty hint + resize ───────────────────────────────────────────────
+
+    def update_empty_state(self, count: int) -> None:
+        self._empty_hint.setVisible(count == 0)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self.viewport() and event.type() == QEvent.Type.Resize:
+            vr = self.viewport().rect()
+            margin = 12
+            self._empty_hint.setGeometry(
+                margin, margin,
+                vr.width() - margin * 2,
+                vr.height() - margin * 2,
+            )
+        return super().eventFilter(obj, event)
+
+    # ── Context menu ──────────────────────────────────────────────────────
+
     def contextMenuEvent(self, event) -> None:
         item = self.itemAt(event.pos())
         if item is None:
@@ -183,7 +336,7 @@ class _PageStrip(QListWidget):
         if item not in self.selectedItems():
             self.clearSelection()
             item.setSelected(True)
-        # _list está dentro de _strip_wrap, que está dentro de DocLane
+        # _list vive dentro de _strip_wrap → DocLane; subir la cadena
         p = self.parent()
         while p is not None:
             if hasattr(p, "_show_page_context_menu"):
@@ -192,13 +345,17 @@ class _PageStrip(QListWidget):
             p = p.parent()
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# DocLane
+# ─────────────────────────────────────────────────────────────────────────────
+
 class DocLane(QFrame):
-    """Header + horizontal page strip for one document in the organizer."""
+    """Header + horizontal page strip para un documento en el organizador."""
 
     pages_changed = pyqtSignal(str)                               # lane_id
     lane_delete_requested = pyqtSignal(str)                       # lane_id
     reorder_requested = pyqtSignal(str, int)                      # lane_id, direction
-    cross_lane_drop_received = pyqtSignal(str, str, list, bool)   # src_id, dst_id, refs, ctrl
+    cross_lane_drop_received = pyqtSignal(str, str, list, bool)   # src, dst, refs, ctrl
 
     def __init__(
         self,
@@ -239,16 +396,25 @@ class DocLane(QFrame):
 
         self._strip_wrap = QFrame()
         sw = QVBoxLayout(self._strip_wrap)
-        sw.setContentsMargins(8, 6, 8, 8)
-        sw.setSpacing(0)
+        sw.setContentsMargins(8, 6, 8, 4)
+        sw.setSpacing(2)
 
         self._list = _PageStrip(self._lane_id)
         self._list.internal_reorder_done.connect(lambda: self.pages_changed.emit(self._lane_id))
         self._list.cross_lane_drop_received.connect(self.cross_lane_drop_received)
         self._list.pdf_file_dropped.connect(self.add_pages_from_pdf)
         self._list.installEventFilter(self)
-
         sw.addWidget(self._list)
+
+        # Leyenda de atajos de teclado
+        self._shortcut_lbl = QLabel(
+            "Del · R rotar · Shift+R rotar ← · Ctrl+D duplicar · Ctrl+A seleccionar todo"
+        )
+        self._shortcut_lbl.setStyleSheet(
+            "color: #3A3E4A; font-size: 10px; background: transparent; padding: 0 4px 2px 4px;"
+        )
+        sw.addWidget(self._shortcut_lbl)
+
         layout.addWidget(self._strip_wrap)
 
     def _build_header(self) -> QFrame:
@@ -311,6 +477,15 @@ class DocLane(QFrame):
         h.addWidget(self._count_lbl)
         h.addStretch()
 
+        # Hint Ctrl=copiar (visible durante drag, oculto el resto)
+        self._ctrl_hint = QLabel("Ctrl = Copiar")
+        self._ctrl_hint.setStyleSheet(
+            f"color: {_COLOR_COPY}; font-size: 10px; font-weight: 600;"
+            "background: transparent; padding: 0 6px;"
+        )
+        self._ctrl_hint.setVisible(False)
+        h.addWidget(self._ctrl_hint)
+
         add_btn = QPushButton("+ Agregar")
         add_btn.setProperty("class", "Ghost")
         add_btn.setFixedHeight(26)
@@ -345,9 +520,9 @@ class DocLane(QFrame):
 
         return header
 
-    def set_siblings_provider(
-        self, fn: Callable[[], List[Tuple[str, str]]]
-    ) -> None:
+    # ── API pública ───────────────────────────────────────────────────────
+
+    def set_siblings_provider(self, fn: Callable[[], List[Tuple[str, str]]]) -> None:
         self._siblings_provider = fn
 
     def add_pages_from_pdf(self, path: str) -> None:
@@ -425,8 +600,10 @@ class DocLane(QFrame):
             updated = replace(ref, rotation_deg=(ref.rotation_deg + delta) % 360)
             item.setData(Qt.ItemDataRole.UserRole, updated)
             item.setText(self._label_for(updated))
-            item.setToolTip(f"{Path(updated.source_path).name}\nPágina {updated.page_index + 1}"
-                            + (f"\nRot {updated.rotation_deg}°" if updated.rotation_deg else ""))
+            item.setToolTip(
+                f"{Path(updated.source_path).name}\nPágina {updated.page_index + 1}"
+                + (f"\nRot {updated.rotation_deg}°" if updated.rotation_deg else "")
+            )
             key = ThumbnailKey(updated.source_path, updated.page_index, updated.rotation_deg, THUMB_W)
             cached = self._cache.get(key)
             if cached:
@@ -460,6 +637,8 @@ class DocLane(QFrame):
         self._update_count()
         self.pages_changed.emit(self._lane_id)
 
+    # ── Event filter (teclado sobre _list) ───────────────────────────────
+
     def eventFilter(self, obj, event) -> bool:
         if obj is self._list and event.type() == QEvent.Type.KeyPress:
             if isinstance(event, QKeyEvent):
@@ -479,6 +658,8 @@ class DocLane(QFrame):
                     self.rotate_selected(delta)
                     return True
         return super().eventFilter(obj, event)
+
+    # ── Context menu ──────────────────────────────────────────────────────
 
     def _show_page_context_menu(self, global_pos) -> None:
         selected = self.selected_refs()
@@ -535,6 +716,8 @@ class DocLane(QFrame):
                 page_ids = {r.page_id for r in selected}
                 self.remove_by_page_ids(page_ids)
 
+    # ── Helpers internos ─────────────────────────────────────────────────
+
     def _make_item(self, ref: PageRef) -> QListWidgetItem:
         item = QListWidgetItem(QIcon(_placeholder_pixmap()), self._label_for(ref))
         item.setData(Qt.ItemDataRole.UserRole, ref)
@@ -572,6 +755,7 @@ class DocLane(QFrame):
     def _update_count(self) -> None:
         n = self._list.count()
         self._count_lbl.setText(f"{n} pág" + ("s" if n != 1 else ""))
+        self._list.update_empty_state(n)
 
     def _on_add_pages(self) -> None:
         files, _ = get_open_file_names(self.window(), "Agregar PDFs", "", PDF_FILTER)

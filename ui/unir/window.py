@@ -9,14 +9,12 @@ from pathlib import Path
 from typing import List, Optional
 
 import fitz
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QFrame, QLineEdit, QCheckBox,
-    QComboBox, QScrollArea, QSizePolicy,
 )
-from PyQt6.QtCore import QUrl
 
 from shell.context import ShellContext
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
@@ -453,6 +451,7 @@ class UnirWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _on_run(self) -> None:
+        self._stop_active_worker()
         if len(self._pdf_paths) < 2:
             show_warning(
                 self, "Sin documentos",
@@ -545,7 +544,7 @@ class UnirWindow(PipelineWindow):
         self._docs_summary_lbl.setText("Sin documentos cargados.")
         self._out_name_edit.setText("documentos_unidos")
         self._blank_between_chk.setChecked(False)
-        self._bookmarks_chk.setChecked(True)
+        self._bookmarks_chk.setChecked(False)
         self._result_viewer.clear_results()
         self._send_btn.set_output_paths([])
         self._proc_step.reset()

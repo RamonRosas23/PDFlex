@@ -315,6 +315,7 @@ class OrganizadorWindow(PipelineWindow):
         return None
 
     def _on_run(self) -> None:
+        self._stop_active_worker()
         err = self._validate_ready()
         if err:
             show_warning(self, "Falta informacion", err)

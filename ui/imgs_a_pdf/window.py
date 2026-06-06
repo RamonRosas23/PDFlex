@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 import fitz
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from PyQt6.QtCore import (
     Qt, QObject, QThread, pyqtSignal, QSize, QEvent,
 )
@@ -80,6 +80,127 @@ class ImgsPdfResult:
     source_count: int = 0
 
 
+@dataclass(frozen=True)
+class ScanProcessingOptions:
+    enabled: bool = False
+    crop_borders: bool = False
+    deskew: bool = False
+    enhance_contrast: bool = False
+    grayscale: bool = False
+    crop_threshold: int = 245
+    max_deskew_degrees: float = 3.0
+
+
+SCAN_PROFILE_OFF = ScanProcessingOptions()
+
+
+def crop_light_borders(
+    image: Image.Image,
+    *,
+    threshold: int = 245,
+    padding: int = 8,
+) -> Image.Image:
+    """Trim mostly white borders around scanned documents."""
+    img = image.convert("RGB")
+    gray = ImageOps.grayscale(img)
+    threshold = max(1, min(254, int(threshold)))
+    mask = gray.point(lambda value: 255 if value < threshold else 0)
+    bbox = mask.getbbox()
+    if not bbox:
+        return img
+
+    x0, y0, x1, y1 = bbox
+    width, height = img.size
+    crop_w = x1 - x0
+    crop_h = y1 - y0
+    if crop_w * crop_h < width * height * 0.04:
+        return img
+
+    x0 = max(0, x0 - padding)
+    y0 = max(0, y0 - padding)
+    x1 = min(width, x1 + padding)
+    y1 = min(height, y1 + padding)
+    if (x0, y0, x1, y1) == (0, 0, width, height):
+        return img
+    return img.crop((x0, y0, x1, y1))
+
+
+def enhance_document_contrast(image: Image.Image, *, grayscale: bool = False) -> Image.Image:
+    """Improve readability of document photos without changing layout."""
+    if grayscale:
+        gray = ImageOps.grayscale(image)
+        gray = ImageOps.autocontrast(gray, cutoff=1)
+        gray = ImageEnhance.Contrast(gray).enhance(1.25)
+        gray = gray.filter(ImageFilter.SHARPEN)
+        return gray.convert("RGB")
+
+    img = image.convert("RGB")
+    img = ImageOps.autocontrast(img, cutoff=1)
+    img = ImageEnhance.Contrast(img).enhance(1.16)
+    img = ImageEnhance.Sharpness(img).enhance(1.08)
+    return img.convert("RGB")
+
+
+def deskew_document_image(image: Image.Image, *, max_degrees: float = 3.0) -> Image.Image:
+    """Correct small scan/photo skew by maximizing horizontal text-line alignment."""
+    img = image.convert("RGB")
+    angle = _estimate_skew_angle(img, max_degrees=max_degrees)
+    if abs(angle) < 0.2:
+        return img
+    corrected = img.rotate(angle, resample=Image.Resampling.BICUBIC, expand=True, fillcolor=(255, 255, 255))
+    return crop_light_borders(corrected, threshold=248, padding=4)
+
+
+def preprocess_document_image(image: Image.Image, options: ScanProcessingOptions) -> Image.Image:
+    """Apply scanner-mode transformations in a predictable order."""
+    img = image.convert("RGB")
+    if not options.enabled:
+        return img
+    if options.crop_borders:
+        img = crop_light_borders(img, threshold=options.crop_threshold)
+    if options.deskew:
+        img = deskew_document_image(img, max_degrees=options.max_deskew_degrees)
+    if options.enhance_contrast:
+        img = enhance_document_contrast(img, grayscale=options.grayscale)
+    return img.convert("RGB")
+
+
+def _estimate_skew_angle(image: Image.Image, *, max_degrees: float) -> float:
+    gray = ImageOps.grayscale(image)
+    gray.thumbnail((700, 700), Image.Resampling.LANCZOS)
+    gray = ImageOps.autocontrast(gray, cutoff=2)
+    if gray.width < 16 or gray.height < 16:
+        return 0.0
+
+    angles = [round(-max_degrees + i * 0.5, 2) for i in range(int((2 * max_degrees) / 0.5) + 1)]
+    best_angle = 0.0
+    best_score = -1.0
+    for angle in angles:
+        rotated = gray.rotate(angle, resample=Image.Resampling.BICUBIC, expand=False, fillcolor=255)
+        score = _horizontal_projection_score(rotated)
+        if score > best_score:
+            best_score = score
+            best_angle = angle
+    return best_angle
+
+
+def _horizontal_projection_score(gray: Image.Image) -> float:
+    pixels = gray.load()
+    width, height = gray.size
+    rows: list[int] = []
+    for y in range(height):
+        count = 0
+        for x in range(width):
+            if pixels[x, y] < 185:
+                count += 1
+        rows.append(count)
+    dark = sum(rows)
+    if dark < max(12, width * height * 0.002):
+        return 0.0
+    mean = dark / max(1, height)
+    return sum((value - mean) * (value - mean) for value in rows) / max(1, height)
+
+
 # ====================================================================== #
 #  Worker
 # ====================================================================== #
@@ -146,6 +267,7 @@ class ImgsToPdfWorker(QObject):
         auto_rotate: bool,
         one_per_page: bool,
         dpi: int,
+        scan_options: ScanProcessingOptions = SCAN_PROFILE_OFF,
     ) -> None:
         super().__init__()
         self.image_paths = image_paths
@@ -157,6 +279,7 @@ class ImgsToPdfWorker(QObject):
         self.auto_rotate = auto_rotate
         self.one_per_page = one_per_page
         self.dpi = dpi
+        self.scan_options = scan_options
         self._cancel = False
 
     def cancel(self) -> None:
@@ -214,6 +337,7 @@ class ImgsToPdfWorker(QObject):
                     img = Image.open(img_path)
                     img.load()  # fuerza lectura del GIF/TIFF animado
                     img = img.convert("RGB")
+                    img = preprocess_document_image(img, self.scan_options)
                 except Exception as exc:
                     out_doc.close()
                     self.error.emit(f"No se pudo abrir «{name}»: {exc}")
@@ -671,6 +795,56 @@ class ImgsAPdfWindow(PipelineWindow):
         card_layout(dpi_card).addLayout(dpi_row)
         options_grid.addWidget(dpi_card, 1, 1)
 
+        # ── Modo escáner documental ─────────────────────────────────
+        scanner_card = make_card(
+            "Modo escáner documental",
+            "Prepara fotos o escaneos antes de insertarlos en el PDF.",
+        )
+        scl = card_layout(scanner_card)
+        scl.setSpacing(8)
+        self._scan_profile_combo = QComboBox()
+        self._scan_profile_combo.addItem("Desactivado", SCAN_PROFILE_OFF)
+        self._scan_profile_combo.addItem(
+            "Documento limpio",
+            ScanProcessingOptions(
+                enabled=True,
+                crop_borders=True,
+                deskew=False,
+                enhance_contrast=True,
+                grayscale=False,
+            ),
+        )
+        self._scan_profile_combo.addItem(
+            "Foto de hoja",
+            ScanProcessingOptions(
+                enabled=True,
+                crop_borders=True,
+                deskew=True,
+                enhance_contrast=True,
+                grayscale=False,
+            ),
+        )
+        self._scan_profile_combo.addItem(
+            "Alto contraste",
+            ScanProcessingOptions(
+                enabled=True,
+                crop_borders=True,
+                deskew=True,
+                enhance_contrast=True,
+                grayscale=True,
+                crop_threshold=248,
+            ),
+        )
+        scl.addWidget(self._scan_profile_combo)
+
+        self._scan_desc_lbl = QLabel("")
+        self._scan_desc_lbl.setProperty("class", "CardHint")
+        self._scan_desc_lbl.setWordWrap(True)
+        scl.addWidget(self._scan_desc_lbl)
+        self._scan_profile_combo.currentIndexChanged.connect(self._update_scan_desc)
+        self._update_scan_desc()
+        options_grid.addWidget(scanner_card, 2, 0, 1, 2)
+
         inner_layout.addLayout(options_grid)
         inner_layout.addStretch()
         scroll.setWidget(inner)
@@ -812,6 +986,29 @@ class ImgsAPdfWindow(PipelineWindow):
         self._autorotate_chk.setEnabled(not is_adaptive)
         self._margin_spin.setEnabled(not is_adaptive)
 
+    def _scan_options(self) -> ScanProcessingOptions:
+        data = self._scan_profile_combo.currentData()
+        if isinstance(data, ScanProcessingOptions):
+            return data
+        return SCAN_PROFILE_OFF
+
+    def _update_scan_desc(self, *args) -> None:
+        options = self._scan_options()
+        if not options.enabled:
+            text = "Inserta las imágenes tal como fueron cargadas."
+        else:
+            parts = []
+            if options.crop_borders:
+                parts.append("recorte de bordes")
+            if options.deskew:
+                parts.append("enderezado leve")
+            if options.enhance_contrast:
+                parts.append("contraste documental")
+            if options.grayscale:
+                parts.append("salida en grises")
+            text = "Aplica " + ", ".join(parts) + "."
+        self._scan_desc_lbl.setText(text)
+
     # ------------------------------------------------------------------ #
     # Resumen
     # ------------------------------------------------------------------ #
@@ -822,6 +1019,7 @@ class ImgsAPdfWindow(PipelineWindow):
         orient = self._orient_combo.currentText()
         margin = self._margin_spin.value()
         fit = self._fit_combo.currentText()
+        scan = self._scan_profile_combo.currentText()
         out_name = (self._out_name_edit.text().strip() or "imagenes_a_pdf") + ".pdf"
 
         rows = [
@@ -831,6 +1029,7 @@ class ImgsAPdfWindow(PipelineWindow):
             f"<b>Orientación:</b>&nbsp;&nbsp;{orient}",
             f"<b>Margen:</b>&nbsp;&nbsp;{margin:.1f} mm",
             f"<b>Ajuste:</b>&nbsp;&nbsp;{fit}",
+            f"<b>Modo escáner:</b>&nbsp;&nbsp;{scan}",
         ]
         if n == 0:
             rows.insert(0, "<span style='color:#E5484D;'>Atención: no hay imágenes cargadas.</span>")
@@ -842,6 +1041,7 @@ class ImgsAPdfWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _on_run(self) -> None:
+        self._stop_active_worker()
         if len(self._img_paths) == 0:
             show_warning(
                 self, "Sin imágenes",
@@ -869,6 +1069,7 @@ class ImgsAPdfWindow(PipelineWindow):
             auto_rotate=self._autorotate_chk.isChecked(),
             one_per_page=True,
             dpi=int(self._dpi_combo.currentText()),
+            scan_options=self._scan_options(),
         )
         self._worker_thread = QThread(self)
         self._worker.moveToThread(self._worker_thread)
@@ -934,6 +1135,7 @@ class ImgsAPdfWindow(PipelineWindow):
         self._last_result = None
         self._imgs_summary_lbl.setText("Sin imágenes cargadas.")
         self._out_name_edit.setText("imagenes_a_pdf")
+        self._scan_profile_combo.setCurrentIndex(0)
         self._result_viewer.clear_results()
         self._send_btn.set_output_paths([])
         self._proc_step.reset()

@@ -361,6 +361,23 @@ QListWidget::item:selected:!active {{
     def handle_drop(self, paths: List[str]) -> None:
         """Forwarding de drag&drop desde ShellWindow. Override en subclase."""
 
+    def _stop_active_worker(self) -> None:
+        """Cancela y espera el worker activo si existe. Llamar al inicio de _on_run()."""
+        # Patrón legado: _worker + _worker_thread separados
+        worker = getattr(self, "_worker", None)
+        thread = getattr(self, "_worker_thread", None)
+        if worker and callable(getattr(worker, "cancel", None)):
+            try:
+                worker.cancel()
+            except Exception:
+                pass
+        if thread is not None and hasattr(thread, "isRunning") and thread.isRunning():
+            try:
+                thread.quit()
+            except Exception:
+                pass
+            thread.wait(3000)
+
 
 # ──────────────────────────────────────────────────────────────
 # Utilidades de color

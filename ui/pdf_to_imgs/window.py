@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QComboBox, QCheckBox, QGridLayout,
+    QComboBox, QCheckBox, QGridLayout, QLineEdit, QFrame, QScrollArea,
 )
 
 from ui.common.documents_step import DocumentsCard
@@ -158,10 +158,62 @@ class PdfToImgsWindow(PipelineWindow):
             "Configura la resolución y el formato de las imágenes generadas.",
         ))
 
+        scroll = QScrollArea()
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(16)
+
         grid = QGridLayout()
         grid.setSpacing(16)
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
+
+        # Presets
+        c_preset = make_card(
+            "Preset rápido",
+            "Formato, DPI y calidad en un clic.",
+        )
+        self._preset_combo = QComboBox()
+        self._preset_combo.addItem(
+            "Equilibrado - PNG 150 DPI",
+            {"fmt": 0, "dpi": 150, "quality": 90, "panoramic": False},
+        )
+        self._preset_combo.addItem(
+            "Correo - JPG 120 DPI",
+            {"fmt": 1, "dpi": 120, "quality": 82, "panoramic": False},
+        )
+        self._preset_combo.addItem(
+            "Alta calidad - PNG 300 DPI",
+            {"fmt": 0, "dpi": 300, "quality": 95, "panoramic": False},
+        )
+        self._preset_combo.addItem(
+            "Web ligero - WebP 150 DPI",
+            {"fmt": 2, "dpi": 150, "quality": 78, "panoramic": False},
+        )
+        self._preset_combo.addItem(
+            "Panorámica - JPG 150 DPI",
+            {"fmt": 1, "dpi": 150, "quality": 86, "panoramic": True},
+        )
+        self._preset_combo.addItem("Personalizado", None)
+        self._preset_combo.currentIndexChanged.connect(self._on_preset_changed)
+        card_layout(c_preset).addWidget(self._preset_combo)
+        grid.addWidget(c_preset, 0, 0)
+
+        # Rangos
+        c_range = make_card(
+            "Páginas a exportar",
+            "Vacío exporta todas. Ej: 1-3,5,final.",
+        )
+        self._range_edit = QLineEdit()
+        self._range_edit.setPlaceholderText("Todas las páginas")
+        self._range_edit.setClearButtonEnabled(True)
+        card_layout(c_range).addWidget(self._range_edit)
+        grid.addWidget(c_range, 0, 1)
 
         # Formato
         c_fmt = make_card("Formato de imagen")
@@ -169,39 +221,42 @@ class PdfToImgsWindow(PipelineWindow):
         self._fmt_combo.addItems(["PNG (sin pérdida)", "JPG (comprimido)", "WebP (eficiente)"])
         self._fmt_combo.currentIndexChanged.connect(self._on_fmt_changed)
         card_layout(c_fmt).addWidget(self._fmt_combo)
-        grid.addWidget(c_fmt, 0, 0)
+        grid.addWidget(c_fmt, 1, 0)
 
         # DPI
         c_dpi = make_card("Resolución (DPI)",
                           "Mayor DPI = mayor calidad y tamaño de archivo")
         self._dpi_slider = SliderWithValue(72.0, 600.0, 150.0, step=1.0, suffix=" DPI", decimals=0)
         card_layout(c_dpi).addWidget(self._dpi_slider)
-        grid.addWidget(c_dpi, 0, 1)
+        grid.addWidget(c_dpi, 1, 1)
 
         # Modo
         c_mode = make_card("Modo de exportación")
         mode_l = card_layout(c_mode)
         self._panoramic_chk = QCheckBox(
-            "Imagen panorámica vertical (todas las páginas en una sola imagen)"
+            "Panorámica vertical"
         )
+        self._panoramic_chk.setToolTip("Une las páginas seleccionadas de cada PDF en una sola imagen vertical.")
         mode_l.addWidget(self._panoramic_chk)
         mode_hint = QLabel(
-            "Por defecto exporta una imagen por página con el nombre {doc}_p001.png"
+            "Por defecto exporta una imagen por página."
         )
         mode_hint.setProperty("class", "CardHint")
         mode_hint.setWordWrap(True)
         mode_l.addWidget(mode_hint)
-        grid.addWidget(c_mode, 1, 0, 1, 2)
+        grid.addWidget(c_mode, 2, 0)
 
         # Calidad JPG/WebP
-        c_q = make_card("Calidad JPG / WebP", "Aplica solo para JPG y WebP (1 = mínima, 100 = máxima)")
+        c_q = make_card("Calidad JPG / WebP", "Solo aplica a formatos comprimidos.")
         self._quality_slider = SliderWithValue(1.0, 100.0, 90.0, step=1.0, decimals=0)
         self._quality_slider.setEnabled(False)
         card_layout(c_q).addWidget(self._quality_slider)
-        grid.addWidget(c_q, 2, 0, 1, 2)
+        grid.addWidget(c_q, 2, 1)
 
-        outer.addLayout(grid)
-        outer.addStretch(1)
+        inner_layout.addLayout(grid)
+        inner_layout.addStretch(1)
+        scroll.setWidget(inner)
+        outer.addWidget(scroll, 1)
 
         nav = QHBoxLayout()
         back = QPushButton("Documentos")
@@ -325,6 +380,15 @@ class PdfToImgsWindow(PipelineWindow):
         # Habilitar calidad solo para JPG/WebP
         self._quality_slider.setEnabled(idx in (1, 2))
 
+    def _on_preset_changed(self, idx: int) -> None:
+        data = self._preset_combo.currentData()
+        if not data:
+            return
+        self._fmt_combo.setCurrentIndex(int(data["fmt"]))
+        self._dpi_slider.setValue(float(data["dpi"]))
+        self._quality_slider.setValue(float(data["quality"]))
+        self._panoramic_chk.setChecked(bool(data["panoramic"]))
+
     def _read_config(self) -> PdfToImagesConfig:
         fmt_map = {0: "png", 1: "jpg", 2: "webp"}
         return PdfToImagesConfig(
@@ -332,6 +396,7 @@ class PdfToImgsWindow(PipelineWindow):
             dpi=int(self._dpi_slider.value()),
             panoramic=self._panoramic_chk.isChecked(),
             jpg_quality=int(self._quality_slider.value()),
+            page_range=self._range_edit.text().strip(),
         )
 
     # ------------------------------------------------------------------ #
@@ -348,10 +413,13 @@ class PdfToImgsWindow(PipelineWindow):
         n = self._docs_card.count()
         fmt_names = {"png": "PNG", "jpg": "JPG", "webp": "WebP"}
         mode_txt = "una imagen panorámica por PDF" if cfg.panoramic else "una imagen por página"
+        range_txt = cfg.page_range or "Todas"
         rows = [
             f"<b>Documentos:</b> &nbsp; {n}",
+            f"<b>Preset:</b> &nbsp; {self._preset_combo.currentText()}",
             f"<b>Formato:</b> &nbsp; {fmt_names.get(cfg.format, cfg.format)}",
             f"<b>Resolución:</b> &nbsp; {cfg.dpi} DPI",
+            f"<b>Páginas:</b> &nbsp; {range_txt}",
             f"<b>Modo:</b> &nbsp; {mode_txt}",
         ]
         if cfg.format in ("jpg", "webp"):
@@ -388,6 +456,7 @@ class PdfToImgsWindow(PipelineWindow):
         return jobs
 
     def _on_run(self) -> None:
+        self._stop_active_worker()
         err = self._validate_ready()
         if err:
             show_warning(self, "Falta información", err)
@@ -468,6 +537,8 @@ class PdfToImgsWindow(PipelineWindow):
         self._send_btn.set_output_paths([])
         self.last_results = []
         self._docs_card.clear()
+        self._preset_combo.setCurrentIndex(0)
+        self._range_edit.clear()
         self._proc_step.reset()
         self._switch_section(0)
 

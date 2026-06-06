@@ -971,6 +971,7 @@ class OcrWindow(PipelineWindow):
         return jobs
 
     def _on_run(self) -> None:
+        self._stop_active_worker()
         error = self._validate_ready()
         if error:
             show_warning(self, "Falta información", error)

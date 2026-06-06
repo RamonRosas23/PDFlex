@@ -1,4 +1,4 @@
-"""QuitarFondoWindow — herramienta dedicada para remover fondos de imágenes."""
+"""ExtraerImagenesWindow - extract embedded PDF image resources."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,36 +8,37 @@ from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QGridLayout,
+    QCheckBox, QGridLayout, QSpinBox,
 )
 
-from core.background_removal_engine import (
-    BackgroundRemovalEngine,
-    BackgroundRemovalJob,
-    BackgroundRemovalResult,
+from core.output_paths import make_run_dir, unique_name
+from core.pdf_extract_images_engine import (
+    ExtractImagesConfig,
+    ExtractImagesJob,
+    ExtractImagesJobResult,
+    PdfExtractImagesEngine,
 )
-from core.output_paths import make_run_dir
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.dialogs import show_error, show_success, show_warning
+from ui.common.documents_step import DocumentsCard
+from ui.common.icons import set_button_icon
 from ui.common.image_results_viewer import ImageResultsViewer
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
-from ui.common.slider import SliderWithValue
 from ui.common.tool_scaffold import PipelineWindow
-from ui.common.icons import set_button_icon
-from ui.imgs_a_pdf.window import IMAGE_EXTS, ImageListCard
 
 
-class RemoveBackgroundWorker(QObject):
+class ExtractImagesWorker(QObject):
     progress = pyqtSignal(int, int, str)
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, jobs: List[BackgroundRemovalJob]) -> None:
+    def __init__(self, jobs: List[ExtractImagesJob], config: ExtractImagesConfig) -> None:
         super().__init__()
         self.jobs = jobs
+        self.config = config
         self._cancel = False
 
     def cancel(self) -> None:
@@ -45,65 +46,73 @@ class RemoveBackgroundWorker(QObject):
 
     def run(self) -> None:
         try:
-            results = BackgroundRemovalEngine().run_batch(
+            results = PdfExtractImagesEngine().run_batch(
                 self.jobs,
+                self.config,
                 progress=lambda c, t, m: self.progress.emit(c, t, m),
                 should_cancel=lambda: self._cancel,
             )
             if self._cancel:
-                self.error.emit("Operación cancelada.")
+                self.error.emit("Operacion cancelada.")
             else:
                 self.finished.emit(results)
         except Exception as exc:
             self.error.emit(str(exc))
 
 
-class QuitarFondoWindow(PipelineWindow):
+class ExtraerImagenesWindow(PipelineWindow):
     SECTIONS = [
-        ("01", "Imágenes", "Carga las imágenes a limpiar"),
-        ("02", "Ajustes", "Controla la fuerza de limpieza"),
-        ("03", "Procesar", "Genera PNGs transparentes"),
-        ("04", "Resultados", "Revisa las imágenes generadas"),
+        ("01", "Documentos", "Carga PDFs con recursos"),
+        ("02", "Filtros", "Elige duplicados y tamano minimo"),
+        ("03", "Procesar", "Extrae imagenes embebidas"),
+        ("04", "Resultados", "Revisa recursos extraidos"),
     ]
-    BRAND = "Quitar fondo"
-    TAGLINE = "Convierte fondos uniformes en transparencia"
-    ACCENT_COLOR = "#00B894"
+    BRAND = "Extraer imagenes"
+    TAGLINE = "Saca recursos embebidos del PDF"
+    ACCENT_COLOR = "#06B6D4"
 
     def __init__(self, ctx: ShellContext, parent=None) -> None:
         super().__init__(ctx, parent)
-        self.last_results: List[BackgroundRemovalResult] = []
+        self.last_results: List[ExtractImagesJobResult] = []
+        self._worker: Optional[ExtractImagesWorker] = None
         self._worker_thread: Optional[QThread] = None
-        self._worker: Optional[RemoveBackgroundWorker] = None
 
         self._build_pages()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
     def _build_pages(self) -> None:
-        self.stack.addWidget(self._build_images_section())
-        self.stack.addWidget(self._build_options_section())
+        self.stack.addWidget(self._build_documents_section())
+        self.stack.addWidget(self._build_filters_section())
         self.stack.addWidget(self._build_process_section())
         self.stack.addWidget(self._build_results_section())
 
-    def _build_images_section(self) -> QWidget:
+    def _build_documents_section(self) -> QWidget:
         page = QWidget()
         page.setProperty("class", "PageContainer")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(36, 32, 36, 32)
-        outer.setSpacing(20)
+        outer.setSpacing(24)
 
         outer.addLayout(make_page_header(
-            "Imágenes",
-            "Carga imágenes con fondo blanco o uniforme. La salida será PNG con transparencia.",
+            "PDFs con imagenes embebidas",
+            "Extrae logos, fotos, escaneos y recursos internos sin renderizar paginas completas.",
         ))
 
-        self._img_card = ImageListCard()
-        self._img_card.files_changed.connect(self._on_files_changed)
-        outer.addWidget(self._img_card, 1)
+        self._docs_card = DocumentsCard(
+            self.ctx,
+            allow_reorder=False,
+            show_thumbnails=True,
+            thumb_size=(64, 82),
+            file_filter="PDF (*.pdf)",
+        )
+        self._docs_card.files_changed.connect(self._on_docs_changed)
+        outer.addWidget(self._docs_card, 1)
 
-        self._imgs_summary_lbl = QLabel("Sin imágenes cargadas.")
-        self._imgs_summary_lbl.setProperty("class", "CardHint")
-        outer.addWidget(self._imgs_summary_lbl)
+        self._docs_summary_lbl = QLabel("Sin documentos cargados.")
+        self._docs_summary_lbl.setProperty("class", "CardHint")
+        self._docs_summary_lbl.setWordWrap(True)
+        outer.addWidget(self._docs_summary_lbl)
 
         nav = QHBoxLayout()
         nav.addStretch()
@@ -116,7 +125,7 @@ class QuitarFondoWindow(PipelineWindow):
         outer.addLayout(nav)
         return page
 
-    def _build_options_section(self) -> QWidget:
+    def _build_filters_section(self) -> QWidget:
         page = QWidget()
         page.setProperty("class", "PageContainer")
         outer = QVBoxLayout(page)
@@ -124,8 +133,8 @@ class QuitarFondoWindow(PipelineWindow):
         outer.setSpacing(20)
 
         outer.addLayout(make_page_header(
-            "Ajustes de limpieza",
-            "Ajusta qué tan variable puede ser el fondo antes de convertirlo en transparencia.",
+            "Filtros de extraccion",
+            "Evita duplicados y filtra iconos pequenos cuando busques recursos utiles.",
         ))
 
         grid = QGridLayout()
@@ -133,45 +142,45 @@ class QuitarFondoWindow(PipelineWindow):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
 
-        strength_card = make_card(
-            "Fuerza de limpieza",
-            "Valor alto elimina fondos más variables; valor bajo conserva más bordes claros.",
-        )
-        self._tolerance_slider = SliderWithValue(
-            5.0,
-            80.0,
-            30.0,
-            step=1.0,
-            suffix="",
-            decimals=0,
-        )
-        card_layout(strength_card).addWidget(self._tolerance_slider)
-        grid.addWidget(strength_card, 0, 0, 1, 2)
+        behavior = make_card("Comportamiento")
+        self._dedupe_chk = QCheckBox("Evitar recursos duplicados por xref")
+        self._dedupe_chk.setChecked(True)
+        card_layout(behavior).addWidget(self._dedupe_chk)
+        hint = QLabel("Cuando un logo se repite en muchas paginas, se extrae una sola vez.")
+        hint.setProperty("class", "CardHint")
+        hint.setWordWrap(True)
+        card_layout(behavior).addWidget(hint)
+        grid.addWidget(behavior, 0, 0)
 
-        format_card = make_card(
-            "Formato de salida",
-            "La transparencia requiere PNG. Los nombres se generan en temporal y se pueden conservar con Guardar como.",
-        )
-        out_lbl = QLabel("PNG transparente")
-        out_lbl.setProperty("class", "Mono")
-        card_layout(format_card).addWidget(out_lbl)
-        grid.addWidget(format_card, 1, 0)
+        size_card = make_card("Tamano minimo")
+        self._min_width_spin = QSpinBox()
+        self._min_width_spin.setRange(1, 5000)
+        self._min_width_spin.setValue(1)
+        self._min_width_spin.setSuffix(" px ancho")
+        card_layout(size_card).addWidget(self._min_width_spin)
 
-        use_card = make_card(
-            "Uso recomendado",
-            "Funciona mejor con fotografías de documentos, firmas, sellos o logos sobre fondo blanco o liso.",
+        self._min_height_spin = QSpinBox()
+        self._min_height_spin.setRange(1, 5000)
+        self._min_height_spin.setValue(1)
+        self._min_height_spin.setSuffix(" px alto")
+        card_layout(size_card).addWidget(self._min_height_spin)
+        grid.addWidget(size_card, 0, 1)
+
+        info_card = make_card("Diferencia con PDF a Imagenes")
+        info = QLabel(
+            "Esta herramienta guarda los recursos internos originales. "
+            "Si necesitas una imagen de cada pagina completa, usa PDF a Imagenes."
         )
-        note = QLabel("Para fondos complejos, usa una fuerza moderada y revisa los bordes.")
-        note.setProperty("class", "CardHint")
-        note.setWordWrap(True)
-        card_layout(use_card).addWidget(note)
-        grid.addWidget(use_card, 1, 1)
+        info.setProperty("class", "CardHint")
+        info.setWordWrap(True)
+        card_layout(info_card).addWidget(info)
+        grid.addWidget(info_card, 1, 0, 1, 2)
 
         outer.addLayout(grid)
         outer.addStretch(1)
 
         nav = QHBoxLayout()
-        back = QPushButton("Imágenes")
+        back = QPushButton("Documentos")
         back.setProperty("class", "Ghost")
         set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(0))
@@ -195,20 +204,20 @@ class QuitarFondoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Procesar",
-            "Genera PNGs transparentes en temporal; usa Guardar como para conservarlos.",
+            "Extrae recursos a temporal; usa Guardar todo para conservarlos.",
         ))
 
         self._proc_step = ProcessStep(
-            run_label="Quitar fondo",
+            run_label="Extraer imagenes",
             show_output_dir=False,
         )
         self._proc_step.run_requested.connect(self._on_run)
         self._proc_step.cancel_requested.connect(self._on_cancel)
-        self._proc_step.watch_documents(self._img_card)
+        self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
         nav = QHBoxLayout()
-        back = QPushButton("Ajustes")
+        back = QPushButton("Filtros")
         back.setProperty("class", "Ghost")
         set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(1))
@@ -225,10 +234,10 @@ class QuitarFondoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Resultados",
-            "Revisa las imágenes con fondo transparente.",
+            "Revisa las imagenes extraidas agrupadas por PDF origen.",
         ))
 
-        self._img_viewer = ImageResultsViewer("Imágenes sin fondo", comparison_mode=True)
+        self._img_viewer = ImageResultsViewer("Recursos extraidos")
         self._img_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._img_viewer, 1)
 
@@ -240,10 +249,10 @@ class QuitarFondoWindow(PipelineWindow):
         nav.addWidget(back)
         nav.addStretch()
 
-        self._send_btn = SendToToolButton(self.ctx, "quitar_fondo")
+        self._send_btn = SendToToolButton(self.ctx, "extraer_imagenes")
         nav.addWidget(self._send_btn)
 
-        restart = QPushButton("Nueva sesión")
+        restart = QPushButton("Nueva sesion")
         restart.setProperty("class", "Primary")
         restart.setMinimumWidth(180)
         set_button_icon(restart, "refresh-cw")
@@ -257,59 +266,78 @@ class QuitarFondoWindow(PipelineWindow):
             self._refresh_summary()
 
     def set_inputs(self, paths: List[str]) -> None:
-        self._img_card.add_paths(self._image_paths(paths))
+        self._docs_card.add_paths(paths)
         self._switch_section(0)
 
     def handle_drop(self, paths: List[str]) -> None:
-        self._img_card.add_paths(self._image_paths(paths))
+        self._docs_card.add_paths(paths)
         self._switch_section(0)
 
-    def _on_files_changed(self, paths: List[str]) -> None:
+    def _on_docs_changed(self, paths: List[str]) -> None:
         count = len(paths)
         if count == 0:
-            self._imgs_summary_lbl.setText("Sin imágenes cargadas.")
-        else:
-            self._imgs_summary_lbl.setText(
-                f"{count} imagen{'es' if count != 1 else ''} · salida PNG transparente"
-            )
+            self._docs_summary_lbl.setText("Sin documentos cargados.")
+            return
+        self._docs_summary_lbl.setText(
+            f"{count} documento{'s' if count != 1 else ''} listo{'s' if count != 1 else ''} para extraer recursos."
+        )
+
+    def _build_config(self) -> ExtractImagesConfig:
+        return ExtractImagesConfig(
+            deduplicate=self._dedupe_chk.isChecked(),
+            min_width=self._min_width_spin.value(),
+            min_height=self._min_height_spin.value(),
+        )
+
+    def _validate_ready(self) -> Optional[str]:
+        if self._docs_card.is_empty():
+            return "Agrega al menos un PDF."
+        return None
 
     def _refresh_summary(self) -> None:
-        count = self._img_card.count()
+        config = self._build_config()
         rows = [
-            f"<b>Imágenes:</b>&nbsp;&nbsp;{count}",
-            f"<b>Fuerza de limpieza:</b>&nbsp;&nbsp;{self._tolerance_slider.value():.0f}",
-            "<b>Salida:</b>&nbsp;&nbsp;PNG con transparencia",
+            f"<b>Documentos:</b>&nbsp;&nbsp;{len(self._docs_card.paths())}",
+            f"<b>Duplicados:</b>&nbsp;&nbsp;{'evitar por xref' if config.deduplicate else 'extraer cada aparicion'}",
+            f"<b>Tamano minimo:</b>&nbsp;&nbsp;{config.min_width} x {config.min_height} px",
+            "<b>Salida:</b>&nbsp;&nbsp;subcarpeta temporal por PDF",
         ]
-        if count == 0:
-            rows.insert(0, "<span style='color:#E5484D;'>Atención: no hay imágenes cargadas.</span>")
+        error = self._validate_ready()
+        if error:
+            rows.insert(0, f"<span style='color:#E5484D;'>Atencion: {error}</span>")
         self._proc_step.set_summary_html(
             "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         )
 
-    def _validate_ready(self) -> Optional[str]:
-        if self._img_card.count() == 0:
-            return "Agrega al menos una imagen."
-        return None
-
-    def _build_jobs(self) -> List[BackgroundRemovalJob]:
-        out_dir = make_run_dir("QuitarFondo")
-        tolerance = float(self._tolerance_slider.value())
+    def _build_jobs(self) -> List[ExtractImagesJob]:
+        base_dir = make_run_dir("ExtraerImagenes")
+        reserved: set[str] = set()
         add_suffix = add_tool_suffix_enabled()
-        return [
-            BackgroundRemovalJob(
-                image_path=path,
-                output_dir=str(out_dir),
-                tolerance=tolerance,
-                add_tool_suffix=add_suffix,
+        jobs: List[ExtractImagesJob] = []
+        for path in self._docs_card.paths():
+            stem = unique_name(
+                Path(path).stem,
+                reserved=reserved,
+                directory=base_dir,
+                fallback="documento",
             )
-            for path in self._img_card.paths()
-        ]
+            out_dir = base_dir / stem
+            out_dir.mkdir(parents=True, exist_ok=True)
+            jobs.append(
+                ExtractImagesJob(
+                    pdf_path=path,
+                    output_dir=str(out_dir),
+                    base_name=stem,
+                    add_tool_suffix=add_suffix,
+                )
+            )
+        return jobs
 
     def _on_run(self) -> None:
         self._stop_active_worker()
         error = self._validate_ready()
         if error:
-            show_warning(self, "Falta información", error)
+            show_warning(self, "Falta informacion", error)
             return
         if self._worker_thread is not None:
             return
@@ -319,16 +347,15 @@ class QuitarFondoWindow(PipelineWindow):
         self.last_results = []
 
         self._proc_step.set_running(True)
-        self._proc_step.set_progress(0, "Preparando imágenes...")
+        self._proc_step.set_progress(0, "Preparando extraccion...")
 
+        self._worker = ExtractImagesWorker(self._build_jobs(), self._build_config())
         self._worker_thread = QThread(self)
-        self._worker = RemoveBackgroundWorker(self._build_jobs())
         self._worker.moveToThread(self._worker_thread)
-
         self._worker_thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
-        self._worker.error.connect(self._on_worker_error)
+        self._worker.error.connect(self._on_error)
         self._worker.finished.connect(self._worker_thread.quit)
         self._worker.error.connect(self._worker_thread.quit)
         self._worker_thread.finished.connect(self._worker.deleteLater)
@@ -340,54 +367,49 @@ class QuitarFondoWindow(PipelineWindow):
             self._worker.cancel()
         self._proc_step.set_progress(self._current_progress(), "Cancelando...")
 
-    def _on_progress(self, current: int, total: int, message: str) -> None:
-        self._proc_step.set_progress(int(current / max(1, total) * 100), message)
+    def _on_progress(self, current: int, total: int, msg: str) -> None:
+        self._proc_step.set_progress(int(current / max(1, total) * 100), msg)
 
     def _on_finished(self, results: list) -> None:
+        self._cleanup_thread()
         self.last_results = list(results)
         self._proc_step.set_running(False)
-        self._proc_step.set_progress(100, "Limpieza completada")
-        self._worker_thread = None
-        self._worker = None
+        self._proc_step.set_progress(100, "Extraccion completada")
 
         output_paths = [
             result.output_path
-            for result in self.last_results
+            for job_result in self.last_results
+            for result in job_result.image_results
             if result.success and result.output_path
         ]
-        errors = [result for result in self.last_results if not result.success]
+        self.ctx.tray.add_items(output_paths, "Extraer imagenes")
         self._send_btn.set_output_paths(output_paths)
         self.outputs_ready.emit(output_paths)
 
-        self._img_viewer.set_results(self.last_results)
-        self._img_viewer.set_source_dirs([
-            str(Path(result.job.image_path).parent)
-            for result in self.last_results
-        ])
+        self._img_viewer.set_grouped_results(self.last_results)
 
-        msg = (
-            f"Se generaron {len(output_paths)} imagen"
-            + ("es" if len(output_paths) != 1 else "")
-            + " sin fondo."
-        )
-        if errors:
-            msg += f"\nCon error: {len(errors)}"
-        if errors:
-            show_warning(self, "Limpieza completada con avisos", msg)
+        ok = len(output_paths)
+        failed_docs = sum(1 for result in self.last_results if not result.success)
+        msg = f"Se extrajeron {ok} imagen{'es' if ok != 1 else ''}."
+        if failed_docs:
+            msg += f"\nPDFs sin recursos o con error: {failed_docs}"
+            show_warning(self, "Extraccion completada con avisos", msg)
         else:
-            show_success(self, "Limpieza completa", msg)
+            show_success(self, "Extraccion completa", msg)
         self._switch_section(3)
 
-    def _on_worker_error(self, message: str) -> None:
+    def _on_error(self, msg: str) -> None:
+        self._cleanup_thread()
         self._proc_step.set_running(False)
-        self._proc_step.set_progress(0, "Proceso detenido")
+        self._proc_step.set_progress(0, f"Error: {msg}")
+        show_error(self, "Error al extraer imagenes", msg)
+
+    def _cleanup_thread(self) -> None:
         if self._worker_thread:
             self._worker_thread.quit()
             self._worker_thread.wait(2000)
-            self._worker_thread.deleteLater()
             self._worker_thread = None
-            self._worker = None
-        show_error(self, "Error al quitar fondo", message)
+        self._worker = None
 
     def _current_progress(self) -> int:
         bar = getattr(self._proc_step, "_prog_bar", None)
@@ -398,16 +420,15 @@ class QuitarFondoWindow(PipelineWindow):
 
     def _reset_session(self) -> None:
         self.last_results = []
+        self._docs_card.clear()
+        self._docs_summary_lbl.setText("Sin documentos cargados.")
+        self._dedupe_chk.setChecked(True)
+        self._min_width_spin.setValue(1)
+        self._min_height_spin.setValue(1)
         self._img_viewer.clear_results()
         self._send_btn.set_output_paths([])
-        self._img_card.clear()
-        self._imgs_summary_lbl.setText("Sin imágenes cargadas.")
         self._proc_step.reset()
         self._switch_section(0)
-
-    @staticmethod
-    def _image_paths(paths: List[str]) -> List[str]:
-        return [path for path in paths if Path(path).suffix.lower() in IMAGE_EXTS]
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():

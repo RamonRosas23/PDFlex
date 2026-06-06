@@ -885,6 +885,7 @@ class SeparadorWindow(PipelineWindow):
         self._proc_step.set_progress(self._proc_step._prog_bar.value(), "Cancelando…")
 
     def _on_run(self) -> None:
+        self._stop_active_worker()
         err = self._validate_ready()
         if err:
             show_warning(self, "Falta información", err)

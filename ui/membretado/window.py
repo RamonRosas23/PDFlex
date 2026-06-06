@@ -16,15 +16,22 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QFrame, QProgressBar,
-    QScrollArea,
+    QFrame,
+    QScrollArea, QListWidget, QListWidgetItem,
 )
 
 from core.margin_detector import MembreteMargins, detect_margins
+from core.membrete_library import (
+    SavedLetterhead,
+    add_letterhead_to_library,
+    load_letterhead_library,
+    remove_letterhead_from_library,
+)
 from core.membrete_engine import MembreteJob, MembreteEngine, MembreteJobResult
 from core.output_paths import make_run_dir
 from core.output_naming import unique_output_path_for_source
 from shell.context import ShellContext
+from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.slider import SliderWithValue
 from ui.common.tool_scaffold import PipelineWindow
@@ -33,7 +40,7 @@ from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.documents_step import DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.output_settings import add_tool_suffix_enabled
-from ui.common.dialogs import show_error, show_info, show_success, show_warning
+from ui.common.dialogs import ask_question, show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
 
@@ -217,6 +224,8 @@ class MarginPreviewWidget(QWidget):
 
 class MembretadoWindow(PipelineWindow):
 
+    LETTERHEAD_EXTS = (".pdf", ".doc", ".docx")
+
     SECTIONS = [
         ("01", "Membrete",   "Carga la hoja membretada"),
         ("02", "Documentos", "Carga los PDFs a membretar"),
@@ -232,12 +241,20 @@ class MembretadoWindow(PipelineWindow):
         super().__init__(ctx, parent)
 
         self._lh_path: Optional[str] = None
+        self._lh_source_name = ""
+        self._lh_preview_pixmap: Optional[QPixmap] = None
+        self._lh_page_w_pt = 0.0
+        self._lh_page_h_pt = 0.0
         self._margins = MembreteMargins()
         self.last_results: List[MembreteJobResult] = []
         self._worker_thread: Optional[QThread] = None
         self._worker: Optional[MembreteWorker] = None
+        self._conv_thread: Optional[QThread] = None
+        self._conv_dlg = None
+        self._letterhead_library: list[SavedLetterhead] = []
 
         self._build_pages()
+        self._refresh_letterhead_library()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -265,15 +282,18 @@ class MembretadoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Hoja membretada",
-            "Carga el PDF que contiene tu membrete (encabezado/pie). "
+            "Carga un PDF o Word que contiene tu membrete (encabezado/pie). "
             "Se usará siempre la primera página.",
         ))
 
-        load_card = make_card("Seleccionar membrete")
+        load_card = make_card(
+            "Seleccionar membrete",
+            "Puedes usar PDF, DOC o DOCX. Los Word se convierten a PDF antes de aplicarse.",
+        )
         ll = card_layout(load_card)
         btn_row = QHBoxLayout()
         btn_row.setSpacing(10)
-        open_btn = QPushButton("Seleccionar PDF")
+        open_btn = QPushButton("Seleccionar archivo")
         open_btn.setProperty("class", "Primary")
         open_btn.clicked.connect(self._on_open_membrete)
         tray_btn = QPushButton("Cargar desde bandeja")
@@ -288,6 +308,38 @@ class MembretadoWindow(PipelineWindow):
         btn_row.addStretch()
         ll.addLayout(btn_row)
         outer.addWidget(load_card)
+
+        library_card = make_card(
+            "Biblioteca de membretes",
+            "Guarda hojas usadas con frecuencia y reutilizalas sin buscar archivos cada vez.",
+        )
+        lib_l = card_layout(library_card)
+        self._library_list = QListWidget()
+        self._library_list.setFixedHeight(112)
+        self._library_list.itemSelectionChanged.connect(self._update_library_actions)
+        lib_l.addWidget(self._library_list)
+
+        lib_btns = QHBoxLayout()
+        lib_btns.setSpacing(8)
+        self._use_library_btn = QPushButton("Usar")
+        self._use_library_btn.setProperty("class", "Primary")
+        self._use_library_btn.clicked.connect(self._on_use_library_membrete)
+        lib_btns.addWidget(self._use_library_btn)
+
+        self._save_library_btn = QPushButton("Guardar actual")
+        self._save_library_btn.setProperty("class", "Ghost")
+        set_button_icon(self._save_library_btn, "save")
+        self._save_library_btn.clicked.connect(self._on_save_membrete_to_library)
+        lib_btns.addWidget(self._save_library_btn)
+
+        self._remove_library_btn = QPushButton("Quitar")
+        self._remove_library_btn.setProperty("class", "Ghost")
+        set_button_icon(self._remove_library_btn, "trash-2")
+        self._remove_library_btn.clicked.connect(self._on_remove_library_membrete)
+        lib_btns.addWidget(self._remove_library_btn)
+        lib_btns.addStretch()
+        lib_l.addLayout(lib_btns)
+        outer.addWidget(library_card)
 
         info_card = make_card("Membrete cargado")
         il = card_layout(info_card)
@@ -347,7 +399,7 @@ class MembretadoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Documentos a membretar",
-            "Carga los PDFs cuyas páginas se pegarán sobre el membrete.",
+            "Carga PDFs o Word; los Word se convierten a PDF antes de pegarse sobre el membrete.",
         ))
 
         self._docs_card = DocumentsCard(
@@ -576,7 +628,7 @@ class MembretadoWindow(PipelineWindow):
         self._switch_section(1)
 
     def handle_drop(self, paths: List[str]) -> None:
-        self._docs_card.add_paths(paths)
+        self._add_file_paths_smart(paths)
 
     # ------------------------------------------------------------------ #
     # Membrete
@@ -584,26 +636,43 @@ class MembretadoWindow(PipelineWindow):
 
     def _on_open_membrete(self) -> None:
         path, _ = get_open_file_name(
-            self, "Seleccionar membrete PDF", "",
-            "PDF (*.pdf)",
+            self, "Seleccionar membrete", "",
+            "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)",
         )
         if path:
-            self._load_membrete(path)
+            self._load_membrete_input(path)
 
     def _on_membrete_from_tray(self) -> None:
-        paths = [p for p in self.ctx.tray.paths() if Path(p).suffix.lower() == ".pdf"]
+        paths = [
+            p for p in self.ctx.tray.paths()
+            if Path(p).suffix.lower() in self.LETTERHEAD_EXTS
+        ]
         if paths:
-            self._load_membrete(paths[0])
+            self._load_membrete_input(paths[0])
         else:
             show_info(
                 self,
-                "Sin PDFs compatibles",
-                "La bandeja no contiene un PDF para usar como membrete.",
+                "Sin archivos compatibles",
+                "La bandeja no contiene un PDF, DOC o DOCX para usar como membrete.",
             )
 
-    def _load_membrete(self, path: str) -> None:
+    def _load_membrete_input(self, path: str) -> None:
+        suffix = Path(path).suffix.lower()
+        if suffix == ".pdf":
+            self._load_membrete(path, source_name=Path(path).name)
+        elif suffix in (".doc", ".docx"):
+            self._handle_word_membrete([path])
+        else:
+            show_info(self, "Archivo no compatible", "Selecciona un PDF, DOC o DOCX.")
+
+    def _load_membrete(self, path: str, *, source_name: str = "") -> None:
+        doc = None
         try:
             doc = fitz.open(path)
+            if doc.is_encrypted:
+                raise RuntimeError("El PDF esta protegido o cifrado.")
+            if doc.page_count <= 0:
+                raise RuntimeError("El PDF no tiene paginas.")
             page = doc[0]
             pw = page.rect.width
             ph = page.rect.height
@@ -627,18 +696,23 @@ class MembretadoWindow(PipelineWindow):
             self._lh_preview_pixmap = QPixmap.fromImage(qimg_prev.copy())
             self._lh_page_w_pt = pw
             self._lh_page_h_pt = ph
-
-            doc.close()
         except Exception as e:
             show_warning(self, "Error al abrir membrete", str(e))
             return
+        finally:
+            if doc is not None:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
 
         self._lh_path = path
+        self._lh_source_name = source_name or Path(path).name
         self._lh_thumb.setPixmap(thumb)
         self._lh_thumb.setStyleSheet(
             "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
         )
-        self._lh_name_lbl.setText(Path(path).name)
+        self._lh_name_lbl.setText(self._lh_source_name)
         self._lh_pages_lbl.setText(f"{self._lh_page_w_pt:.0f} × {self._lh_page_h_pt:.0f} pt")
 
         # Detección automática de márgenes
@@ -648,6 +722,154 @@ class MembretadoWindow(PipelineWindow):
             f"inf. {self._margins.bottom_pt:.0f} pt"
         )
         self._apply_margins_to_sliders(self._margins)
+        self._update_library_actions()
+
+    def _refresh_letterhead_library(self) -> None:
+        if not hasattr(self, "_library_list"):
+            return
+        self._letterhead_library = load_letterhead_library()
+        self._library_list.clear()
+        for entry in self._letterhead_library:
+            item = QListWidgetItem(entry.label)
+            item.setData(Qt.ItemDataRole.UserRole, entry.id)
+            size_text = ""
+            if entry.page_width_pt and entry.page_height_pt:
+                size_text = f"\n{entry.page_width_pt:.0f} x {entry.page_height_pt:.0f} pt"
+            item.setToolTip(f"{entry.source_name}{size_text}\n{entry.path}")
+            self._library_list.addItem(item)
+        if not self._letterhead_library:
+            item = QListWidgetItem("Sin membretes guardados")
+            item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            self._library_list.addItem(item)
+        elif self._library_list.count() > 0:
+            self._library_list.setCurrentRow(0)
+        self._update_library_actions()
+
+    def _selected_library_entry(self) -> Optional[SavedLetterhead]:
+        if not hasattr(self, "_library_list"):
+            return None
+        item = self._library_list.currentItem()
+        if not item:
+            return None
+        letterhead_id = item.data(Qt.ItemDataRole.UserRole)
+        return next(
+            (entry for entry in self._letterhead_library if entry.id == letterhead_id),
+            None,
+        )
+
+    def _update_library_actions(self) -> None:
+        selected = self._selected_library_entry() is not None
+        if hasattr(self, "_use_library_btn"):
+            self._use_library_btn.setEnabled(selected)
+        if hasattr(self, "_remove_library_btn"):
+            self._remove_library_btn.setEnabled(selected)
+        if hasattr(self, "_save_library_btn"):
+            self._save_library_btn.setEnabled(bool(self._lh_path))
+
+    def _on_use_library_membrete(self) -> None:
+        entry = self._selected_library_entry()
+        if not entry:
+            return
+        if not Path(entry.path).exists():
+            show_warning(
+                self,
+                "Membrete no encontrado",
+                "El archivo guardado en la biblioteca ya no existe. Se actualizará la lista.",
+            )
+            self._refresh_letterhead_library()
+            return
+        self._load_membrete(entry.path, source_name=entry.label)
+
+    def _on_save_membrete_to_library(self) -> None:
+        if not self._lh_path:
+            show_info(self, "Sin membrete", "Carga primero un membrete para guardarlo.")
+            return
+        try:
+            entry = add_letterhead_to_library(
+                self._lh_path,
+                label=self._lh_source_name or Path(self._lh_path).stem,
+            )
+        except Exception as exc:
+            show_warning(self, "No se pudo guardar", str(exc))
+            return
+        self._refresh_letterhead_library()
+        self._select_library_entry(entry.id)
+        show_success(self, "Membrete guardado", "El membrete quedó disponible en la biblioteca.")
+
+    def _on_remove_library_membrete(self) -> None:
+        entry = self._selected_library_entry()
+        if not entry:
+            return
+        if not ask_question(
+            self,
+            "Quitar de biblioteca",
+            f"Se quitará \"{entry.label}\" de la biblioteca.\n\nNo se borrará el archivo original.",
+            accept_text="Quitar",
+            cancel_text="Cancelar",
+            danger=True,
+        ):
+            return
+        remove_letterhead_from_library(entry.id)
+        self._refresh_letterhead_library()
+
+    def _select_library_entry(self, letterhead_id: str) -> None:
+        if not hasattr(self, "_library_list"):
+            return
+        for index in range(self._library_list.count()):
+            item = self._library_list.item(index)
+            if item and item.data(Qt.ItemDataRole.UserRole) == letterhead_id:
+                self._library_list.setCurrentRow(index)
+                return
+
+    # ------------------------------------------------------------------ #
+    # Word -> PDF para membrete
+    # ------------------------------------------------------------------ #
+
+    def _handle_word_membrete(self, paths: List[str]) -> None:
+        if self._conv_thread is not None:
+            return
+        if not self.ctx.word_converter.is_available():
+            show_info(
+                self,
+                "Microsoft Office requerido",
+                "Para convertir el membrete Word a PDF se necesita Microsoft Office instalado.",
+            )
+            return
+
+        from ui.common.word_convert_dialog import WordConvertDialog
+
+        self._conv_dlg = WordConvertDialog(self, paths)
+        worker = WordConvertWorker(
+            self.ctx.word_converter,
+            paths,
+            make_run_dir("converted"),
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._conv_dlg.on_progress)
+        worker.finished.connect(self._conv_dlg.on_finished)
+        worker.error.connect(self._conv_dlg.on_error)
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        worker.finished.connect(
+            lambda converted, source=Path(paths[0]).name: self._on_word_membrete_done(converted, source)
+        )
+        worker.error.connect(self._on_word_membrete_error)
+        self._conv_thread = thread
+        thread.start()
+        self._conv_dlg.exec()
+
+    def _on_word_membrete_done(self, paths: List[str], source_name: str) -> None:
+        self._conv_thread = None
+        if paths:
+            self._load_membrete(paths[0], source_name=source_name)
+
+    def _on_word_membrete_error(self, msg: str) -> None:
+        self._conv_thread = None
 
     def _sync_preview_pixmap(self) -> None:
         if hasattr(self, "_lh_preview_pixmap") and self._lh_preview_pixmap:
@@ -710,7 +932,7 @@ class MembretadoWindow(PipelineWindow):
         n = self._docs_card.count()
         rows = []
         if self._lh_path:
-            rows.append(f"<b>Membrete:</b> &nbsp; {Path(self._lh_path).name}")
+            rows.append(f"<b>Membrete:</b> &nbsp; {self._lh_source_name or Path(self._lh_path).name}")
         rows.append(f"<b>Documentos:</b> &nbsp; {n}")
         rows.append(
             f"<b>Márgenes:</b> &nbsp; "
@@ -754,6 +976,7 @@ class MembretadoWindow(PipelineWindow):
         return jobs
 
     def _on_run(self) -> None:
+        self._stop_active_worker()
         err = self._validate_ready()
         if err:
             show_warning(self, "Falta información", err)
@@ -831,6 +1054,7 @@ class MembretadoWindow(PipelineWindow):
         self._send_btn.set_output_paths([])
         self.last_results = []
         self._lh_path = None
+        self._lh_source_name = ""
         self._lh_preview_pixmap = None
         self._lh_page_w_pt = 0.0
         self._lh_page_h_pt = 0.0
@@ -846,6 +1070,7 @@ class MembretadoWindow(PipelineWindow):
         self._lh_margins_lbl.setText("")
         self._margin_preview.clear_letterhead()
         self._apply_margins_to_sliders(self._margins)
+        self._update_library_actions()
         self._docs_card.clear()
         self._proc_step.reset()
         self._switch_section(0)
@@ -867,11 +1092,14 @@ class MembretadoWindow(PipelineWindow):
             return
 
         current_idx = self.stack.currentIndex()
-        pdfs = [p for p in paths if Path(p).suffix.lower() == ".pdf"]
+        letterheads = [
+            p for p in paths
+            if Path(p).suffix.lower() in self.LETTERHEAD_EXTS
+        ]
 
-        if current_idx == 0 and not self._lh_path and pdfs:
-            self._load_membrete(pdfs[0])
-            remaining = [p for p in paths if p != pdfs[0]]
+        if current_idx == 0 and not self._lh_path and letterheads:
+            self._load_membrete_input(letterheads[0])
+            remaining = [p for p in paths if p != letterheads[0]]
             if remaining:
                 self._docs_card.add_paths(remaining)
                 self._switch_section(1)

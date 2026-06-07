@@ -25,8 +25,8 @@ from shell.tool_registry import TOOLS, ToolDescriptor
 from shell.tool_usage import ToolUsageStore, rank_tool_ids
 
 
-ICON_SIZE = 38
-CARD_H = 82
+ICON_SIZE = 40
+CARD_H = 96
 GRID_SPACING = 10
 CARD_MIN_W = 232
 QUICK_LIMIT = 6
@@ -135,6 +135,13 @@ def _make_tool_icon(letter: str, color: str, size: int = ICON_SIZE) -> QPixmap:
     return pix
 
 
+def _hex_components(hex_color: str) -> str:
+    """'#5E6AD2' → '94, 106, 210' para usar en rgba()."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"{r}, {g}, {b}"
+
+
 class ToolCard(QFrame):
     """Tarjeta compacta de herramienta."""
 
@@ -164,8 +171,9 @@ class ToolCard(QFrame):
         layout.setContentsMargins(14, 10, 12, 10)
         layout.setSpacing(12)
 
+        from ui.common.icons import make_tool_icon_card, icon_pixmap
         icon_lbl = QLabel()
-        icon_lbl.setPixmap(_make_tool_icon(self._tool.icon_letter, self._tool.accent_color))
+        icon_lbl.setPixmap(make_tool_icon_card(self._tool.id, self._tool.accent_color, size=ICON_SIZE))
         icon_lbl.setFixedSize(ICON_SIZE, ICON_SIZE)
         icon_lbl.setStyleSheet("background: transparent;")
         layout.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -214,33 +222,46 @@ class ToolCard(QFrame):
 
         layout.addLayout(text_col, 1)
 
+        # Flecha visible solo en hover
+        self._arrow_lbl = QLabel()
+        self._arrow_lbl.setPixmap(icon_pixmap("arrow-right", self._tool.accent_color, 14))
+        self._arrow_lbl.setFixedSize(16, 16)
+        self._arrow_lbl.setVisible(False)
+        self._arrow_lbl.setStyleSheet("background: transparent;")
+        layout.addWidget(self._arrow_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
         info_btn = TippyButton(self._tool.title, self._tool.description_md, self.window())
         layout.addWidget(info_btn, 0, Qt.AlignmentFlag.AlignTop)
 
     def _apply_style(self, hover: bool) -> None:
         if hover and self._tool.enabled:
-            self.setStyleSheet(f"""
-                QFrame#LauncherCard {{
-                    background: #15161D;
-                    border: 1px solid {self._tool.accent_color};
-                    border-radius: 8px;
-                }}
-            """)
+            comp = _hex_components(self._tool.accent_color)
+            self.setStyleSheet(
+                f"QFrame#LauncherCard {{"
+                f"background: #0D0D10;"
+                f"border: 1px solid rgba({comp}, 0.5);"
+                f"border-radius: 10px;"
+                f"}}"
+            )
         else:
-            self.setStyleSheet("""
-                QFrame#LauncherCard {
-                    background: #101116;
-                    border: 1px solid #262832;
-                    border-radius: 8px;
-                }
-            """)
+            self.setStyleSheet(
+                "QFrame#LauncherCard {"
+                "background: #101116;"
+                "border: 1px solid #1E1E28;"
+                "border-radius: 10px;"
+                "}"
+            )
 
     def enterEvent(self, event) -> None:
         self._apply_style(True)
+        if hasattr(self, "_arrow_lbl"):
+            self._arrow_lbl.setVisible(True)
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:
         self._apply_style(False)
+        if hasattr(self, "_arrow_lbl"):
+            self._arrow_lbl.setVisible(False)
         super().leaveEvent(event)
 
     def mousePressEvent(self, event) -> None:

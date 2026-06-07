@@ -45,3 +45,44 @@ def test_colors_dict_has_required_keys():
     }
     missing = required - set(COLORS.keys())
     assert not missing, f"COLORS falta claves: {missing}"
+
+
+def test_animation_helper_imports():
+    """AnimationHelper se importa sin errores."""
+    from ui.common.animations import AnimationHelper
+    assert AnimationHelper is not None
+
+
+def test_fade_in_returns_animation():
+    """fade_in retorna una QPropertyAnimation configurada."""
+    import sys
+    from PyQt6.QtWidgets import QApplication, QWidget
+    from ui.common.animations import AnimationHelper
+    app = QApplication.instance() or QApplication(sys.argv)
+    w = QWidget()
+    anim = AnimationHelper.fade_in(w, duration=200, start=False)
+    assert anim is not None
+    assert anim.duration() == 200
+    w.deleteLater()
+
+
+def test_count_up_smoke():
+    """count_up no lanza excepciones."""
+    import sys
+    from PyQt6.QtWidgets import QApplication, QLabel
+    from ui.common.animations import AnimationHelper
+    app = QApplication.instance() or QApplication(sys.argv)
+    lbl = QLabel("0")
+    AnimationHelper.count_up(lbl, target=42, duration=100, suffix=" docs")
+    lbl.deleteLater()
+
+
+def test_apply_glow_smoke():
+    """apply_glow no lanza excepciones."""
+    import sys
+    from PyQt6.QtWidgets import QApplication, QPushButton
+    from ui.common.animations import AnimationHelper
+    app = QApplication.instance() or QApplication(sys.argv)
+    btn = QPushButton("Test")
+    AnimationHelper.apply_glow(btn, "#5E6AD2")
+    btn.deleteLater()

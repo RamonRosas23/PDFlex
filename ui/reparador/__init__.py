@@ -1,0 +1,1 @@
+"""Reparador PDF tool package."""

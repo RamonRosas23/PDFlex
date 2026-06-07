@@ -37,11 +37,12 @@ def test_colors_dict_has_required_keys():
     from ui.styles import COLORS
     required = {
         "bg", "surface", "surface_2", "surface_3", "surface_4",
-        "border", "border_strong",
+        "border", "border_strong", "border_focus",
         "glass_bg", "glass_border",
         "text", "text_muted", "text_dim", "text_faint",
         "accent", "accent_hover", "accent_press",
         "success", "warning", "danger",
+        "scroll_handle",
     }
     missing = required - set(COLORS.keys())
     assert not missing, f"COLORS falta claves: {missing}"

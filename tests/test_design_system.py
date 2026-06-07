@@ -1,5 +1,4 @@
 """Smoke tests para el design system premium de PDFlex."""
-import pytest
 
 
 def _luminance(hex_color: str) -> float:

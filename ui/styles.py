@@ -38,7 +38,7 @@ COLORS = {
     "border_strong":  "#2A2A38",
     "border_focus":   "#5E6AD2",   # se sobreescribe per-tool accent
 
-    # Glassmorphism — command palette, modals, tray
+    # Glassmorphism — usados en Plan 3: command palette, modals, tray
     "glass_bg":       "rgba(13, 13, 16, 0.92)",
     "glass_border":   "rgba(255, 255, 255, 0.07)",
 
@@ -58,7 +58,7 @@ COLORS = {
     "warning":        "#F5A623",
     "danger":         "#E5484D",
 
-    # Scroll
+    # Scroll — usado en word_convert_dialog y updater_dialog (scrollbars secundarios)
     "scroll_handle":  "#2A2A38",
 }
 
@@ -189,7 +189,7 @@ QPushButton[class="SidebarBtn"][active="true"] {{
 #PageSubtitle {{
     color: {COLORS['text_muted']};
     font-size: 13px;
-    line-height: 1.6;
+    /* line-height no soportado en Qt QSS — ignorado, presente como referencia */
     padding: 0;
     margin: 0;
     background: transparent;

@@ -2,16 +2,16 @@
 
 **Fecha:** 2026-06-06
 **Enfoque:** A — Evolutionary Premium (upgrade quirúrgico, no reescritura)
-**Alcance:** 23 herramientas + launcher + componentes shared + features transversales
-**Estado del spec:** EN PROGRESO — Secciones 1-5 completas, Sección 6 pendiente
+**Alcance:** 21 herramientas + launcher + componentes shared + features transversales
+**Estado del spec:** COMPLETO — Secciones 1-6 aprobadas y committeadas
 
 ---
 
 ## Contexto del proyecto
 
-PDFlex es una suite de 23 herramientas PDF desktop (PyQt6 + PyMuPDF + Tesseract) para
+PDFlex es una suite de 21 herramientas PDF desktop (PyQt6 + PyMuPDF + Tesseract) para
 GRUPO OCMX. Arquitectura: `PipelineWindow` base con sidebar de pasos + `QStackedWidget`
-de contenido. Tema dark actual inspirado en Linear/Vercel (#0A0A0B). 23 herramientas
+de contenido. Tema dark actual inspirado en Linear/Vercel (#0A0A0B). 21 herramientas
 con accent color propio. Componentes shared: `DocumentsCard`, `ProcessStep`,
 `GenericPdfViewer`, `ImageResultsViewer`, `SendToToolButton`.
 
@@ -169,7 +169,10 @@ btn.setGraphicsEffect(effect)
 **Glassmorphism** (solo command palette, modals, tray drawer):
 - Background: `rgba(13,13,16, 0.92)`
 - Border: `rgba(255,255,255,0.07)`
-- `QGraphicsBlurEffect(12)` en el widget subyacente mientras está abierto
+- Efecto blur del fondo: capturar `QPixmap.grabWidget()` de la ventana subyacente,
+  aplicar `QGraphicsBlurEffect(radius=14)` sobre ese pixmap y renderizarlo como
+  fondo del overlay. PyQt6 no tiene backdrop-filter nativo; esta es la aproximación
+  correcta: blur sobre snapshot, no sobre el widget en vivo.
 
 **Bordes luminosos en sidebar step activo:**
 ```css

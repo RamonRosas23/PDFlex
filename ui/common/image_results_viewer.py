@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QPixmap
+from PyQt6.QtGui import QBrush, QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFrame,
 )
+from PIL import Image, ImageDraw
 
 from ui.common.file_dialogs import get_save_file_name
 from ui.common.icons import icon, set_button_icon
@@ -34,9 +35,16 @@ class ImageResultsViewer(QWidget):
 
     openInExplorer = pyqtSignal(str)
 
-    def __init__(self, list_title: str = "Imágenes generadas", parent=None) -> None:
+    def __init__(
+        self,
+        list_title: str = "Imágenes generadas",
+        parent=None,
+        *,
+        comparison_mode: bool = False,
+    ) -> None:
         super().__init__(parent)
         self._list_title = list_title
+        self._comparison_mode = comparison_mode
         self._results: list = []
         self._source_dirs: list = []
         # Grouped-mode state
@@ -127,7 +135,28 @@ class ImageResultsViewer(QWidget):
         )
         rv.addWidget(self.preview_lbl, 1)
 
+        self.compare_widget = QWidget()
+        compare_layout = QHBoxLayout(self.compare_widget)
+        compare_layout.setContentsMargins(0, 0, 0, 0)
+        compare_layout.setSpacing(12)
+        self.before_preview_lbl = self._make_compare_panel("Antes")
+        self.after_preview_lbl = self._make_compare_panel("Después")
+        compare_layout.addWidget(self.before_preview_lbl, 1)
+        compare_layout.addWidget(self.after_preview_lbl, 1)
+        rv.addWidget(self.compare_widget, 1)
+        self.compare_widget.setVisible(False)
+
         layout.addWidget(right, 1)
+
+    def _make_compare_panel(self, title: str) -> QLabel:
+        label = QLabel(title)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setMinimumHeight(220)
+        label.setStyleSheet(
+            "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
+            "color: #9094A0;"
+        )
+        return label
 
     # ------------------------------------------------------------------ #
     # Public API — flat results (backward compat)
@@ -229,6 +258,10 @@ class ImageResultsViewer(QWidget):
         self._groups = []
         self.file_list.clear()
         self.preview_lbl.clear()
+        self.before_preview_lbl.clear()
+        self.after_preview_lbl.clear()
+        self.compare_widget.setVisible(False)
+        self.preview_lbl.setVisible(True)
         self.meta_lbl.setText("")
         self.title_lbl.setText("Selecciona un archivo")
         self.open_file_btn.setEnabled(False)
@@ -269,7 +302,9 @@ class ImageResultsViewer(QWidget):
             # Header row — clear preview, keep save-all enabled if possible
             self.title_lbl.setText("Selecciona un archivo")
             self.meta_lbl.setText("")
-            self.preview_lbl.clear()
+            self._clear_preview_area()
+            self.compare_widget.setVisible(False)
+            self.preview_lbl.setVisible(True)
             self.open_file_btn.setEnabled(False)
             self.open_btn.setEnabled(False)
             self.save_as_btn.setEnabled(False)
@@ -280,7 +315,9 @@ class ImageResultsViewer(QWidget):
         if not getattr(r, "success", False) or not out:
             self.title_lbl.setText("Error en este archivo")
             self.meta_lbl.setText(getattr(r, "error", "") or "")
-            self.preview_lbl.clear()
+            self._clear_preview_area()
+            self.compare_widget.setVisible(False)
+            self.preview_lbl.setVisible(True)
             self.open_file_btn.setEnabled(False)
             self.open_btn.setEnabled(False)
             self.save_as_btn.setEnabled(False)
@@ -294,29 +331,68 @@ class ImageResultsViewer(QWidget):
         self.save_as_btn.setEnabled(True)
         self.save_all_btn.setEnabled(self._has_saveable_results())
 
-        pix = QPixmap(str(path))
+        pix = self._pixmap_for_preview(path)
         if pix.isNull():
-            self.preview_lbl.clear()
+            self._clear_preview_area()
             self.meta_lbl.setText("No se pudo previsualizar")
             return
 
-        target_w = max(240, self.preview_lbl.width())
-        target_h = max(220, self.preview_lbl.height())
-        scaled = pix.scaled(
-            target_w,
-            target_h,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        self.preview_lbl.setPixmap(scaled)
+        if self._comparison_mode and self._source_image_path(r):
+            self.preview_lbl.setVisible(False)
+            self.compare_widget.setVisible(True)
+            source_pix = self._pixmap_for_preview(Path(self._source_image_path(r)))
+            self._set_scaled_pixmap(self.before_preview_lbl, source_pix)
+            self._set_scaled_pixmap(self.after_preview_lbl, pix)
+        else:
+            self.compare_widget.setVisible(False)
+            self.preview_lbl.setVisible(True)
+            self._set_scaled_pixmap(self.preview_lbl, pix)
         try:
             size_kb = path.stat().st_size / 1024
             size_str = f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.0f} KB"
-            self.meta_lbl.setText(
-                f"{pix.width()} x {pix.height()} px  ·  {size_str}"
-            )
+            meta = f"{pix.width()} x {pix.height()} px  ·  {size_str}"
+            extra = getattr(r, "meta_text", "")
+            if extra:
+                meta += f"  ·  {extra}"
+            self.meta_lbl.setText(meta)
         except OSError:
-            self.meta_lbl.setText(f"{pix.width()} x {pix.height()} px")
+            meta = f"{pix.width()} x {pix.height()} px"
+            extra = getattr(r, "meta_text", "")
+            if extra:
+                meta += f"  ·  {extra}"
+            self.meta_lbl.setText(meta)
+
+    def _clear_preview_area(self) -> None:
+        self.preview_lbl.clear()
+        self.before_preview_lbl.clear()
+        self.after_preview_lbl.clear()
+
+    def _set_scaled_pixmap(self, label: QLabel, pix: QPixmap) -> None:
+        if pix.isNull():
+            label.clear()
+            return
+        target_w = max(240, label.width())
+        target_h = max(220, label.height())
+        label.setPixmap(
+            pix.scaled(
+                target_w,
+                target_h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def _source_image_path(self, result) -> str:
+        job = getattr(result, "job", None)
+        value = getattr(job, "image_path", "") if job else ""
+        return str(value) if value else ""
+
+    def _pixmap_for_preview(self, path: Path) -> QPixmap:
+        if self._comparison_mode and path.suffix.lower() == ".png":
+            pix = _transparent_png_on_checkerboard(path)
+            if not pix.isNull():
+                return pix
+        return QPixmap(str(path))
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -421,3 +497,25 @@ class ImageResultsViewer(QWidget):
             out = getattr(r, "output_path", "") or ""
             if out:
                 self.openInExplorer.emit(out)
+
+
+def _transparent_png_on_checkerboard(path: Path, square: int = 18) -> QPixmap:
+    try:
+        with Image.open(path) as img:
+            rgba = img.convert("RGBA")
+        bg = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        draw = ImageDraw.Draw(bg)
+        light = (238, 238, 238, 255)
+        dark = (196, 196, 196, 255)
+        for y in range(0, rgba.height, square):
+            for x in range(0, rgba.width, square):
+                draw.rectangle(
+                    (x, y, x + square - 1, y + square - 1),
+                    fill=light if ((x // square + y // square) % 2 == 0) else dark,
+                )
+        bg.alpha_composite(rgba)
+        data = bg.tobytes("raw", "RGBA")
+        qimg = QImage(data, bg.width, bg.height, QImage.Format.Format_RGBA8888)
+        return QPixmap.fromImage(qimg.copy())
+    except Exception:
+        return QPixmap()

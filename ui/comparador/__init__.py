@@ -1,0 +1,1 @@
+"""Comparador PDF tool package."""

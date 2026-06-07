@@ -6,7 +6,7 @@ cuando _reduced_motion = True (configurable desde Preferencias).
 """
 from __future__ import annotations
 
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt6.QtCore import (
     QEasingCurve, QPropertyAnimation, QSequentialAnimationGroup,
@@ -65,7 +65,7 @@ class AnimationHelper:
     def fade_out(
         widget: QWidget,
         duration: int = 140,
-        on_finished: Optional[callable] = None,
+        on_finished: Optional[Callable[[], None]] = None,
     ) -> QPropertyAnimation:
         """Anima la opacidad de 1.0 a 0.0. Llama on_finished al terminar."""
         anim = QPropertyAnimation(widget, b"windowOpacity", widget)

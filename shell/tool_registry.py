@@ -34,6 +34,46 @@ def _make_firmador():
     return FirmadorWindow
 
 
+def _make_organizador():
+    from ui.organizador.window import OrganizadorWindow
+    return OrganizadorWindow
+
+
+def _make_compresor():
+    from ui.compresor.window import CompresorWindow
+    return CompresorWindow
+
+
+def _make_marca_agua():
+    from ui.marca_agua.window import MarcaAguaWindow
+    return MarcaAguaWindow
+
+
+def _make_redactor():
+    from ui.redactor.window import RedactorWindow
+    return RedactorWindow
+
+
+def _make_protector():
+    from ui.protector.window import ProtectorWindow
+    return ProtectorWindow
+
+
+def _make_formularios():
+    from ui.formularios.window import FormulariosWindow
+    return FormulariosWindow
+
+
+def _make_comparador():
+    from ui.comparador.window import ComparadorWindow
+    return ComparadorWindow
+
+
+def _make_reparador():
+    from ui.reparador.window import ReparadorWindow
+    return ReparadorWindow
+
+
 def _make_foleador():
     from ui.foleador.window import FoleadorWindow
     return FoleadorWindow
@@ -54,6 +94,11 @@ def _make_pdf_to_imgs():
     return PdfToImgsWindow
 
 
+def _make_extraer_imagenes():
+    from ui.extraer_imagenes.window import ExtraerImagenesWindow
+    return ExtraerImagenesWindow
+
+
 def _make_unir():
     from ui.unir.window import UnirWindow
     return UnirWindow
@@ -69,6 +114,11 @@ def _make_word_a_pdf():
     return WordAPdfWindow
 
 
+def _make_pdf_to_word():
+    from ui.pdf_to_word.window import PdfToWordWindow
+    return PdfToWordWindow
+
+
 def _make_quitar_fondo():
     from ui.quitar_fondo.window import QuitarFondoWindow
     return QuitarFondoWindow
@@ -79,7 +129,30 @@ def _make_ocr():
     return OcrWindow
 
 
+def _make_clasificador():
+    from ui.clasificador.window import ClasificadorWindow
+    return ClasificadorWindow
+
+
 TOOLS: List[ToolDescriptor] = [
+    ToolDescriptor(
+        id="organizador",
+        title="Organizador visual",
+        tagline="Reordena, rota, duplica y extrae páginas",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Permite reorganizar páginas PDF visualmente con miniaturas.\n\n"
+            "**Características:**\n"
+            "- Carga uno o varios PDFs\n"
+            "- Reordena páginas arrastrando miniaturas\n"
+            "- Rota, duplica, quita y extrae páginas seleccionadas\n"
+            "- Genera un PDF final sin modificar los originales"
+        ),
+        accent_color="#14B8A6",
+        enabled=True,
+        window_factory=lambda ctx: _make_organizador()(ctx),
+        icon_letter="O",
+    ),
     ToolDescriptor(
         id="firmador",
         title="Firmador masivo",
@@ -98,6 +171,143 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_firmador()(ctx),
         icon_letter="F",
+    ),
+    ToolDescriptor(
+        id="compresor",
+        title="Comprimir PDF",
+        tagline="Reduce peso con perfiles seguros",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Optimiza PDFs por lote reduciendo el peso de imágenes internas "
+            "y limpiando la estructura del documento.\n\n"
+            "**Perfiles:**\n"
+            "- Correo: máxima reducción razonable\n"
+            "- Equilibrado: balance recomendado\n"
+            "- Alta calidad: reducción conservadora\n\n"
+            "Si un PDF ya está optimizado, PDFlex conserva una copia sin aumentar el peso."
+        ),
+        accent_color="#2DD4BF",
+        enabled=True,
+        window_factory=lambda ctx: _make_compresor()(ctx),
+        icon_letter="C",
+    ),
+    ToolDescriptor(
+        id="marca_agua",
+        title="Marca de agua",
+        tagline="Sellos de texto o imagen por lote",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Aplica marcas de agua y sellos sobre PDFs por lote sin modificar "
+            "los originales.\n\n"
+            "**Características:**\n"
+            "- Presets: Confidencial, Copia, Pagado y Recibido\n"
+            "- Texto o imagen como sello\n"
+            "- Opacidad, posición, rotación y tamaño ajustables\n"
+            "- Aplicación a todas las páginas, primera, última o rango personalizado\n"
+            "- Resultado temporal con visor y envío a otras herramientas"
+        ),
+        accent_color="#F97316",
+        enabled=True,
+        window_factory=lambda ctx: _make_marca_agua()(ctx),
+        icon_letter="A",
+    ),
+    ToolDescriptor(
+        id="redactor",
+        title="Redaccion segura",
+        tagline="Elimina informacion sensible de verdad",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Permite dibujar zonas de redacción sobre un PDF y exportar una "
+            "copia segura donde el contenido queda eliminado, no solo cubierto.\n\n"
+            "**Características:**\n"
+            "- Redacción manual por rectángulos\n"
+            "- Navegación por páginas\n"
+            "- Deshacer, limpiar página y limpiar todo\n"
+            "- Relleno negro o blanco\n"
+            "- Aplica redacciones reales sobre texto, imágenes y gráficos tocados"
+        ),
+        accent_color="#EF4444",
+        enabled=True,
+        window_factory=lambda ctx: _make_redactor()(ctx),
+        icon_letter="R",
+    ),
+    ToolDescriptor(
+        id="protector",
+        title="Proteger PDF",
+        tagline="Contraseñas y permisos AES-256",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Crea copias cifradas de PDFs con contraseña de apertura opcional "
+            "y permisos configurables.\n\n"
+            "**Características:**\n"
+            "- Cifrado AES-256\n"
+            "- Contraseña de apertura y de propietario\n"
+            "- Permisos de impresión, copia, edición, formularios y organización\n"
+            "- Salida temporal con visor y guardado posterior"
+        ),
+        accent_color="#0EA5E9",
+        enabled=True,
+        window_factory=lambda ctx: _make_protector()(ctx),
+        icon_letter="P",
+    ),
+    ToolDescriptor(
+        id="formularios",
+        title="Formularios PDF",
+        tagline="Rellena campos y aplana resultados",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Detecta campos AcroForm, permite capturar valores y genera una "
+            "copia rellena opcionalmente aplanada.\n\n"
+            "**Características:**\n"
+            "- Detecta textos, checkboxes, radios, combos y listas\n"
+            "- Controles editables por tipo de campo\n"
+            "- Salida editable o aplanada\n"
+            "- Resultado temporal con visor y Guardar como"
+        ),
+        accent_color="#A855F7",
+        enabled=True,
+        window_factory=lambda ctx: _make_formularios()(ctx),
+        icon_letter="L",
+    ),
+    ToolDescriptor(
+        id="comparador",
+        title="Comparar PDFs",
+        tagline="Detecta cambios visuales y de texto",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Compara dos versiones de un PDF y genera un reporte con resumen "
+            "por página y diferencias resaltadas.\n\n"
+            "**Características:**\n"
+            "- Comparación visual por render de página\n"
+            "- Comparación de texto nativo normalizado\n"
+            "- Detección de páginas agregadas o eliminadas\n"
+            "- Sensibilidad rápida, equilibrada o detallada\n"
+            "- Reporte PDF temporal con visor y Guardar como"
+        ),
+        accent_color="#F59E0B",
+        enabled=True,
+        window_factory=lambda ctx: _make_comparador()(ctx),
+        icon_letter="V",
+    ),
+    ToolDescriptor(
+        id="reparador",
+        title="Reparar PDF",
+        tagline="Reescribe y normaliza documentos",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Genera copias normalizadas de PDFs para mejorar compatibilidad "
+            "y recuperar documentos con estructura dañada cuando MuPDF pueda abrirlos.\n\n"
+            "**Características:**\n"
+            "- Reescritura con limpieza interna, garbage y deflate\n"
+            "- Perfil de compatibilidad sin object streams\n"
+            "- Detección de PDFs reparados al abrir\n"
+            "- Verificación posterior de páginas y apertura\n"
+            "- Salida temporal con visor, Guardar como y Guardar todo"
+        ),
+        accent_color="#84CC16",
+        enabled=True,
+        window_factory=lambda ctx: _make_reparador()(ctx),
+        icon_letter="Z",
     ),
     ToolDescriptor(
         id="foleador",
@@ -142,12 +352,14 @@ TOOLS: List[ToolDescriptor] = [
         tagline="Pega tus documentos sobre hojas membretadas",
         description_md=(
             "**¿Qué hace?**\n"
-            "Superpone las páginas de tus documentos sobre una hoja membretada.\n\n"
+            "Superpone las páginas de tus documentos sobre una hoja membretada "
+            "reutilizable.\n\n"
             "**Características:**\n"
+            "- Biblioteca local de membretes frecuentes\n"
+            "- Membretes PDF o Word (.doc/.docx convertido a PDF)\n"
             "- Detección automática de márgenes del membrete\n"
             "- Preview en tiempo real con marco de margen ajustable\n"
-            "- Respeta logos superiores e inferiores\n\n"
-            "**Próximamente**"
+            "- Respeta logos superiores e inferiores"
         ),
         accent_color="#B87FF5",
         enabled=True,
@@ -171,6 +383,26 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_pdf_to_imgs()(ctx),
         icon_letter="I",
+    ),
+    ToolDescriptor(
+        id="extraer_imagenes",
+        title="Extraer imágenes",
+        tagline="Saca recursos embebidos sin renderizar",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Extrae imágenes y recursos embebidos directamente desde PDFs, "
+            "sin convertir páginas completas.\n\n"
+            "**Características:**\n"
+            "- Conserva el formato original cuando PyMuPDF lo expone\n"
+            "- Agrupa resultados por PDF origen\n"
+            "- Evita duplicados por recurso interno\n"
+            "- Filtro por tamaño mínimo\n"
+            "- Vista previa, Guardar como y Guardar todo"
+        ),
+        accent_color="#06B6D4",
+        enabled=True,
+        window_factory=lambda ctx: _make_extraer_imagenes()(ctx),
+        icon_letter="X",
     ),
     ToolDescriptor(
         id="unir",
@@ -234,6 +466,26 @@ TOOLS: List[ToolDescriptor] = [
         input_extensions=(".doc", ".docx"),
     ),
     ToolDescriptor(
+        id="pdf_to_word",
+        title="PDF a Word",
+        tagline="Convierte PDFs en DOCX editable",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Convierte PDFs con texto nativo o escaneados en documentos Word "
+            "editables.\n\n"
+            "**Características:**\n"
+            "- Conserva texto nativo cuando ya existe\n"
+            "- Usa OCR local como fallback para escaneos\n"
+            "- Genera DOCX por lote\n"
+            "- Preview del texto reconocido\n"
+            "- Envio directo a Word a PDF para cerrar el ciclo"
+        ),
+        accent_color="#2563EB",
+        enabled=True,
+        window_factory=lambda ctx: _make_pdf_to_word()(ctx),
+        icon_letter="D",
+    ),
+    ToolDescriptor(
         id="ocr",
         title="OCR de PDF",
         tagline="Convierte escaneos e imágenes en texto editable",
@@ -252,6 +504,25 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_ocr()(ctx),
         icon_letter="T",
+    ),
+    ToolDescriptor(
+        id="clasificador",
+        title="Clasificador OCR",
+        tagline="Renombra PDFs por tipo, RFC, fecha y folio",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Lee texto nativo u OCR de PDFs y genera copias temporales con "
+            "nombres armados desde campos detectados.\n\n"
+            "**Campos disponibles:**\n"
+            "- Tipo de documento por reglas configurables\n"
+            "- RFC, fecha, folio, cliente y nombre original\n"
+            "- Plantillas como `{tipo}_{cliente}_{fecha}_{folio}`\n\n"
+            "Ideal para ordenar lotes de facturas, recibos, contratos y expedientes."
+        ),
+        accent_color="#22C55E",
+        enabled=True,
+        window_factory=lambda ctx: _make_clasificador()(ctx),
+        icon_letter="C",
     ),
     ToolDescriptor(
         id="quitar_fondo",

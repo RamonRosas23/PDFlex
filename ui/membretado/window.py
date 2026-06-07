@@ -9,7 +9,7 @@ from typing import List, Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QRectF
+from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QRectF, QSize
 from PyQt6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QBrush,
     QDragEnterEvent, QDropEvent, QDesktopServices,
@@ -278,7 +278,7 @@ class MembretadoWindow(PipelineWindow):
         page.setProperty("class", "PageContainer")
         outer = QVBoxLayout(page)
         outer.setContentsMargins(36, 32, 36, 32)
-        outer.setSpacing(24)
+        outer.setSpacing(18)
 
         outer.addLayout(make_page_header(
             "Hoja membretada",
@@ -286,51 +286,109 @@ class MembretadoWindow(PipelineWindow):
             "Se usará siempre la primera página.",
         ))
 
-        load_card = make_card(
-            "Seleccionar membrete",
-            "Puedes usar PDF, DOC o DOCX. Los Word se convierten a PDF antes de aplicarse.",
-        )
-        ll = card_layout(load_card)
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        open_btn = QPushButton("Seleccionar archivo")
-        open_btn.setProperty("class", "Primary")
-        open_btn.clicked.connect(self._on_open_membrete)
-        tray_btn = QPushButton("Cargar desde bandeja")
-        tray_btn.setProperty("class", "Ghost")
-        tray_btn.clicked.connect(self._on_membrete_from_tray)
-        self.ctx.tray.changed.connect(
-            lambda: tray_btn.setVisible(self.ctx.tray.count() > 0)
-        )
-        tray_btn.setVisible(self.ctx.tray.count() > 0)
-        btn_row.addWidget(open_btn)
-        btn_row.addWidget(tray_btn)
-        btn_row.addStretch()
-        ll.addLayout(btn_row)
-        outer.addWidget(load_card)
+        body = QHBoxLayout()
+        body.setSpacing(18)
 
-        library_card = make_card(
-            "Biblioteca de membretes",
-            "Guarda hojas usadas con frecuencia y reutilizalas sin buscar archivos cada vez.",
+        active_card = make_card(
+            "Membrete activo",
+            "PDF, DOC o DOCX. Los archivos Word se convierten a PDF de forma temporal.",
         )
+        active_l = card_layout(active_card)
+        active_l.setSpacing(14)
+        active_l.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        active_body = QHBoxLayout()
+        active_body.setSpacing(18)
+        active_body.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        self._lh_thumb = QLabel("Sin membrete")
+        self._lh_thumb.setFixedSize(176, 226)
+        self._lh_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._lh_thumb.setStyleSheet(
+            "background: #16161A; border: 1px dashed #33333B; "
+            "border-radius: 8px; color: #6B6F7A; font-size: 11px;"
+        )
+        active_body.addWidget(self._lh_thumb)
+
+        info_col = QVBoxLayout()
+        info_col.setSpacing(8)
+        self._lh_name_lbl = QLabel("Ningun membrete seleccionado")
+        self._lh_name_lbl.setObjectName("CardTitle")
+        self._lh_name_lbl.setWordWrap(True)
+        self._lh_pages_lbl = QLabel("Selecciona una hoja o usa una guardada en biblioteca.")
+        self._lh_pages_lbl.setProperty("class", "CardHint")
+        self._lh_pages_lbl.setWordWrap(True)
+        self._lh_margins_lbl = QLabel("")
+        self._lh_margins_lbl.setProperty("class", "CardHint")
+        self._lh_margins_lbl.setWordWrap(True)
+        info_col.addWidget(self._lh_name_lbl)
+        info_col.addWidget(self._lh_pages_lbl)
+        info_col.addWidget(self._lh_margins_lbl)
+        info_col.addStretch(1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+        open_btn = QPushButton("Seleccionar PDF/Word")
+        open_btn.setProperty("class", "Primary")
+        set_button_icon(open_btn, "folder-open")
+        open_btn.clicked.connect(self._on_open_membrete)
+        self._membrete_tray_btn = QPushButton("Bandeja")
+        self._membrete_tray_btn.setProperty("class", "Ghost")
+        set_button_icon(self._membrete_tray_btn, "folder-open")
+        self._membrete_tray_btn.clicked.connect(self._on_membrete_from_tray)
+        self.ctx.tray.changed.connect(
+            lambda: self._membrete_tray_btn.setVisible(self.ctx.tray.count() > 0)
+        )
+        self._membrete_tray_btn.setVisible(self.ctx.tray.count() > 0)
+        btn_row.addWidget(open_btn)
+        btn_row.addWidget(self._membrete_tray_btn)
+        btn_row.addStretch()
+
+        self._save_library_btn = QPushButton("Guardar en biblioteca")
+        self._save_library_btn.setProperty("class", "Ghost")
+        set_button_icon(self._save_library_btn, "save")
+        self._save_library_btn.clicked.connect(self._on_save_membrete_to_library)
+        btn_row.addWidget(self._save_library_btn)
+        info_col.addLayout(btn_row)
+        active_body.addLayout(info_col, 1)
+        active_l.addLayout(active_body)
+        active_l.addStretch(1)
+        body.addWidget(active_card, 3)
+
+        library_card = make_card("Biblioteca", "Membretes frecuentes listos para reutilizar.")
         lib_l = card_layout(library_card)
+        lib_l.setSpacing(12)
         self._library_list = QListWidget()
-        self._library_list.setFixedHeight(112)
+        self._library_list.setMinimumHeight(254)
+        self._library_list.setAlternatingRowColors(True)
+        self._library_list.setStyleSheet(
+            "QListWidget {"
+            "background: #101116;"
+            "border: 1px solid #262832;"
+            "border-radius: 8px;"
+            "padding: 6px;"
+            "}"
+            "QListWidget::item {"
+            "padding: 8px 10px;"
+            "border-radius: 6px;"
+            "color: #C8CBD2;"
+            "}"
+            "QListWidget::item:selected {"
+            "background: rgba(184, 127, 245, 0.18);"
+            "color: #FFFFFF;"
+            "}"
+        )
         self._library_list.itemSelectionChanged.connect(self._update_library_actions)
-        lib_l.addWidget(self._library_list)
+        self._library_list.itemDoubleClicked.connect(lambda _: self._on_use_library_membrete())
+        lib_l.addWidget(self._library_list, 1)
 
         lib_btns = QHBoxLayout()
         lib_btns.setSpacing(8)
         self._use_library_btn = QPushButton("Usar")
         self._use_library_btn.setProperty("class", "Primary")
+        set_button_icon(self._use_library_btn, "check")
         self._use_library_btn.clicked.connect(self._on_use_library_membrete)
         lib_btns.addWidget(self._use_library_btn)
-
-        self._save_library_btn = QPushButton("Guardar actual")
-        self._save_library_btn.setProperty("class", "Ghost")
-        set_button_icon(self._save_library_btn, "save")
-        self._save_library_btn.clicked.connect(self._on_save_membrete_to_library)
-        lib_btns.addWidget(self._save_library_btn)
 
         self._remove_library_btn = QPushButton("Quitar")
         self._remove_library_btn.setProperty("class", "Ghost")
@@ -339,49 +397,19 @@ class MembretadoWindow(PipelineWindow):
         lib_btns.addWidget(self._remove_library_btn)
         lib_btns.addStretch()
         lib_l.addLayout(lib_btns)
-        outer.addWidget(library_card)
+        body.addWidget(library_card, 2)
 
-        info_card = make_card("Membrete cargado")
-        il = card_layout(info_card)
-        doc_body = QHBoxLayout()
-        doc_body.setSpacing(20)
-
-        self._lh_thumb = QLabel("Sin membrete")
-        self._lh_thumb.setFixedSize(100, 130)
-        self._lh_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._lh_thumb.setStyleSheet(
-            "background: #16161A; border: 1px dashed #33333B; "
-            "border-radius: 6px; color: #6B6F7A; font-size: 11px;"
-        )
-        doc_body.addWidget(self._lh_thumb)
-
-        info_col = QVBoxLayout()
-        info_col.setSpacing(6)
-        self._lh_name_lbl = QLabel("—")
-        self._lh_name_lbl.setObjectName("CardTitle")
-        self._lh_name_lbl.setWordWrap(True)
-        self._lh_pages_lbl = QLabel("")
-        self._lh_pages_lbl.setProperty("class", "CardHint")
-        self._lh_margins_lbl = QLabel("")
-        self._lh_margins_lbl.setProperty("class", "CardHint")
-        info_col.addWidget(self._lh_name_lbl)
-        info_col.addWidget(self._lh_pages_lbl)
-        info_col.addWidget(self._lh_margins_lbl)
-        info_col.addStretch()
-        doc_body.addLayout(info_col, 1)
-
-        il.addLayout(doc_body)
-        outer.addWidget(info_card)
-        outer.addStretch(1)
+        outer.addLayout(body, 1)
 
         nav = QHBoxLayout()
         nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(nxt)
+        self._membrete_next_btn = QPushButton("Continuar")
+        self._membrete_next_btn.setProperty("class", "Primary")
+        self._membrete_next_btn.setMinimumWidth(160)
+        self._membrete_next_btn.setEnabled(False)
+        set_button_icon(self._membrete_next_btn, "arrow-right")
+        self._membrete_next_btn.clicked.connect(lambda: self._switch_section(1))
+        nav.addWidget(self._membrete_next_btn)
         outer.addLayout(nav)
 
         return page
@@ -673,6 +701,7 @@ class MembretadoWindow(PipelineWindow):
                 raise RuntimeError("El PDF esta protegido o cifrado.")
             if doc.page_count <= 0:
                 raise RuntimeError("El PDF no tiene paginas.")
+            page_count = int(doc.page_count)
             page = doc[0]
             pw = page.rect.width
             ph = page.rect.height
@@ -683,8 +712,10 @@ class MembretadoWindow(PipelineWindow):
             img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
             data = img.tobytes("raw", "RGBA")
             qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-            thumb = QPixmap.fromImage(qimg.copy()).scaledToWidth(
-                94, Qt.TransformationMode.SmoothTransformation
+            thumb = QPixmap.fromImage(qimg.copy()).scaled(
+                164, 214,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
             )
 
             # Pixmap de mayor resolución para el preview de márgenes
@@ -710,10 +741,13 @@ class MembretadoWindow(PipelineWindow):
         self._lh_source_name = source_name or Path(path).name
         self._lh_thumb.setPixmap(thumb)
         self._lh_thumb.setStyleSheet(
-            "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
+            "background: #111114; border: 1px solid #26262C; border-radius: 8px;"
         )
         self._lh_name_lbl.setText(self._lh_source_name)
-        self._lh_pages_lbl.setText(f"{self._lh_page_w_pt:.0f} × {self._lh_page_h_pt:.0f} pt")
+        self._lh_pages_lbl.setText(
+            f"{page_count} pagina{'s' if page_count != 1 else ''} · "
+            f"{self._lh_page_w_pt:.0f} x {self._lh_page_h_pt:.0f} pt"
+        )
 
         # Detección automática de márgenes
         self._margins = detect_margins(path)
@@ -730,8 +764,12 @@ class MembretadoWindow(PipelineWindow):
         self._letterhead_library = load_letterhead_library()
         self._library_list.clear()
         for entry in self._letterhead_library:
-            item = QListWidgetItem(entry.label)
+            meta = entry.source_name
+            if entry.page_width_pt and entry.page_height_pt:
+                meta += f" · {entry.page_width_pt:.0f} x {entry.page_height_pt:.0f} pt"
+            item = QListWidgetItem(f"{entry.label}\n{meta}")
             item.setData(Qt.ItemDataRole.UserRole, entry.id)
+            item.setSizeHint(QSize(260, 54))
             size_text = ""
             if entry.page_width_pt and entry.page_height_pt:
                 size_text = f"\n{entry.page_width_pt:.0f} x {entry.page_height_pt:.0f} pt"
@@ -740,6 +778,7 @@ class MembretadoWindow(PipelineWindow):
         if not self._letterhead_library:
             item = QListWidgetItem("Sin membretes guardados")
             item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            item.setSizeHint(QSize(260, 46))
             self._library_list.addItem(item)
         elif self._library_list.count() > 0:
             self._library_list.setCurrentRow(0)
@@ -765,6 +804,8 @@ class MembretadoWindow(PipelineWindow):
             self._remove_library_btn.setEnabled(selected)
         if hasattr(self, "_save_library_btn"):
             self._save_library_btn.setEnabled(bool(self._lh_path))
+        if hasattr(self, "_membrete_next_btn"):
+            self._membrete_next_btn.setEnabled(bool(self._lh_path))
 
     def _on_use_library_membrete(self) -> None:
         entry = self._selected_library_entry()
@@ -1063,10 +1104,10 @@ class MembretadoWindow(PipelineWindow):
         self._lh_thumb.setText("Sin membrete")
         self._lh_thumb.setStyleSheet(
             "background: #16161A; border: 1px dashed #33333B; "
-            "border-radius: 6px; color: #6B6F7A; font-size: 11px;"
+            "border-radius: 8px; color: #6B6F7A; font-size: 11px;"
         )
-        self._lh_name_lbl.setText("—")
-        self._lh_pages_lbl.setText("")
+        self._lh_name_lbl.setText("Ningun membrete seleccionado")
+        self._lh_pages_lbl.setText("Selecciona una hoja o usa una guardada en biblioteca.")
         self._lh_margins_lbl.setText("")
         self._margin_preview.clear_letterhead()
         self._apply_margins_to_sliders(self._margins)

@@ -31,6 +31,7 @@ class PdfToImagesConfig:
     dpi: int = 150
     panoramic: bool = False   # True = una sola imagen vertical con todas las páginas
     jpg_quality: int = 90     # solo aplica para JPG/WebP
+    page_range: str = ""      # vacío = todas; ej. "1-3,5,final"
 
 
 @dataclass
@@ -122,10 +123,12 @@ class PdfToImagesEngine:
         image_results: List[ImageResult] = []
 
         try:
+            page_indexes = parse_page_selection(cfg.page_range, doc.page_count)
             if cfg.panoramic:
                 image_results.append(
                     self._export_panoramic(
                         doc,
+                        page_indexes,
                         mat,
                         cfg,
                         out_dir,
@@ -134,12 +137,14 @@ class PdfToImagesEngine:
                     )
                 )
             else:
-                for page_idx in range(doc.page_count):
+                for page_idx in page_indexes:
                     if should_cancel and should_cancel():
                         break
                     image_results.append(
                         self._export_page(doc, page_idx, mat, cfg, out_dir, base)
                     )
+        except Exception as e:
+            return PdfToImagesJobResult(job=job, success=False, error=str(e))
         finally:
             doc.close()
 
@@ -173,6 +178,7 @@ class PdfToImagesEngine:
     def _export_panoramic(
         self,
         doc: fitz.Document,
+        page_indexes: List[int],
         mat: fitz.Matrix,
         cfg: PdfToImagesConfig,
         out_dir: Path,
@@ -182,7 +188,7 @@ class PdfToImagesEngine:
         out_path = out_dir / f"{base}_panoramico.{cfg.format}"
         try:
             pages_pil: List[Image.Image] = []
-            for page_idx in range(doc.page_count):
+            for page_idx in page_indexes:
                 if should_cancel and should_cancel():
                     return ImageResult(
                         output_path="",
@@ -226,3 +232,58 @@ class PdfToImagesEngine:
         if fmt in ("JPEG", "WEBP"):
             kwargs["quality"] = cfg.jpg_quality
         img.save(str(path), format=fmt, **kwargs)
+
+
+def parse_page_selection(text: str, page_count: int) -> List[int]:
+    """Parse 1-based page ranges into 0-based page indexes."""
+    if page_count <= 0:
+        raise ValueError("El PDF no tiene paginas.")
+
+    raw = (text or "").strip().lower()
+    if not raw or raw in {"todas", "todo", "all", "*"}:
+        return list(range(page_count))
+    if raw in {"pares", "par", "even"}:
+        return [idx for idx in range(page_count) if (idx + 1) % 2 == 0]
+    if raw in {"impares", "impar", "odd"}:
+        return [idx for idx in range(page_count) if (idx + 1) % 2 == 1]
+
+    selected: list[int] = []
+    seen: set[int] = set()
+    tokens = [
+        token.strip()
+        for chunk in raw.replace(";", ",").split(",")
+        for token in chunk.split()
+        if token.strip()
+    ]
+    for token in tokens:
+        if "-" in token:
+            left, right = token.split("-", 1)
+            start = _parse_page_token(left, page_count)
+            end = _parse_page_token(right, page_count)
+            if start > end:
+                raise ValueError(f"Rango invertido: {token}")
+            for page_num in range(start, end + 1):
+                if 1 <= page_num <= page_count and page_num not in seen:
+                    selected.append(page_num - 1)
+                    seen.add(page_num)
+        else:
+            page_num = _parse_page_token(token, page_count)
+            if 1 <= page_num <= page_count and page_num not in seen:
+                selected.append(page_num - 1)
+                seen.add(page_num)
+
+    if not selected:
+        raise ValueError("El rango no contiene paginas validas para este PDF.")
+    return selected
+
+
+def _parse_page_token(token: str, page_count: int) -> int:
+    clean = token.strip().lower()
+    if clean in {"final", "fin", "ultima", "última", "last"}:
+        return page_count
+    if not clean.isdigit():
+        raise ValueError(f"Pagina invalida: {token}")
+    value = int(clean)
+    if value < 1:
+        raise ValueError(f"Pagina fuera de rango: {token}")
+    return value

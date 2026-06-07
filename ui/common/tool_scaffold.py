@@ -128,6 +128,8 @@ class PipelineWindow(QWidget):
         self.ctx = ctx
         self._build_scaffold()
         self._apply_tool_accent()
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(0, self._apply_primary_glows)
 
     # ------------------------------------------------------------------ #
     # Construcción del caparazón (sidebar + stack)
@@ -183,6 +185,19 @@ class PipelineWindow(QWidget):
         div.setStyleSheet(f"background: {COLORS['border_strong']}; border: none;")
         sb.addWidget(div)
 
+        # Barra de progreso de pasos — 3px, sin texto, coloreada por accent en _apply_tool_accent
+        from PyQt6.QtWidgets import QProgressBar
+        self._step_progress = QProgressBar()
+        self._step_progress.setRange(0, 100)
+        self._step_progress.setValue(0)
+        self._step_progress.setTextVisible(False)
+        self._step_progress.setFixedHeight(3)
+        self._step_progress.setStyleSheet(
+            "QProgressBar { background: transparent; border: none; border-radius: 0; }"
+            "QProgressBar::chunk { background: #5E6AD2; border-radius: 0; }"
+        )
+        sb.addWidget(self._step_progress)
+
         # ── Pasos ──────────────────────────────────────────────────────
         section_lbl = QLabel("PASOS")
         section_lbl.setObjectName("SidebarSection")
@@ -224,6 +239,12 @@ class PipelineWindow(QWidget):
             self._brand_lbl.setStyleSheet(
                 f"color: {accent}; font-size: 16px; font-weight: 700;"
                 "letter-spacing: -0.3px; background: transparent;"
+            )
+
+        if hasattr(self, "_step_progress"):
+            self._step_progress.setStyleSheet(
+                "QProgressBar { background: transparent; border: none; border-radius: 0; }"
+                f"QProgressBar::chunk {{ background: {accent}; border-radius: 0; }}"
             )
 
         self.setStyleSheet(f"""
@@ -338,6 +359,12 @@ QListWidget::item:selected:!active {{
 }}
 """)
 
+    def _apply_primary_glows(self) -> None:
+        """Aplica QGraphicsDropShadowEffect a botones Primary para reforzar el accent."""
+        from ui.common.animations import AnimationHelper
+        accent = getattr(self, "ACCENT_COLOR", "#5E6AD2") or "#5E6AD2"
+        AnimationHelper.apply_glow_to_primary_buttons(self, accent)
+
     # ------------------------------------------------------------------ #
     # Navegación
     # ------------------------------------------------------------------ #
@@ -346,6 +373,9 @@ QListWidget::item:selected:!active {{
         for i, btn in enumerate(self._section_buttons):
             btn.set_active(i == idx)
         self.stack.setCurrentIndex(idx)
+        if hasattr(self, "_step_progress") and self.SECTIONS:
+            pct = int((idx + 1) / len(self.SECTIONS) * 100)
+            self._step_progress.setValue(pct)
         self._on_section_activated(idx)
 
     def _on_section_activated(self, idx: int) -> None:

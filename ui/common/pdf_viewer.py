@@ -380,8 +380,17 @@ class GenericPdfViewer(QWidget):
 
         try:
             self._current_doc = fitz.open(out_path)
+            if self._current_doc.needs_pass:
+                password = (
+                    getattr(result, "user_password", "")
+                    or getattr(result, "open_password", "")
+                    or getattr(getattr(result, "job", None), "open_password", "")
+                )
+                if not password or not self._current_doc.authenticate(password):
+                    raise RuntimeError("El PDF requiere contraseña para previsualizarse.")
         except Exception as e:
             self.meta_label.setText(f"No se pudo abrir: {e}")
+            self._close_doc()
             self.page_list.blockSignals(True)
             try:
                 self.page_list.clear()
@@ -411,9 +420,11 @@ class GenericPdfViewer(QWidget):
         else:
             self.canvas.clear()
 
-        self.meta_label.setText(
-            f"{self._current_doc.page_count} páginas · {Path(out_path).name}"
-        )
+        meta = f"{self._current_doc.page_count} páginas · {Path(out_path).name}"
+        extra_meta = getattr(result, "meta_text", "")
+        if extra_meta:
+            meta += f" · {extra_meta}"
+        self.meta_label.setText(meta)
 
     def _on_page_selected(self) -> None:
         if self._current_doc is None:

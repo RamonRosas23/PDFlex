@@ -1,0 +1,1 @@
+"""Proteger PDF tool package."""

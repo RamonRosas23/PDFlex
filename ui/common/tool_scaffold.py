@@ -222,7 +222,7 @@ class PipelineWindow(QWidget):
         self._section_buttons: List[_StepBtn] = []
         for i, (num, name, hint) in enumerate(self.SECTIONS):
             btn = _StepBtn(num, name, hint)
-            btn._clicked.connect(lambda idx=i: self._switch_section(idx))
+            btn._clicked.connect(lambda idx=i: self._slide_to_section(idx))
             sb.addWidget(btn)
             self._section_buttons.append(btn)
 
@@ -404,6 +404,44 @@ QListWidget::item:selected:!active {{
     # ------------------------------------------------------------------ #
     # Navegación
     # ------------------------------------------------------------------ #
+
+    def _slide_to_section(self, idx: int) -> None:
+        """Transición slide animada 220ms OutCubic entre pasos del pipeline."""
+        from PyQt6.QtCore import QPropertyAnimation, QRect, QEasingCurve
+        from PyQt6.QtWidgets import QLabel
+        from ui.common.animations import is_reduced_motion
+
+        if is_reduced_motion() or idx == self.stack.currentIndex():
+            self._switch_section(idx)
+            return
+
+        current_idx = self.stack.currentIndex()
+        direction = 1 if idx > current_idx else -1  # 1=avanzar(sale izq), -1=retroceder(sale der)
+
+        current_widget = self.stack.currentWidget()
+        if current_widget is None:
+            self._switch_section(idx)
+            return
+
+        snapshot = current_widget.grab()
+        w = self.stack.width()
+        h = self.stack.height()
+
+        overlay = QLabel(self.stack)
+        overlay.setPixmap(snapshot)
+        overlay.setGeometry(0, 0, w, h)
+        overlay.raise_()
+        overlay.show()
+
+        self._switch_section(idx)
+
+        anim = QPropertyAnimation(overlay, b"geometry", overlay)
+        anim.setDuration(220)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+        anim.setStartValue(QRect(0, 0, w, h))
+        anim.setEndValue(QRect(-w * direction, 0, w, h))
+        anim.finished.connect(overlay.deleteLater)
+        anim.start()
 
     def _switch_section(self, idx: int) -> None:
         prev_idx = self.stack.currentIndex()

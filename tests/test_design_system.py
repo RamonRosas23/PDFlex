@@ -86,3 +86,25 @@ def test_apply_glow_smoke():
     btn = QPushButton("Test")
     AnimationHelper.apply_glow(btn, "#5E6AD2")
     btn.deleteLater()
+
+
+def test_all_tool_icons_exist():
+    """Los 21 iconos de herramienta están registrados en _ICONS."""
+    from ui.common.icons import TOOL_ICON_MAP, _ICONS
+    for tool_id, icon_name in TOOL_ICON_MAP.items():
+        assert icon_name in _ICONS, (
+            f"Herramienta '{tool_id}' referencia icono '{icon_name}' "
+            f"que no existe en _ICONS"
+        )
+
+
+def test_make_tool_icon_card_renders():
+    """make_tool_icon_card produce un QPixmap no nulo."""
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtGui import QPixmap
+    from ui.common.icons import make_tool_icon_card
+    app = QApplication.instance() or QApplication(sys.argv)
+    pix = make_tool_icon_card("firmador", "#5E6AD2", size=40)
+    assert isinstance(pix, QPixmap)
+    assert not pix.isNull()

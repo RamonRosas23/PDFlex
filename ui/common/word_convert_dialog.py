@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QPoint, Qt, QTimer
+from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
@@ -126,6 +126,8 @@ class _FileRow(QFrame):
 class WordConvertDialog(QDialog):
     """Modal conversion progress for .doc/.docx files."""
 
+    cancel_requested = pyqtSignal()
+
     def __init__(self, parent: QWidget | None, paths: List[str]) -> None:
         super().__init__(parent)
         self._paths = paths
@@ -133,6 +135,7 @@ class WordConvertDialog(QDialog):
         self._spinner_frame = 0
         self._active_row = -1
         self._drag_pos: Optional[QPoint] = None
+        self._done = False
 
         self.setWindowTitle("Convirtiendo Word a PDF")
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -227,10 +230,10 @@ class WordConvertDialog(QDialog):
         self._close_top_btn = QPushButton()
         self._close_top_btn.setProperty("class", "IconBtn")
         self._close_top_btn.setFixedSize(28, 28)
-        self._close_top_btn.setToolTip("Disponible al terminar")
+        self._close_top_btn.setToolTip("Cancelar conversión")
         set_button_icon(self._close_top_btn, "x", size=14, icon_only=True)
-        self._close_top_btn.setEnabled(False)
-        self._close_top_btn.clicked.connect(self.accept)
+        self._close_top_btn.setEnabled(True)
+        self._close_top_btn.clicked.connect(self._on_cancel_or_close)
         h.addWidget(self._close_top_btn)
         root.addWidget(header)
 
@@ -318,11 +321,11 @@ class WordConvertDialog(QDialog):
         )
         bottom.addWidget(self._msg_lbl, 1)
 
-        self._close_btn = QPushButton("Cerrar")
+        self._close_btn = QPushButton("Cancelar")
         self._close_btn.setFixedSize(112, 34)
-        self._close_btn.setEnabled(False)
-        self._close_btn.setStyleSheet(self._close_button_style(enabled=False))
-        self._close_btn.clicked.connect(self.accept)
+        self._close_btn.setEnabled(True)
+        self._close_btn.setStyleSheet(self._cancel_button_style())
+        self._close_btn.clicked.connect(self._on_cancel_or_close)
         bottom.addWidget(self._close_btn)
         f.addLayout(bottom)
         root.addWidget(footer)
@@ -377,10 +380,16 @@ class WordConvertDialog(QDialog):
         )
         self._enable_close()
 
+    def _on_cancel_or_close(self) -> None:
+        """Botón X y botón inferior: cancela si está en curso, cierra si ya terminó."""
+        if not self._done:
+            self.cancel_requested.emit()
+        self.accept()
+
     def _enable_close(self) -> None:
-        self._close_btn.setEnabled(True)
+        self._done = True
+        self._close_btn.setText("Cerrar")
         self._close_btn.setStyleSheet(self._close_button_style(enabled=True))
-        self._close_top_btn.setEnabled(True)
         self._close_top_btn.setToolTip("Cerrar")
 
     def _set_progress_color(self, color: str) -> None:
@@ -428,9 +437,26 @@ class WordConvertDialog(QDialog):
             if row._state in (_ST_OPENING, _ST_SAVING):
                 row.set_state(row._state, self._spinner_frame)
 
+    def _cancel_button_style(self) -> str:
+        return f"""
+            QPushButton {{
+                background-color: transparent;
+                color: {COLORS['text_dim']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 7px;
+                font-size: 12px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                color: {COLORS['danger']};
+                border-color: {COLORS['danger']};
+            }}
+        """
+
     def reject(self) -> None:
-        if self._close_btn.isEnabled():
-            super().reject()
+        if not self._done:
+            self.cancel_requested.emit()
+        super().reject()
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

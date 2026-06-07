@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QSize, QEvent
+from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -72,6 +72,7 @@ class DocumentsCard(QFrame):
         self._conv_worker = None
         self._conv_dlg = None
         self._thumb_threads: list = []  # threads de generación de thumbnails activos
+        self._thumb_workers: dict = {}  # mantiene vivos los workers hasta que terminen
 
         self._build(allow_reorder)
 
@@ -446,11 +447,15 @@ class DocumentsCard(QFrame):
         loader.ready.connect(thread.quit)
         thread.finished.connect(loader.deleteLater)
         thread.finished.connect(thread.deleteLater)
-        thread.finished.connect(
-            lambda t=thread: self._thumb_threads.remove(t) if t in self._thumb_threads else None
-        )
+        thread.finished.connect(lambda t=thread: self._cleanup_thumb_job(t))
         self._thumb_threads.append(thread)
+        self._thumb_workers[thread] = loader
         thread.start()
+
+    def _cleanup_thumb_job(self, thread: QThread) -> None:
+        self._thumb_workers.pop(thread, None)
+        if thread in self._thumb_threads:
+            self._thumb_threads.remove(thread)
 
     def _apply_thumb(self, item: "QListWidgetItem", pix) -> None:
         """Actualiza icono del item si aún existe en la lista.
@@ -501,7 +506,12 @@ class DocumentsCard(QFrame):
         worker.error.connect(self._conv_thread.quit)
         self._conv_thread.finished.connect(worker.deleteLater)
         self._conv_thread.finished.connect(self._conv_thread.deleteLater)
-        self._conv_thread.start()
+        self._conv_dlg.cancel_requested.connect(worker.cancel)
+        # Iniciar el thread DESPUÉS de que exec() abra el event loop.
+        # Si el thread arranca antes de exec(), en el .exe (más rápido) la señal
+        # finished llega antes de que el diálogo procese su primer evento y
+        # el progreso nunca se ve. singleShot(0) garantiza el orden correcto.
+        QTimer.singleShot(0, self._conv_thread.start)
         self._conv_dlg.exec()
 
     def _on_word_done(self, paths: List[str]) -> None:

@@ -8,8 +8,9 @@ La conversión en hilo separado (WordConvertWorker) inicializa el COM
 apartment correctamente con pythoncom.CoInitialize().
 """
 from __future__ import annotations
+import threading
 from pathlib import Path
-from typing import Callable, List
+from typing import Callable, List, Optional
 
 from PyQt6.QtCore import QObject, pyqtSignal
 
@@ -64,6 +65,7 @@ class WordToPdfConverter:
         paths: List[str],
         out_dir: Path,
         progress: Callable[[int, int, str], None] | None = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> List[str]:
         """Convierte varios archivos Word a PDF.  Debe llamarse desde un
         hilo que ya haya llamado pythoncom.CoInitialize().
@@ -96,6 +98,8 @@ class WordToPdfConverter:
         try:
             reserved: set[str] = set()
             for i, src in enumerate(paths):
+                if cancel_check and cancel_check():
+                    break
                 src_path = Path(src).resolve()
                 out_path = unique_output_path(
                     out_dir,
@@ -138,7 +142,7 @@ class WordToPdfConverter:
             except Exception:
                 pass
 
-        if progress:
+        if progress and not (cancel_check and cancel_check()):
             progress(steps, steps, "Conversión completa")
 
         return results
@@ -165,6 +169,13 @@ class WordConvertWorker(QObject):
         self._converter = converter
         self._paths = paths
         self._out_dir = out_dir
+        self._cancel = threading.Event()
+
+    def cancel(self) -> None:
+        self._cancel.set()
+
+    def is_cancelled(self) -> bool:
+        return self._cancel.is_set()
 
     def run(self) -> None:
         try:
@@ -179,6 +190,7 @@ class WordConvertWorker(QObject):
                 self._paths,
                 self._out_dir,
                 progress=lambda c, t, m: self.progress.emit(c, t, m),
+                cancel_check=self.is_cancelled,
             )
             self.finished.emit(results)
         except Exception as e:

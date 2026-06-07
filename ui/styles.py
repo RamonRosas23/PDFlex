@@ -26,23 +26,40 @@ _CHECK_SVG = _write_check_svg()
 
 # Paleta refinada
 COLORS = {
-    "bg":            "#0A0A0B",
-    "surface":       "#111114",
-    "surface_2":     "#16161A",
-    "surface_3":     "#1C1C21",
-    "border":        "#26262C",
-    "border_strong": "#33333B",
-    "border_focus":  "#5E6AD2",
-    "text":          "#ECEDEE",
-    "text_muted":    "#9094A0",
-    "text_dim":      "#6B6F7A",
-    "accent":        "#5E6AD2",
-    "accent_hover":  "#6F7BDF",
-    "accent_press":  "#4F5BC8",
-    "success":       "#3BD37C",
-    "warning":       "#F5A623",
-    "danger":        "#E5484D",
-    "scroll_handle": "#34343C",   # handle de scrollbars en toda la app
+    # Backgrounds — más profundos para mayor drama visual
+    "bg":             "#050507",
+    "surface":        "#0D0D10",
+    "surface_2":      "#131318",
+    "surface_3":      "#1A1A21",
+    "surface_4":      "#20202A",   # modals y overlays
+
+    # Borders
+    "border":         "#1E1E28",
+    "border_strong":  "#2A2A38",
+    "border_focus":   "#5E6AD2",   # se sobreescribe per-tool accent
+
+    # Glassmorphism — command palette, modals, tray
+    "glass_bg":       "rgba(13, 13, 16, 0.92)",
+    "glass_border":   "rgba(255, 255, 255, 0.07)",
+
+    # Texto — jerarquía reforzada
+    "text":           "#F0F1F3",
+    "text_muted":     "#8A8FA0",
+    "text_dim":       "#52566A",
+    "text_faint":     "#383B4A",   # placeholders
+
+    # Accent base (herramientas sobreescriben con su color)
+    "accent":         "#5E6AD2",
+    "accent_hover":   "#6F7BDF",
+    "accent_press":   "#4F5BC8",
+
+    # Semánticos
+    "success":        "#3BD37C",
+    "warning":        "#F5A623",
+    "danger":         "#E5484D",
+
+    # Scroll
+    "scroll_handle":  "#2A2A38",
 }
 
 
@@ -161,9 +178,9 @@ QPushButton[class="SidebarBtn"][active="true"] {{
 ============================================================ */
 #PageTitle {{
     color: {COLORS['text']};
-    font-size: 21px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
+    font-size: 26px;
+    font-weight: 800;
+    letter-spacing: -0.8px;
     padding: 0;
     margin: 0;
     background: transparent;
@@ -172,6 +189,7 @@ QPushButton[class="SidebarBtn"][active="true"] {{
 #PageSubtitle {{
     color: {COLORS['text_muted']};
     font-size: 13px;
+    line-height: 1.6;
     padding: 0;
     margin: 0;
     background: transparent;
@@ -189,7 +207,7 @@ QFrame[class="Card"] {{
 QLabel[class="CardTitle"] {{
     color: {COLORS['text']};
     font-size: 13px;
-    font-weight: 600;
+    font-weight: 700;
     letter-spacing: -0.1px;
     background: transparent;
 }}
@@ -211,7 +229,7 @@ QLabel[class="StatLabel"] {{
 
 QLabel[class="StatValue"] {{
     color: {COLORS['text']};
-    font-size: 24px;
+    font-size: 28px;
     font-weight: 600;
     letter-spacing: -0.5px;
     background: transparent;
@@ -1072,5 +1090,27 @@ QPushButton[class="TippyBtn"]:hover {{
     background-color: {COLORS['surface_2']};
     color: {COLORS['text_muted']};
     border-color: {COLORS['border_strong']};
+}}
+
+/* ============================================================
+   Status bar — mini info al pie del content area
+============================================================ */
+#StatusBar {{
+    color: {COLORS['text_dim']};
+    font-size: 11px;
+    background: {COLORS['surface']};
+    border-top: 1px solid {COLORS['border']};
+    padding: 0 16px;
+    max-height: 24px;
+    min-height: 24px;
+}}
+
+/* ============================================================
+   surface_4 — modals y overlays
+============================================================ */
+QFrame[class="ModalContainer"] {{
+    background-color: {COLORS['surface_4']};
+    border: 1px solid {COLORS['border_strong']};
+    border-radius: 12px;
 }}
 """

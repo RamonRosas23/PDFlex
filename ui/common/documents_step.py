@@ -98,20 +98,13 @@ class DocumentsCard(QFrame):
         add_btn.clicked.connect(self._on_browse)
         row.addWidget(add_btn)
 
-        clear_btn = QPushButton("Vaciar")
-        clear_btn.setProperty("class", "Ghost")
-        set_button_icon(clear_btn, "eraser")
-        clear_btn.setToolTip("Vacía la lista actual sin borrar archivos del disco.")
-        clear_btn.clicked.connect(self.clear)
-        row.addWidget(clear_btn)
-
-        self._remove_btn = QPushButton("Quitar")
-        self._remove_btn.setProperty("class", "Ghost")
-        set_button_icon(self._remove_btn, "trash-2")
-        self._remove_btn.setToolTip("Quita del lote los documentos seleccionados. No borra archivos del disco.")
-        self._remove_btn.clicked.connect(self.remove_selected)
-        self._remove_btn.setEnabled(False)
-        row.addWidget(self._remove_btn)
+        self._menu_btn = QPushButton()
+        self._menu_btn.setProperty("class", "Ghost")
+        set_button_icon(self._menu_btn, "more-horizontal")
+        self._menu_btn.setToolTip("Más acciones: Vaciar, Quitar, Ordenar")
+        self._menu_btn.setFixedWidth(36)
+        self._menu_btn.clicked.connect(self._show_docs_menu)
+        row.addWidget(self._menu_btn)
 
         self._tray_btn = QPushButton("Cargar desde bandeja")
         self._tray_btn.setProperty("class", "Ghost")
@@ -276,12 +269,67 @@ class DocumentsCard(QFrame):
         self.files_changed.emit(self.paths())
 
     def _update_remove_btn(self) -> None:
-        selected = len(self.list_widget.selectedItems())
-        self._remove_btn.setEnabled(selected > 0)
-        if selected > 1:
-            self._remove_btn.setText(f"Quitar ({selected})")
+        """Actualiza el estado del menú según selección actual."""
+        # El botón de menú siempre está activo; las acciones individuales
+        # se habilitan/deshabilitan al abrir el menú.
+        pass
+
+    def _show_docs_menu(self) -> None:
+        """Muestra el menú de acciones secundarias de la DocumentsCard."""
+        from PyQt6.QtWidgets import QMenu
+        from PyQt6.QtGui import QAction
+        menu = QMenu(self)
+
+        has_selection = bool(self.list_widget.selectedItems())
+
+        act_remove = QAction("Quitar seleccionados", menu)
+        act_remove.setEnabled(has_selection)
+        act_remove.triggered.connect(self.remove_selected)
+        menu.addAction(act_remove)
+
+        act_clear = QAction("Vaciar lista", menu)
+        act_clear.triggered.connect(self.clear)
+        menu.addAction(act_clear)
+
+        menu.addSeparator()
+
+        act_sort_name = QAction("Ordenar por nombre", menu)
+        act_sort_name.triggered.connect(lambda: self._sort_by("name"))
+        menu.addAction(act_sort_name)
+
+        act_sort_size = QAction("Ordenar por tamaño", menu)
+        act_sort_size.triggered.connect(lambda: self._sort_by("size"))
+        menu.addAction(act_sort_size)
+
+        menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft()))
+
+    def _sort_by(self, key: str) -> None:
+        """Ordena los documentos por nombre o tamaño."""
+        paths = self.paths()
+        if key == "name":
+            paths.sort(key=lambda p: Path(p).name.lower())
+        elif key == "size":
+            paths.sort(key=lambda p: Path(p).stat().st_size if Path(p).exists() else 0)
         else:
-            self._remove_btn.setText("Quitar")
+            return
+        if paths == self.paths():
+            return
+        # Rebuild list from sorted paths
+        self._paths = list(paths)
+        self._path_set = set(paths)
+        self.list_widget.clear()
+        for p in paths:
+            item = QListWidgetItem(Path(p).name)
+            item.setData(Qt.ItemDataRole.UserRole, p)
+            item.setToolTip(p)
+            if self._show_thumbnails:
+                placeholder = make_placeholder_pixmap(self._thumb_w, self._thumb_h)
+                item.setIcon(QIcon(placeholder))
+                self.list_widget.addItem(item)
+                self._schedule_thumb(p, item)
+            else:
+                self.list_widget.addItem(item)
+        self.files_changed.emit(list(paths))
 
     # ------------------------------------------------------------------ #
     # API pública
@@ -407,7 +455,22 @@ class DocumentsCard(QFrame):
 
     def _update_count(self) -> None:
         n = self.list_widget.count()
-        self._count_lbl.setText(f"{n} documento" + ("s" if n != 1 else ""))
+        if n == 0:
+            self._count_lbl.setText("Sin documentos")
+        else:
+            total_bytes = sum(
+                Path(p).stat().st_size
+                for p in self._paths
+                if Path(p).exists()
+            )
+            if total_bytes >= 1_048_576:
+                size_str = f"{total_bytes / 1_048_576:.1f} MB"
+            elif total_bytes >= 1024:
+                size_str = f"{total_bytes / 1024:.0f} KB"
+            else:
+                size_str = f"{total_bytes} B"
+            doc_word = "doc" if n == 1 else "docs"
+            self._count_lbl.setText(f"{n} {doc_word} · {size_str}")
         # Alternar entre drop zone vacía y lista con archivos
         if hasattr(self, "_content_stack"):
             self._content_stack.setCurrentIndex(0 if n == 0 else 1)

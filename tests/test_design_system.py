@@ -122,3 +122,23 @@ def test_step_btn_completed_state():
     assert btn._completed
     btn.set_completed(False)
     assert not btn._completed
+
+
+def test_documents_card_has_menu_btn():
+    """DocumentsCard tiene botón [≡] en lugar de Vaciar/Quitar inline."""
+    import sys
+    from unittest.mock import MagicMock
+    from PyQt6.QtWidgets import QApplication, QPushButton
+    app = QApplication.instance() or QApplication(sys.argv)
+    ctx = MagicMock()
+    ctx.tray.changed = MagicMock()
+    ctx.tray.changed.connect = MagicMock()
+    ctx.tray.count = MagicMock(return_value=0)
+    from ui.common.documents_step import DocumentsCard
+    card = DocumentsCard(ctx)
+    # Must have _menu_btn
+    assert hasattr(card, "_menu_btn")
+    # Must NOT have a visible "Vaciar" button
+    buttons = card.findChildren(QPushButton)
+    texts = [b.text() for b in buttons]
+    assert "Vaciar" not in texts

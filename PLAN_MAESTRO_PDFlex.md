@@ -26,6 +26,7 @@ Este documento es la fuente de verdad para saber que existe, que falta, que esta
 | En pruebas | Implementado, pendiente de validacion fuerte. |
 | Hecho | Completado, probado e integrado. |
 | Pausado | Detenido por dependencia externa o decision pendiente. |
+| Omitido | Excluido explicitamente del roadmap activo por decision de producto. |
 
 ### Prioridades
 
@@ -47,13 +48,24 @@ Herramientas actuales consideradas base del producto.
 | B-001 | Firmador masivo | Base completada | Firma PDFs por lote con posicionamiento, variacion natural y anti-colision. | Base fuerte para flujos visuales e insercion de imagenes en PDF. |
 | B-002 | Foleador | Base completada | Agrega numeracion secuencial con formatos configurables. | Base para marcas de texto por pagina. |
 | B-003 | Separador de PDF | Base completada | Divide PDFs por rangos de paginas. | Base para manipulacion estructural de paginas. |
-| B-004 | Membretado | Base completada | Superpone documentos sobre hojas membretadas. | Base para composicion por capas. |
-| B-005 | Unir PDFs | Base completada | Combina varios PDFs en un unico documento. | Base para resultados multi-documento. |
-| B-006 | PDF a Imagenes | Base completada | Exporta paginas PDF como PNG, JPG o WebP. | Base para renderizado y salidas de imagen. |
-| B-007 | Imagenes a PDF | Base completada | Convierte y combina imagenes en PDF. | Base para carga y ordenamiento visual de imagenes. |
+| B-004 | Membretado | Base completada | Superpone documentos sobre hojas membretadas. | M-005 agrega biblioteca local de membretes y permite membrete Word convertido a PDF. |
+| B-005 | Unir PDFs | Base completada | Combina varios PDFs en un unico documento. | Lista principal ordenable con miniaturas nativas; sin banda visual duplicada ni enlace al Organizador visual. |
+| B-006 | PDF a Imagenes | Base completada | Exporta paginas PDF como PNG, JPG o WebP. | M-007 agrega presets rapidos y rangos de paginas con layout compacto y scrollable. |
+| B-007 | Imagenes a PDF | Base completada | Convierte y combina imagenes en PDF. | Base para carga y ordenamiento visual de imagenes; M-008 agrega modo escaner documental con perfiles. |
 | B-008 | OCR de PDF | Base completada | Extrae texto local y exporta Word/TXT. | Base para clasificacion por contenido. |
 | B-009 | Word a PDF | Base completada | Convierte DOC/DOCX a PDF usando Microsoft Word. | Recien separada como herramienta dedicada. |
-| B-010 | Quitar fondo | Base completada | Genera PNG transparente desde imagenes con fondo uniforme. | Recien separada como herramienta dedicada. |
+| B-010 | Quitar fondo | Base completada | Genera PNG transparente desde imagenes con fondo uniforme. | M-011 agrega comparacion antes/despues sobre fondo cuadriculado. |
+| B-011 | Organizador visual | Base completada | Reordena, rota, duplica, quita y extrae paginas PDF desde miniaturas. | Implementa T-001 y habilita flujos visuales futuros. |
+| B-012 | Comprimir PDF | Base completada | Optimiza PDFs por perfiles con reduccion de imagenes, limpieza interna y metricas antes/despues. | Implementa T-002 y evita aumentar peso cuando el PDF ya esta optimizado. |
+| B-013 | Marca de agua | Base completada | Aplica sellos de texto o imagen por lote con presets, opacidad, posicion, rotacion, paginas y preview. | Implementa T-003 y reutiliza salida temporal, visor, bandeja y envio entre herramientas. |
+| B-014 | Redaccion segura | Base completada | Elimina contenido sensible con redacciones reales dibujadas manualmente sobre el PDF. | Implementa T-004 con canvas, coordenadas por pagina, apply_redactions, visor y pruebas de extraccion. |
+| B-015 | Clasificador OCR | Base completada | Clasifica y renombra PDFs por contenido usando texto nativo u OCR fallback, reglas y plantillas. | Implementa T-005 con copias temporales, nombres seguros, visor y pruebas de campos. |
+| B-016 | Proteger PDF | Base completada | Cifra PDFs con AES-256, contrasena de apertura opcional, contrasena de propietario y permisos granulares. | Implementa T-006 con visor autenticado, salida temporal, bandeja y pruebas de cifrado. |
+| B-017 | PDF a Word | Base completada | Convierte PDFs con texto nativo u OCR fallback a DOCX editable por lote. | Implementa T-007 con preview de texto, salida temporal, bandeja y envio a Word a PDF. |
+| B-018 | Extraer imagenes | Base completada | Extrae imagenes y recursos embebidos del PDF sin renderizar paginas completas. | Implementa T-008 con deduplicacion por xref, filtros de tamano, visor agrupado y pruebas. |
+| B-019 | Formularios PDF | Base completada | Rellena campos AcroForm y genera PDFs editables o aplanados. | Implementa T-009; UX endurecida con captura scrollable, validacion de requeridos, radios/checkboxes robustos y pruebas ampliadas. |
+| B-020 | Comparar PDFs | Base completada | Compara dos versiones de un PDF y genera un reporte visual/textual de diferencias. | Implementa T-010 con render por pagina, texto nativo normalizado, paginas agregadas/eliminadas, visor y pruebas. |
+| B-021 | Reparar PDF | Base completada | Reescribe y normaliza PDFs para mejorar compatibilidad y recuperar estructuras reparables. | Implementa T-011 con limpieza, garbage, deflate, perfiles, verificacion posterior y pruebas con PDF reparado por MuPDF. |
 
 ---
 
@@ -63,34 +75,34 @@ Herramientas actuales consideradas base del producto.
 
 | ID | Tipo | Iniciativa | Estado | Prioridad | Iteracion | Notas |
 | --- | --- | --- | --- | --- | --- | --- |
-| T-001 | Herramienta nueva | Organizador visual de paginas | Pendiente | P1 | I-001 | Primer bloque de impacto. |
-| T-002 | Herramienta nueva | Comprimir / Optimizar PDF | Pendiente | P1 | I-002 | Depende de decisiones de perfiles y calidad. |
-| T-003 | Herramienta nueva | Marca de agua / Sellos | Pendiente | P1 | I-003 | Reutiliza patrones de insercion por pagina. |
-| T-004 | Herramienta nueva | Redaccion segura | Pendiente | P1 | I-004 | Requiere cuidado especial de seguridad. |
-| T-005 | Herramienta nueva | Clasificador / Renombrador por OCR | Pendiente | P1 | I-005 | Reutiliza OCR y reglas de nombres. |
-| T-006 | Herramienta nueva | Proteger PDF | Pendiente | P2 | Por definir | Passwords, permisos y cifrado. |
-| T-007 | Herramienta nueva | PDF a Word editable | Pendiente | P2 | Por definir | Complemento natural de OCR. |
-| T-008 | Herramienta nueva | Extraer imagenes / recursos de PDF | Pendiente | P2 | Por definir | Exporta recursos embebidos sin renderizar pagina. |
-| T-009 | Herramienta nueva | Formularios PDF: rellenar y aplanar | Pendiente | P2 | Por definir | Util para tramites y documentos administrativos. |
-| T-010 | Herramienta nueva | Comparar PDFs | Pendiente | P2 | Por definir | Comparacion visual/textual. |
-| T-011 | Herramienta nueva | Reparar / Normalizar PDF | Pendiente | P2 | Por definir | Mejora estabilidad para documentos problematicos. |
-| T-012 | Herramienta nueva | PDF/A o archivo legal | Pendiente | P3 | Por definir | Validacion/conversion para conservacion. |
+| T-001 | Herramienta nueva | Organizador visual de paginas | Hecho | P1 | I-001 | Implementado con multiples PDFs mezclados, miniaturas, rotacion, duplicado, extraccion y visor. |
+| T-002 | Herramienta nueva | Comprimir / Optimizar PDF | Hecho | P1 | I-002 | Implementado con perfiles Correo, Equilibrado y Alta calidad, metricas de reduccion, fallback anti-crecimiento, visor y pruebas. |
+| T-003 | Herramienta nueva | Marca de agua / Sellos | Hecho | P1 | I-003 | Implementado con texto, imagen, presets, opacidad, rotacion, posicion, rangos, preview, visor y pruebas. |
+| T-004 | Herramienta nueva | Redaccion segura | Hecho | P1 | I-004 | Implementado con redacciones reales, canvas manual, paginas rotadas, eliminacion de texto verificable, visor y pruebas. |
+| T-005 | Herramienta nueva | Clasificador / Renombrador por OCR | Hecho | P1 | I-005 | Implementado con texto nativo, OCR fallback, reglas configurables, plantilla de nombres, copias temporales y pruebas. |
+| T-006 | Herramienta nueva | Proteger PDF | Hecho | P2 | I-006 | Implementado con AES-256, password de apertura, propietario, permisos, visor autenticado y pruebas. |
+| T-007 | Herramienta nueva | PDF a Word editable | Hecho | P2 | I-007 | Implementado con texto nativo, OCR fallback, DOCX editable, preview, envio a Word a PDF y pruebas. |
+| T-008 | Herramienta nueva | Extraer imagenes / recursos de PDF | Hecho | P2 | I-008 | Implementado con extraccion por xref, formato original, deduplicacion, filtros, visor agrupado y pruebas. |
+| T-009 | Herramienta nueva | Formularios PDF: rellenar y aplanar | Hecho | P2 | I-009 | Implementado con campos de texto, checkbox, radio, combos/listas, exportacion editable/aplanada y pruebas. |
+| T-010 | Herramienta nueva | Comparar PDFs | Hecho | P2 | I-010 | Implementado con comparacion visual/textual, sensibilidad configurable, paginas agregadas/eliminadas y reporte PDF. |
+| T-011 | Herramienta nueva | Reparar / Normalizar PDF | Hecho | P2 | I-011 | Implementado con perfiles de normalizacion, deteccion `is_repaired`, fallback de reconstruccion y pruebas. |
+| T-012 | Herramienta nueva | PDF/A o archivo legal | Omitido | P3 | Excluido | Omitido del roadmap activo por decision de producto. |
 
 ### Mejoras Por Herramienta Actual
 
 | ID | Tipo | Iniciativa | Estado | Prioridad | Iteracion | Notas |
 | --- | --- | --- | --- | --- | --- | --- |
-| M-001 | Mejora | Firmador: perfiles de firma | Pendiente | P1 | Por definir | Guardar posicion, tamano, color, variacion y fondo. |
-| M-002 | Mejora | Firmador: firma por reglas | Pendiente | P1 | Por definir | Ultima pagina, texto detectado o linea de firma. |
-| M-003 | Mejora | Foleador: QR/codigo de barras | Pendiente | P2 | Por definir | Folio visual y legible por maquina. |
-| M-004 | Mejora | Separador: separar por texto/bookmarks | Pendiente | P1 | Por definir | Usa OCR/texto nativo y marcadores. |
-| M-005 | Mejora | Membretado: biblioteca de membretes | Pendiente | P2 | Por definir | Presets reutilizables. |
-| M-006 | Mejora | Unir PDFs: miniaturas antes de unir | Pendiente | P1 | Por definir | Relacionado con T-001. |
-| M-007 | Mejora | PDF a Imagenes: rangos y presets | Pendiente | P2 | Por definir | DPI/formato/rangos guardables. |
-| M-008 | Mejora | Imagenes a PDF: modo escaner documental | Pendiente | P1 | Por definir | Recorte, enderezado y contraste. |
+| M-001 | Mejora | Firmador: perfiles de firma | Omitido | P1 | Excluido | Omitido junto con mejoras de Firmador. |
+| M-002 | Mejora | Firmador: firma por reglas | Omitido | P1 | Excluido | Omitido junto con mejoras de Firmador. |
+| M-003 | Mejora | Foleador: QR/codigo de barras | Omitido | P2 | Excluido | Omitido junto con mejoras de Foleador. |
+| M-004 | Mejora | Separador: separar por texto/bookmarks | Omitido | P1 | Excluido | Omitido junto con mejoras de Separador. |
+| M-005 | Mejora | Membretado: biblioteca de membretes | Hecho | P2 | I-016 | Biblioteca local de membretes frecuentes, carga desde biblioteca y membrete PDF/Word. |
+| M-006 | Mejora | Unir PDFs: miniaturas antes de unir | Hecho | P1 | I-012 | Revisado: se retiro la banda visual duplicada; queda lista principal ordenable con miniaturas nativas. |
+| M-007 | Mejora | PDF a Imagenes: rangos y presets | Hecho | P2 | I-015 | Implementado con presets de formato/DPI/calidad, rangos y layout compacto scrollable para evitar cortes. |
+| M-008 | Mejora | Imagenes a PDF: modo escaner documental | Hecho | P1 | I-013 | Implementado con perfiles Desactivado, Documento limpio, Foto de hoja y Alto contraste. |
 | M-009 | Mejora | OCR: busqueda y exportacion CSV | Pendiente | P2 | Por definir | Revision y analisis de resultados. |
 | M-010 | Mejora | Word a PDF: Office a PDF | Pendiente | P2 | Por definir | Extender a Excel y PowerPoint. |
-| M-011 | Mejora | Quitar fondo: preview antes/despues | Pendiente | P1 | Por definir | Eleva confianza del usuario. |
+| M-011 | Mejora | Quitar fondo: preview antes/despues | Hecho | P1 | I-014 | Implementado con visor comparativo original/PNG transparente y fondo cuadriculado. |
 
 ---
 
@@ -102,7 +114,7 @@ Estas cinco iniciativas son el bloque inicial de crecimiento del producto.
 
 ### T-001 - Organizador Visual De Paginas
 
-**Estado:** Pendiente  
+**Estado:** Hecho  
 **Prioridad:** P1  
 **Tipo:** Herramienta nueva  
 **Valor principal:** Dar control visual total sobre paginas antes o despues de cualquier otro flujo.
@@ -183,21 +195,21 @@ Crear una herramienta para cargar uno o varios PDFs y manipular sus paginas visu
 
 #### Checklist
 
-- [ ] Definir modelo de pagina y estado UI.
-- [ ] Crear motor de organizacion.
-- [ ] Crear grilla visual de miniaturas.
-- [ ] Implementar acciones de pagina.
-- [ ] Integrar procesamiento y visor de resultado.
-- [ ] Registrar herramienta en `tool_registry`.
-- [ ] Agregar pruebas unitarias del motor.
-- [ ] Agregar pruebas de ventana.
-- [ ] Validar flujo manual con PDFs reales.
+- [x] Definir modelo de pagina y estado UI.
+- [x] Crear motor de organizacion.
+- [x] Crear grilla visual de miniaturas.
+- [x] Implementar acciones de pagina.
+- [x] Integrar procesamiento y visor de resultado.
+- [x] Registrar herramienta en `tool_registry`.
+- [x] Agregar pruebas unitarias del motor.
+- [x] Agregar pruebas de ventana.
+- [x] Validar flujo manual con PDFs reales.
 
 ---
 
 ### T-002 - Comprimir / Optimizar PDF
 
-**Estado:** Pendiente  
+**Estado:** Hecho  
 **Prioridad:** P1  
 **Tipo:** Herramienta nueva  
 **Valor principal:** Reducir peso de PDFs para correo, archivo y carga en portales.
@@ -240,8 +252,9 @@ Crear una herramienta para optimizar PDFs por lote con perfiles simples y compre
   - `CompressJob`: pdf path, output path, profile.
   - `CompressResult`: input bytes, output bytes, ratio, success, error.
 - Base tecnica:
-  - PyMuPDF para reescritura, garbage, deflate.
-  - Para reduccion agresiva, renderizar imagenes grandes o recomprimir recursos si es viable.
+- PyMuPDF para reescritura, garbage, deflate.
+- PyMuPDF `rewrite_images` para bajar DPI/calidad en imagenes grandes.
+- Guardado con limpieza, deflate, object streams y fallback que conserva el original si la optimizacion aumenta el peso.
 
 #### Edge Cases
 
@@ -269,20 +282,20 @@ Crear una herramienta para optimizar PDFs por lote con perfiles simples y compre
 
 #### Checklist
 
-- [ ] Definir perfiles finales.
-- [ ] Implementar motor base con PyMuPDF.
-- [ ] Agregar medicion de peso y ratio.
-- [ ] Crear UI de perfil y resumen.
-- [ ] Integrar visor de resultado.
-- [ ] Registrar herramienta.
-- [ ] Agregar pruebas con PDFs sinteticos.
-- [ ] Validar con PDFs escaneados reales.
+- [x] Definir perfiles finales.
+- [x] Implementar motor base con PyMuPDF.
+- [x] Agregar medicion de peso y ratio.
+- [x] Crear UI de perfil y resumen.
+- [x] Integrar visor de resultado.
+- [x] Registrar herramienta.
+- [x] Agregar pruebas con PDFs sinteticos.
+- [x] Validar con PDF sintetico pesado tipo escaneo.
 
 ---
 
 ### T-003 - Marca De Agua / Sellos
 
-**Estado:** Pendiente  
+**Estado:** Hecho  
 **Prioridad:** P1  
 **Tipo:** Herramienta nueva  
 **Valor principal:** Agregar sellos visuales y marcas repetibles a documentos por lote.
@@ -312,10 +325,12 @@ Crear una herramienta para aplicar texto o imagen como marca de agua/sello en un
 #### MVP
 
 - Marcas de texto.
+- Marcas de imagen/logo.
 - Presets: Confidencial, Copia, Pagado, Recibido.
-- Posiciones predefinidas: centro, esquina superior, esquina inferior.
-- Opacidad y rotacion.
-- Aplicar a todas las paginas o rango simple.
+- Posiciones predefinidas: centro, superior izquierda/centro/derecha e inferior izquierda/centro/derecha.
+- Opacidad, rotacion y tamano.
+- Aplicar a todas las paginas, primera, ultima o rango personalizado.
+- Preview basico de pagina antes de procesar.
 - Resultado temporal con visor.
 
 #### Arquitectura Sugerida
@@ -323,12 +338,13 @@ Crear una herramienta para aplicar texto o imagen como marca de agua/sello en un
 - UI: `ui/marca_agua/`.
 - Motor core: `core/watermark_engine.py`.
 - Modelo:
-  - `WatermarkConfig`: text/image, opacity, angle, position, pages.
-  - `WatermarkJob`: pdf path, output path, config.
-  - `WatermarkResult`: output path, success, error.
+  - `WatermarkOptions`: tipo, texto/imagen, opacidad, angulo, posicion, tamano y paginas.
+  - `WatermarkJob`: PDF origen, PDF salida y opciones.
+  - `WatermarkResult`: salida, estado, error, paginas totales, paginas selladas y metadatos.
 - Base tecnica:
-  - PyMuPDF `insert_textbox` o insercion de imagen.
-  - Reusar conceptos visuales de Firmador y Membretado.
+  - PyMuPDF `insert_text` con opacidad real para texto.
+  - PyMuPDF `insert_image` con preprocesamiento Pillow para imagen, opacidad y rotacion.
+  - Preview generado desde una pagina temporal con el mismo motor.
 
 #### Edge Cases
 
@@ -356,19 +372,19 @@ Crear una herramienta para aplicar texto o imagen como marca de agua/sello en un
 
 #### Checklist
 
-- [ ] Definir presets.
-- [ ] Implementar motor de texto.
-- [ ] Implementar seleccion de paginas.
-- [ ] Crear preview basico.
-- [ ] Agregar imagen como fase posterior del MVP si el texto queda cerrado.
-- [ ] Registrar herramienta.
-- [ ] Agregar pruebas unitarias y smoke UI.
+- [x] Definir presets.
+- [x] Implementar motor de texto.
+- [x] Implementar motor de imagen.
+- [x] Implementar seleccion de paginas.
+- [x] Crear preview basico.
+- [x] Registrar herramienta.
+- [x] Agregar pruebas unitarias y smoke UI.
 
 ---
 
 ### T-004 - Redaccion Segura
 
-**Estado:** Pendiente  
+**Estado:** Hecho  
 **Prioridad:** P1  
 **Tipo:** Herramienta nueva  
 **Valor principal:** Ocultar datos sensibles de forma irreversible y confiable.
@@ -403,15 +419,18 @@ Crear una herramienta para censurar informacion sensible en PDFs aplicando redac
 
 #### Arquitectura Sugerida
 
-- UI: `ui/redaccion/`.
+- UI: `ui/redactor/`.
 - Motor core: `core/redaction_engine.py`.
 - Modelo:
-  - `RedactionBox`: page index, rect normalizado o puntos PDF, label opcional.
-  - `RedactionJob`: pdf path, output path, boxes.
-  - `RedactionResult`: output path, redactions count, success, error.
+  - `RedactionRect`: pagina y rectangulo normalizado en coordenadas de vista.
+  - `RedactionOptions`: color de relleno y soporte de imagenes/graficos.
+  - `RedactionJob`: PDF origen, PDF salida, rectangulos y opciones.
+  - `RedactionResult`: salida, estado, error, paginas y conteo de redacciones.
 - Base tecnica:
   - PyMuPDF `add_redact_annot` y `apply_redactions`.
-  - Reusar visor interactivo de preview como base conceptual.
+  - `PDF_REDACT_TEXT_REMOVE` para eliminar texto real.
+  - `PDF_REDACT_IMAGE_PIXELS` para limpiar pixeles de imagen dentro del area.
+  - Transformacion display -> PDF para paginas rotadas.
 
 #### Edge Cases
 
@@ -439,19 +458,19 @@ Crear una herramienta para censurar informacion sensible en PDFs aplicando redac
 
 #### Checklist
 
-- [ ] Investigar comportamiento exacto de PyMuPDF con texto e imagenes.
-- [ ] Crear modelo de cajas por pagina.
-- [ ] Implementar canvas de seleccion.
-- [ ] Implementar motor de redaccion segura.
-- [ ] Agregar pruebas de extraccion de texto post-redaccion.
-- [ ] Registrar herramienta.
-- [ ] Validar manualmente con PDFs reales.
+- [x] Investigar comportamiento exacto de PyMuPDF con texto e imagenes.
+- [x] Crear modelo de cajas por pagina.
+- [x] Implementar canvas de seleccion.
+- [x] Implementar motor de redaccion segura.
+- [x] Agregar pruebas de extraccion de texto post-redaccion.
+- [x] Registrar herramienta.
+- [x] Validar con PDFs sinteticos de texto y paginas rotadas.
 
 ---
 
 ### T-005 - Clasificador / Renombrador Por OCR
 
-**Estado:** Pendiente  
+**Estado:** Hecho  
 **Prioridad:** P1  
 **Tipo:** Herramienta nueva  
 **Valor principal:** Automatizar orden y nombres de documentos usando contenido real.
@@ -477,16 +496,17 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
    - Cliente.
    - Tipo de documento.
 4. Ejecutar analisis.
-5. Mostrar tabla editable con nombre sugerido, confianza y avisos.
-6. Confirmar y guardar/copiar resultados.
+5. Generar copias temporales con nombre sugerido.
+6. Revisar resultados en visor y guardar/copiar por lote.
 
 #### MVP
 
 - Leer texto nativo si existe.
-- Usar OCR existente cuando el documento no tenga texto suficiente.
-- Reglas por expresiones simples para RFC, fecha y folio.
-- Plantilla de nombre: `{tipo}_{rfc}_{fecha}_{folio}.pdf`.
-- Tabla de revision antes de guardar.
+- Usar OCR existente cuando una pagina no tenga texto nativo.
+- Reglas configurables por tipo: `Tipo=keyword, keyword`.
+- Extraccion de RFC, fecha, folio, cliente, tipo y original.
+- Plantilla de nombre con placeholders: `{tipo}`, `{rfc}`, `{fecha}`, `{folio}`, `{cliente}`, `{original}`.
+- Copia temporal por PDF con nombre seguro y visor de resultados.
 
 #### Arquitectura Sugerida
 
@@ -496,10 +516,10 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
   - `core.ocr_engine` para obtener texto.
   - `core.output_paths` y `core.output_naming` para nombres seguros.
 - Modelo:
-  - `ClassifyRule`: field, pattern, label, required.
-  - `RenameTemplate`: template string.
-  - `ClassifyJob`: pdf path, output dir, rules, template.
-  - `ClassifyResult`: fields, confidence, suggested name, output path, warnings.
+  - `ClassificationRule`: tipo y keywords.
+  - `ClassifierConfig`: plantilla, reglas, max pages, OCR fallback y sufijo.
+  - `ClassifierJob`: PDF origen, output dir y config.
+  - `ClassifierResult`: campos detectados, metodo, output path, success/error.
 
 #### Edge Cases
 
@@ -508,7 +528,7 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 - RFC o fecha ambiguos.
 - Nombres repetidos.
 - Caracteres invalidos en nombre.
-- Usuario edita nombre sugerido a algo invalido.
+- Plantilla incompleta o placeholders faltantes.
 
 #### Pruebas
 
@@ -517,24 +537,27 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 - Genera nombre seguro.
 - Resuelve duplicados.
 - Usa fallback cuando faltan campos.
-- Tabla muestra warnings para baja confianza.
+- Construye jobs desde UI.
 
 #### Criterios De Aceptacion
 
-- Ningun archivo original se renombra directamente sin confirmacion.
-- El usuario puede revisar y corregir antes de guardar.
+- Ningun archivo original se renombra directamente.
+- El usuario revisa resultados antes de usar Guardar como/Guardar todo.
 - Los nombres finales son validos en Windows.
 - Los resultados se pueden guardar por lote.
 
 #### Checklist
 
-- [ ] Definir reglas MVP.
-- [ ] Crear motor de extraccion de campos.
-- [ ] Crear tabla editable de resultados.
-- [ ] Integrar OCR/texto nativo.
-- [ ] Implementar guardado/copia con nombres finales.
-- [ ] Agregar pruebas de reglas y nombres.
-- [ ] Registrar herramienta.
+- [x] Definir reglas MVP.
+- [x] Crear motor de extraccion de campos.
+- [x] Integrar OCR/texto nativo.
+- [x] Implementar guardado/copia temporal con nombres finales.
+- [x] Agregar pruebas de reglas y nombres.
+- [x] Registrar herramienta.
+
+#### Post-MVP
+
+- Crear tabla editable de revision fina con confianza, avisos y correccion manual antes de guardar.
 
 ---
 
@@ -542,59 +565,66 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 
 ### T-006 - Proteger PDF
 
-- **Estado:** Pendiente
+- **Estado:** Hecho
 - **Prioridad:** P2
 - **Objetivo:** Agregar contrasena y permisos de impresion/copia/edicion.
-- **MVP:** cifrar PDF con password de apertura y password de propietario.
-- **Pruebas clave:** PDF requiere password al abrir; permisos configurados; password vacia no permitida.
+- **MVP:** cifrar PDF con AES-256, password de apertura opcional, password de propietario y permisos configurables.
+- **Pruebas clave:** PDF requiere password al abrir; visor autentica resultados protegidos; permisos configurados; password vacia no permitida.
+- **Entregado:** `core/pdf_protect_engine.py`, `ui/protector/`, registro en launcher, salida temporal, bandeja y envio entre herramientas.
 
 ### T-007 - PDF A Word Editable
 
-- **Estado:** Pendiente
+- **Estado:** Hecho
 - **Prioridad:** P2
 - **Objetivo:** Exportar PDFs con texto nativo u OCR a DOCX editable.
-- **MVP:** texto por paginas con estructura simple y exportacion DOCX.
-- **Pruebas clave:** texto aparece en DOCX; OCR se usa en escaneos; errores parciales no bloquean lote.
+- **MVP:** texto por paginas con estructura simple, conservacion de texto nativo, OCR fallback y exportacion DOCX.
+- **Pruebas clave:** texto aparece en DOCX; nombres duplicados se resuelven; ventana construye jobs; registry expone la herramienta.
+- **Entregado:** `core/pdf_to_word_engine.py`, `ui/pdf_to_word/`, preview de texto reutilizando resultados OCR, salida temporal, bandeja y envio a `Word a PDF`.
 
 ### T-008 - Extraer Imagenes / Recursos De PDF
 
-- **Estado:** Pendiente
+- **Estado:** Hecho
 - **Prioridad:** P2
 - **Objetivo:** Extraer imagenes embebidas sin renderizar paginas completas.
-- **MVP:** exportar imagenes originales por documento.
-- **Pruebas clave:** extrae cantidad correcta; conserva formato cuando sea posible; maneja PDFs sin imagenes.
+- **MVP:** exportar imagenes originales por documento, agrupadas por PDF origen.
+- **Pruebas clave:** extrae cantidad correcta; conserva formato cuando es posible; maneja PDFs sin imagenes; deduplica recursos repetidos.
+- **Entregado:** `core/pdf_extract_images_engine.py`, `ui/extraer_imagenes/`, visor de imagenes con metadatos, salida temporal, bandeja y envio a herramientas compatibles.
 
 ### T-009 - Formularios PDF: Rellenar Y Aplanar
 
-- **Estado:** Pendiente
+- **Estado:** Hecho
 - **Prioridad:** P2
 - **Objetivo:** Completar campos PDF y generar version aplanada.
-- **MVP:** detectar campos, editar valores y exportar PDF no editable.
-- **Pruebas clave:** valores visibles; campos aplanados; PDF sin formularios muestra aviso.
+- **MVP:** detectar campos AcroForm, editar valores por tipo, exportar PDF editable o aplanado y preservar originales.
+- **Pruebas clave:** deteccion de texto/checkbox/listas; valores visibles; campos aplanados con `bake(widgets=True)`; salida editable opcional; PDF sin formularios muestra aviso claro.
+- **Entregado:** `core/pdf_form_engine.py`, `ui/formularios/`, registro en launcher, salida temporal, visor de PDF, bandeja y envio entre herramientas.
 
 ### T-010 - Comparar PDFs
 
-- **Estado:** Pendiente
+- **Estado:** Hecho
 - **Prioridad:** P2
 - **Objetivo:** Detectar diferencias entre dos versiones de un documento.
-- **MVP:** comparar por render de pagina y listar paginas con cambios.
-- **Pruebas clave:** detecta cambio visual; detecta cambio textual; maneja distinto numero de paginas.
+- **MVP:** comparar por render de pagina, comparar texto nativo normalizado y generar reporte PDF con paginas afectadas.
+- **Pruebas clave:** detecta cambio visual; detecta cambio textual; maneja paginas agregadas; reporte sin diferencias; registry expone la herramienta.
+- **Entregado:** `core/pdf_compare_engine.py`, `ui/comparador/`, registro en launcher, salida temporal, visor de PDF, bandeja y envio entre herramientas.
 
 ### T-011 - Reparar / Normalizar PDF
 
-- **Estado:** Pendiente
+- **Estado:** Hecho
 - **Prioridad:** P2
 - **Objetivo:** Reescribir PDFs problematicos para mejorar compatibilidad.
-- **MVP:** abrir y guardar con limpieza, garbage y deflate.
-- **Pruebas clave:** PDF corrupto recuperable se abre; PDF normal no pierde paginas; errores claros.
+- **MVP:** abrir, reescribir y verificar PDFs con limpieza, garbage, deflate y perfiles de compatibilidad.
+- **Pruebas clave:** PDF corrupto recuperable se abre y se marca como reparado; PDF normal no pierde paginas ni modifica original; ruta de salida igual se rechaza; errores claros; registry expone la herramienta.
+- **Entregado:** `core/pdf_repair_engine.py`, `ui/reparador/`, registro en launcher, salida temporal, visor de PDF, bandeja y envio entre herramientas.
 
 ### T-012 - PDF/A O Archivo Legal
 
-- **Estado:** Pendiente
+- **Estado:** Omitido
 - **Prioridad:** P3
 - **Objetivo:** Preparar documentos para conservacion y archivo.
 - **MVP:** validar requisitos basicos y generar reporte.
 - **Pruebas clave:** reporte de cumplimiento; advertencias claras; no prometer certificacion si no se valida formalmente.
+- **Decision:** Excluido del roadmap activo; no se implementara en este bloque.
 
 ---
 
@@ -604,32 +634,32 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-001 | Perfiles de firma | P1 | Pendiente | Guardar posicion, tamano, variacion, color y fondo por perfil. |
-| M-002 | Firma por reglas | P1 | Pendiente | Firmar ultima pagina, paginas con texto especifico o lineas detectadas. |
-| M-012 | Vista antes/despues | P2 | Pendiente | Comparacion rapida entre original y firmado. |
-| M-013 | Firma digital criptografica | P3 | Pendiente | Evaluar como herramienta separada por complejidad legal/tecnica. |
+| M-001 | Perfiles de firma | P1 | Omitido | Excluido del roadmap activo. |
+| M-002 | Firma por reglas | P1 | Omitido | Excluido del roadmap activo. |
+| M-012 | Vista antes/despues | P2 | Omitido | Excluido del roadmap activo. |
+| M-013 | Firma digital criptografica | P3 | Omitido | Excluido del roadmap activo. |
 
 ### B-002 - Foleador
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-003 | QR/codigo de barras | P2 | Pendiente | Folio visible y escaneable. |
-| M-014 | Importar consecutivos desde CSV/Excel | P2 | Pendiente | Folios externos por documento o pagina. |
-| M-015 | Reinicio por seccion | P2 | Pendiente | Numeracion configurable por documento, rango o marcador. |
+| M-003 | QR/codigo de barras | P2 | Omitido | Excluido del roadmap activo. |
+| M-014 | Importar consecutivos desde CSV/Excel | P2 | Omitido | Excluido del roadmap activo. |
+| M-015 | Reinicio por seccion | P2 | Omitido | Excluido del roadmap activo. |
 
 ### B-003 - Separador De PDF
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-004 | Separar por texto/bookmarks | P1 | Pendiente | Dividir automaticamente por marcadores o texto detectado. |
-| M-016 | Separar cada N paginas | P2 | Pendiente | Caso rapido para lotes homogeneos. |
-| M-017 | Plantillas de separacion | P2 | Pendiente | Guardar reglas repetibles. |
+| M-004 | Separar por texto/bookmarks | P1 | Omitido | Excluido del roadmap activo. |
+| M-016 | Separar cada N paginas | P2 | Omitido | Excluido del roadmap activo. |
+| M-017 | Plantillas de separacion | P2 | Omitido | Excluido del roadmap activo. |
 
 ### B-004 - Membretado
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-005 | Biblioteca de membretes | P2 | Pendiente | Presets reutilizables con preview. |
+| M-005 | Biblioteca de membretes | P2 | Hecho | Biblioteca local con copia segura del PDF, reutilizacion desde UI y soporte de membrete Word convertido a PDF. |
 | M-018 | Reglas primera pagina/resto | P2 | Pendiente | Aplicar membretes distintos segun pagina. |
 | M-019 | Preview lado a lado | P3 | Pendiente | Comparar original y membretado. |
 
@@ -637,7 +667,7 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-006 | Miniaturas antes de unir | P1 | Pendiente | Reordenar visualmente documentos y paginas. |
+| M-006 | Miniaturas antes de unir | P1 | Hecho | Lista principal ordenable con miniaturas nativas y resumen claro; sin duplicar el Organizador visual dentro de Unir. |
 | M-020 | Portada automatica | P2 | Pendiente | Crear portada de lote. |
 | M-021 | Indice con marcadores | P2 | Pendiente | Navegacion automatica por documento. |
 | M-022 | Normalizar tamanos | P2 | Pendiente | Homogeneizar paginas al unir. |
@@ -646,7 +676,7 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-007 | Rangos y presets | P2 | Pendiente | Exportar paginas especificas y guardar DPI/formato. |
+| M-007 | Rangos y presets | P2 | Hecho | Presets rapidos y exportacion de paginas especificas, incluyendo `final`, pares e impares, en un layout compacto con scroll. |
 | M-023 | Estimacion de peso final | P3 | Pendiente | Mostrar tamano aproximado antes de procesar. |
 | M-024 | Nombres avanzados | P2 | Pendiente | Plantillas tipo `{doc}_p{page:03}`. |
 
@@ -654,7 +684,7 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-008 | Modo escaner documental | P1 | Pendiente | Recorte de bordes, enderezado y contraste. |
+| M-008 | Modo escaner documental | P1 | Hecho | Recorte de bordes claros, enderezado leve, contraste documental y perfil de alto contraste. |
 | M-025 | Correccion automatica de orientacion | P2 | Pendiente | Girar fotos de hojas de forma inteligente. |
 | M-026 | Blanco y negro optimizado | P2 | Pendiente | Reducir peso y mejorar legibilidad. |
 
@@ -664,7 +694,7 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 | --- | --- | --- | --- | --- |
 | M-009 | Busqueda y exportacion CSV | P2 | Pendiente | Buscar en resultados y exportar resumen. |
 | M-027 | Cola con reintentos | P2 | Pendiente | Robustecer lotes largos. |
-| M-028 | Renombrado por contenido | P1 | Pendiente | Se relaciona con T-005. |
+| M-028 | Renombrado por contenido | P1 | Hecho | Cubierto por T-005; queda como mejora futura la tabla editable con confianza/avisos. |
 
 ### B-009 - Word A PDF
 
@@ -679,7 +709,7 @@ Crear una herramienta que lea texto nativo u OCR y permita clasificar/renombrar 
 
 | ID | Mejora | Prioridad | Estado | Resultado esperado |
 | --- | --- | --- | --- | --- |
-| M-011 | Preview antes/despues | P1 | Pendiente | Comparacion visual con fondo cuadriculado. |
+| M-011 | Preview antes/despues | P1 | Hecho | Comparacion lado a lado original/resultado con PNG sobre fondo cuadriculado. |
 | M-032 | Recorte automatico al contenido | P2 | Pendiente | Eliminar margenes transparentes. |
 | M-033 | Presets firma/sello/logo | P2 | Pendiente | Configuraciones rapidas por tipo de imagen. |
 | M-034 | Colorizar despues de quitar fondo | P2 | Pendiente | Llevar opcion del Firmador a herramienta independiente. |
@@ -692,6 +722,7 @@ Estos criterios aplican a toda herramienta nueva o mejora importante.
 
 ### UX Y Flujo
 
+- El launcher debe mantenerse compacto, buscable y escalable; las herramientas principales aparecen primero y el orden inteligente se basa en uso local.
 - La primera pantalla debe ser la herramienta usable, no una landing page.
 - Cada herramienta debe seguir el patron de pasos de PDFlex:
   - Entrada.
@@ -757,7 +788,7 @@ Estos criterios aplican a toda herramienta nueva o mejora importante.
 Una iniciativa se marca como `Hecho` solo si cumple:
 
 - [ ] Esta registrada en `shell/tool_registry.py` si es herramienta nueva.
-- [ ] Aparece en el launcher en la categoria correcta.
+- [ ] Aparece en el launcher en la categoria correcta y respeta el orden editorial/uso frecuente.
 - [ ] Tiene flujo completo de entrada, opciones, proceso y resultados.
 - [ ] No modifica originales.
 - [ ] Usa temporal y visor/resultados reutilizables cuando aplique.
@@ -775,6 +806,26 @@ Una iniciativa se marca como `Hecho` solo si cumple:
 | --- | --- | --- | --- |
 | 2026-06-05 | I-000 | Creacion del plan maestro y definicion del Top 5 de herramientas nuevas. | En implementacion |
 | 2026-06-05 | Base | Word a PDF y Quitar fondo quedan reconocidas como herramientas base completadas. | Base completada |
+| 2026-06-05 | I-001 | T-001 Organizador visual implementado con motor, UI, registro, resultados y pruebas. | Hecho |
+| 2026-06-05 | I-002 | T-002 Comprimir PDF implementado con perfiles, metricas antes/despues, fallback anti-crecimiento, visor y pruebas. | Hecho |
+| 2026-06-05 | I-003 | T-003 Marca de agua implementada con sellos de texto e imagen, presets, preview, rangos, visor y pruebas. | Hecho |
+| 2026-06-05 | I-004 | T-004 Redaccion segura implementada con canvas manual, redaccion real PyMuPDF, soporte de paginas rotadas y pruebas de extraccion. | Hecho |
+| 2026-06-05 | I-005 | T-005 Clasificador OCR implementado con reglas, plantilla, extraccion de campos, OCR fallback, copias renombradas y pruebas. | Hecho |
+| 2026-06-06 | I-006 | T-006 Proteger PDF implementado con cifrado AES-256, permisos, visor autenticado y pruebas de password. | Hecho |
+| 2026-06-06 | I-007 | T-007 PDF a Word implementado con motor dedicado, DOCX editable, preview de texto, OCR fallback y pruebas. | Hecho |
+| 2026-06-06 | I-008 | T-008 Extraer imagenes implementado con recursos embebidos, deduplicacion xref, filtros, visor agrupado y pruebas. | Hecho |
+| 2026-06-06 | I-009 | T-009 Formularios PDF implementado con deteccion de campos, captura por tipo, aplanado real y pruebas. | Hecho |
+| 2026-06-06 | UX-002 | Formularios PDF robustecido: captura por filas scrollables, validacion de campos requeridos, soporte fuerte para estados de botones y metadata de campos. | Hecho |
+| 2026-06-06 | I-010 | T-010 Comparar PDFs implementado con reporte visual/textual, sensibilidad configurable y pruebas de diferencias. | Hecho |
+| 2026-06-06 | I-011 | T-011 Reparar PDF implementado con reescritura estructural, deteccion de reparacion, fallback y pruebas. | Hecho |
+| 2026-06-06 | Alcance | T-012 y mejoras de Firmador, Foleador y Separador quedan omitidas del roadmap activo. | Omitido |
+| 2026-06-06 | I-012 | M-006 Unir PDFs revisado con lista principal ordenable, miniaturas nativas y resumen claro; se evita duplicar el Organizador visual. | Hecho |
+| 2026-06-06 | I-013 | M-008 Imagenes a PDF mejorado con modo escaner documental, perfiles de recorte/enderezado/contraste y pruebas. | Hecho |
+| 2026-06-06 | I-014 | M-011 Quitar fondo mejorado con preview antes/despues, fondo cuadriculado y pruebas de visor comparativo. | Hecho |
+| 2026-06-06 | I-015 | M-007 PDF a Imagenes mejorado con presets, rangos de paginas, layout compacto scrollable y pruebas de motor/UI. | Hecho |
+| 2026-06-06 | UX-003 | Launcher redisenado como catalogo compacto con busqueda, categorias editoriales, orden por uso local y fallback para herramientas futuras. | Hecho |
+| 2026-06-06 | I-016 | M-005 Membretado mejorado con biblioteca local de membretes, reutilizacion desde UI y carga de membrete Word convertido a PDF. | Hecho |
+| 2026-06-06 | UX-001 | Correccion UI/UX: se retiro el orden visual redundante de Unir PDFs y se reacomodo Formato de PDF a Imagenes para evitar colapso o texto cortado. | Hecho |
 
 ---
 
@@ -784,9 +835,19 @@ Estas decisiones se resolveran antes o durante la ficha correspondiente.
 
 | ID | Tema | Decision pendiente | Afecta |
 | --- | --- | --- | --- |
-| D-001 | Organizador visual | Si v1 soportara multiples PDFs mezclados o solo un PDF por sesion. | T-001 |
-| D-002 | Compresor | Nivel exacto de reduccion por perfil. | T-002 |
-| D-003 | Marca de agua | Si imagen entra en MVP o fase 2. | T-003 |
-| D-004 | Redaccion segura | Nivel de soporte para redaccion sobre imagenes escaneadas. | T-004 |
-| D-005 | Clasificador OCR | Sintaxis final de reglas y plantillas. | T-005 |
-
+| D-001 | Organizador visual | Resuelta: v1 soporta multiples PDFs mezclados en una sola grilla. | T-001 |
+| D-002 | Compresor | Resuelta: Correo 110 DPI/58%, Equilibrado 150 DPI/74%, Alta calidad 240 DPI/88%; si el output crece, se conserva el peso original y se avisa. | T-002 |
+| D-003 | Marca de agua | Resuelta: imagen entra en MVP junto con texto; Pillow prepara opacidad/rotacion y PyMuPDF inserta el sello. | T-003 |
+| D-004 | Redaccion segura | Resuelta: v1 redacta pixeles de imagen dentro del rectangulo dibujado; deteccion automatica por OCR queda para mejora posterior. | T-004 |
+| D-005 | Clasificador OCR | Resuelta: reglas `Tipo=keyword, keyword`; plantillas con `{tipo}`, `{cliente}`, `{rfc}`, `{fecha}`, `{folio}`, `{original}`. | T-005 |
+| D-006 | Proteger PDF | Resuelta: AES-256 por defecto; password de apertura opcional; si propietario queda vacio se usa apertura como propietario; permisos por checkboxes. | T-006 |
+| D-007 | PDF a Word | Resuelta: v1 genera DOCX editable de texto por paginas usando OCR existente; reconstruccion visual avanzada queda para mejora futura. | T-007 |
+| D-008 | Extraer imagenes | Resuelta: v1 conserva bytes/formato expuesto por PyMuPDF y deduplica por xref por defecto; conversion forzada queda para mejora futura. | T-008 |
+| D-009 | Formularios PDF | Resuelta: v1 trabaja un PDF por sesion, soporta texto/checkbox/radio/combo/lista, valida requeridos, preserva valores al navegar y usa `bake(widgets=True)` para aplanar. | T-009 |
+| D-010 | Comparar PDFs | Resuelta: v1 compara exactamente dos PDFs; el primero es base, el segundo revisado; el resultado es un reporte PDF con resaltado rojo sobre la version revisada. | T-010 |
+| D-011 | Reparar PDF | Resuelta: v1 no promete recuperar PDFs irrecuperables; si MuPDF puede abrirlos, se reescriben y se verifica que el resultado abra con el mismo numero de paginas. | T-011 |
+| D-012 | Alcance de roadmap | Resuelta: se omite T-012 y se excluyen mejoras de Firmador, Foleador y Separador; el siguiente bloque activo inicia con mejoras de otras herramientas. | T-012, M-001..M-004, M-012..M-017 |
+| D-013 | Unir PDFs | Resuelta: Unir PDFs no duplica el Organizador visual; el orden se controla en la lista principal del lote con miniaturas nativas y resumen compacto. | M-006 |
+| D-014 | Imagenes a PDF | Resuelta: M-008 se implementa como perfiles documentales; blanco y negro optimizado avanzado y orientacion inteligente quedan como M-026/M-025 pendientes. | M-008 |
+| D-015 | Quitar fondo | Resuelta: el visor de imagenes queda con modo opcional de comparacion; Quitar fondo lo usa para original vs PNG sobre cuadricula sin afectar otros visores. | M-011 |
+| D-016 | PDF a Imagenes | Resuelta: los rangos se interpretan en el motor con sintaxis `1-3,5,final`, `pares` e `impares`; la UI usa cards compactas dentro de un panel scrollable para evitar cortes. | M-007 |

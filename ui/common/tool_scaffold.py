@@ -146,6 +146,22 @@ class PipelineWindow(QWidget):
         QTimer.singleShot(0, self._apply_primary_glows)
         QTimer.singleShot(0, lambda: self._update_navbar(0) if self.SECTIONS else None)
 
+        # Atajos Alt+1-9 para navegar entre pasos
+        from PyQt6.QtGui import QShortcut
+        self._alt_shortcuts: list = []
+        for n in range(1, 10):
+            sc = QShortcut(self)
+            sc.setKey(f"Alt+{n}")
+            idx = n - 1
+            sc.activated.connect(
+                lambda _idx=idx: self._slide_to_section(_idx) if _idx < len(self.SECTIONS) else None
+            )
+            self._alt_shortcuts.append(sc)
+
+        # Event filter para sidebar hover (muestra/oculta hint de atajos)
+        if hasattr(self, "_sidebar_frame"):
+            self._sidebar_frame.installEventFilter(self)
+
     # ------------------------------------------------------------------ #
     # Construcción del caparazón (sidebar + stack)
     # ------------------------------------------------------------------ #
@@ -155,7 +171,8 @@ class PipelineWindow(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_sidebar())
+        self._sidebar_frame = self._build_sidebar()
+        root.addWidget(self._sidebar_frame)
 
         content_area = QWidget()
         content_area.setStyleSheet("background: #050507;")
@@ -238,6 +255,16 @@ class PipelineWindow(QWidget):
             self._section_buttons.append(btn)
 
         sb.addStretch(1)
+
+        # Hint de atajos Alt+1-9
+        self._shortcut_hint = QLabel("⌨  Alt+1…9 para navegar")
+        self._shortcut_hint.setObjectName("SidebarShortcutHint")
+        self._shortcut_hint.setStyleSheet(
+            "color: #383B4A; font-size: 10px; padding: 0 18px 4px 18px;"
+            "background: transparent;"
+        )
+        self._shortcut_hint.setVisible(False)
+        sb.addWidget(self._shortcut_hint)
 
         # ── Footer ─────────────────────────────────────────────────────
         footer = QLabel(f"GRUPO OCMX · PDFlex v{APP_VERSION}")
@@ -477,6 +504,17 @@ QListWidget::item:selected:!active {{
         from ui.common.animations import AnimationHelper
         accent = getattr(self, "ACCENT_COLOR", "#5E6AD2") or "#5E6AD2"
         AnimationHelper.apply_glow_to_primary_buttons(self, accent)
+
+    def eventFilter(self, obj, event) -> bool:
+        from PyQt6.QtCore import QEvent
+        if obj is getattr(self, "_sidebar_frame", None):
+            if event.type() == QEvent.Type.Enter:
+                if hasattr(self, "_shortcut_hint"):
+                    self._shortcut_hint.setVisible(True)
+            elif event.type() == QEvent.Type.Leave:
+                if hasattr(self, "_shortcut_hint"):
+                    self._shortcut_hint.setVisible(False)
+        return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------ #
     # Navegación

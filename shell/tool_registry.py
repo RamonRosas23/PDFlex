@@ -25,7 +25,8 @@ class ToolDescriptor:
     accent_color: str
     enabled: bool
     window_factory: Callable[["ShellContext"], "QWidget"]
-    icon_letter: str = ""     # letra/símbolo mostrado en el icono generado
+    icon_letter: str = ""            # legado — se mantiene para compatibilidad
+    icon_name: str = ""              # nombre en TOOL_ICON_MAP de icons.py
     input_extensions: tuple[str, ...] = (".pdf",)
 
 
@@ -152,6 +153,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_organizador()(ctx),
         icon_letter="O",
+        icon_name="tool-organizador",
     ),
     ToolDescriptor(
         id="firmador",
@@ -171,6 +173,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_firmador()(ctx),
         icon_letter="F",
+        icon_name="tool-firmador",
     ),
     ToolDescriptor(
         id="compresor",
@@ -190,6 +193,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_compresor()(ctx),
         icon_letter="C",
+        icon_name="tool-compresor",
     ),
     ToolDescriptor(
         id="marca_agua",
@@ -210,6 +214,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_marca_agua()(ctx),
         icon_letter="A",
+        icon_name="tool-marca-agua",
     ),
     ToolDescriptor(
         id="redactor",
@@ -230,6 +235,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_redactor()(ctx),
         icon_letter="R",
+        icon_name="tool-redactor",
     ),
     ToolDescriptor(
         id="protector",
@@ -249,6 +255,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_protector()(ctx),
         icon_letter="P",
+        icon_name="tool-protector",
     ),
     ToolDescriptor(
         id="formularios",
@@ -268,6 +275,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_formularios()(ctx),
         icon_letter="L",
+        icon_name="tool-formularios",
     ),
     ToolDescriptor(
         id="comparador",
@@ -288,6 +296,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_comparador()(ctx),
         icon_letter="V",
+        icon_name="tool-comparador",
     ),
     ToolDescriptor(
         id="reparador",
@@ -308,6 +317,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_reparador()(ctx),
         icon_letter="Z",
+        icon_name="tool-reparador",
     ),
     ToolDescriptor(
         id="foleador",
@@ -327,6 +337,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_foleador()(ctx),
         icon_letter="N",
+        icon_name="tool-foleador",
     ),
     ToolDescriptor(
         id="separador",
@@ -345,6 +356,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_separador()(ctx),
         icon_letter="S",
+        icon_name="tool-separador",
     ),
     ToolDescriptor(
         id="membretado",
@@ -365,6 +377,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_membretado()(ctx),
         icon_letter="M",
+        icon_name="tool-membretado",
     ),
     ToolDescriptor(
         id="pdf_to_imgs",
@@ -383,6 +396,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_pdf_to_imgs()(ctx),
         icon_letter="I",
+        icon_name="tool-pdf-to-imgs",
     ),
     ToolDescriptor(
         id="extraer_imagenes",
@@ -403,6 +417,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_extraer_imagenes()(ctx),
         icon_letter="X",
+        icon_name="tool-extraer-imagenes",
     ),
     ToolDescriptor(
         id="unir",
@@ -421,6 +436,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_unir()(ctx),
         icon_letter="U",
+        icon_name="tool-unir",
     ),
     ToolDescriptor(
         id="imgs_a_pdf",
@@ -441,6 +457,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_imgs_a_pdf()(ctx),
         icon_letter="P",
+        icon_name="tool-imgs-a-pdf",
         input_extensions=(
             ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif",
         ),
@@ -463,6 +480,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_word_a_pdf()(ctx),
         icon_letter="W",
+        icon_name="tool-word-a-pdf",
         input_extensions=(".doc", ".docx"),
     ),
     ToolDescriptor(
@@ -484,6 +502,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_pdf_to_word()(ctx),
         icon_letter="D",
+        icon_name="tool-pdf-to-word",
     ),
     ToolDescriptor(
         id="ocr",
@@ -504,6 +523,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_ocr()(ctx),
         icon_letter="T",
+        icon_name="tool-ocr",
     ),
     ToolDescriptor(
         id="clasificador",
@@ -523,6 +543,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_clasificador()(ctx),
         icon_letter="C",
+        icon_name="tool-clasificador",
     ),
     ToolDescriptor(
         id="quitar_fondo",
@@ -542,6 +563,7 @@ TOOLS: List[ToolDescriptor] = [
         enabled=True,
         window_factory=lambda ctx: _make_quitar_fondo()(ctx),
         icon_letter="B",
+        icon_name="tool-quitar-fondo",
         input_extensions=(
             ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif",
         ),

@@ -281,9 +281,7 @@ def make_tool_icon_card(
 
     Replaces the letter+radial-gradient circle used by the old launcher.
     """
-    from PyQt6.QtGui import QBrush, QColor, QPen, QPainter, QPixmap
-    from PyQt6.QtCore import QRectF, Qt
-    from PyQt6.QtSvg import QSvgRenderer
+    from PyQt6.QtGui import QBrush, QColor, QPen  # QPixmap, QPainter, QSvgRenderer, etc. ya en módulo
 
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)

@@ -36,6 +36,7 @@ class _StepBtn(QWidget):
     def __init__(self, num: str, name: str, hint: str = "", parent=None) -> None:
         super().__init__(parent)
         self._active = False
+        self._completed = False
         self._num = num
         self._name_text = name
 
@@ -69,15 +70,26 @@ class _StepBtn(QWidget):
         self._active = active
         self._apply_state()
 
+    def set_completed(self, completed: bool) -> None:
+        self._completed = completed
+        self._apply_state()
+
     def _apply_state(self) -> None:
         if self._active:
             self.setObjectName("SidebarStepActive")
             self._badge.setObjectName("StepBadgeActive")
             self._lbl.setObjectName("StepNameActive")
+            self._badge.setText(self._num)
+        elif self._completed:
+            self.setObjectName("SidebarStepCompleted")
+            self._badge.setObjectName("StepBadgeCompleted")
+            self._lbl.setObjectName("StepNameCompleted")
+            self._badge.setText("✓")
         else:
             self.setObjectName("SidebarStep")
             self._badge.setObjectName("StepBadge")
             self._lbl.setObjectName("StepName")
+            self._badge.setText(self._num)
         # Forzar repolicía de estilos
         for w in (self, self._badge, self._lbl):
             w.style().unpolish(w)
@@ -101,7 +113,8 @@ class _StepBtn(QWidget):
 
     def leaveEvent(self, event) -> None:
         if not self._active:
-            self.setObjectName("SidebarStep")
+            name = "SidebarStepCompleted" if self._completed else "SidebarStep"
+            self.setObjectName(name)
             self.style().unpolish(self)
             self.style().polish(self)
             self.update()
@@ -126,6 +139,7 @@ class PipelineWindow(QWidget):
     def __init__(self, ctx: "ShellContext", parent=None) -> None:
         super().__init__(parent)
         self.ctx = ctx
+        self._completed_steps: set[int] = set()
         self._build_scaffold()
         self._apply_tool_accent()
         from PyQt6.QtCore import QTimer
@@ -282,6 +296,28 @@ QLabel#StepBadgeActive {{
     border: 1px solid {_rgba(accent, 0.35)};
 }}
 
+/* Paso completado */
+#SidebarStepCompleted {{
+    background: transparent;
+    border: none;
+    border-left: 2px solid {_rgba(accent, 0.25)};
+}}
+QLabel#StepBadgeCompleted {{
+    background: {_rgba(accent, 0.12)};
+    color: {accent};
+    border-radius: 4px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    border: 1px solid {_rgba(accent, 0.25)};
+}}
+QLabel#StepNameCompleted {{
+    color: #6B6F7A;
+    font-size: 13px;
+    font-weight: 500;
+    background: transparent;
+}}
+
 /* Texto del paso */
 QLabel#StepName {{
     color: #7A7E8C;
@@ -370,8 +406,12 @@ QListWidget::item:selected:!active {{
     # ------------------------------------------------------------------ #
 
     def _switch_section(self, idx: int) -> None:
+        prev_idx = self.stack.currentIndex()
+        if idx > prev_idx and prev_idx >= 0:
+            self._completed_steps.add(prev_idx)
         for i, btn in enumerate(self._section_buttons):
             btn.set_active(i == idx)
+            btn.set_completed(i in self._completed_steps and i != idx)
         self.stack.setCurrentIndex(idx)
         if hasattr(self, "_step_progress") and self.SECTIONS:
             pct = int((idx + 1) / len(self.SECTIONS) * 100)

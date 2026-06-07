@@ -108,3 +108,17 @@ def test_make_tool_icon_card_renders():
     pix = make_tool_icon_card("firmador", "#5E6AD2", size=40)
     assert isinstance(pix, QPixmap)
     assert not pix.isNull()
+
+
+def test_step_btn_completed_state():
+    """_StepBtn puede marcar un paso como completado (muestra checkmark)."""
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    from ui.common.tool_scaffold import _StepBtn
+    app = QApplication.instance() or QApplication(sys.argv)
+    btn = _StepBtn("01", "Documentos")
+    assert not btn._completed
+    btn.set_completed(True)
+    assert btn._completed
+    btn.set_completed(False)
+    assert not btn._completed

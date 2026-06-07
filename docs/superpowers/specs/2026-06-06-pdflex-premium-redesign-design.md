@@ -507,11 +507,307 @@ Registrados en `ShellWindow` con `QShortcut`:
 
 ## Sección 6: Mejoras por Herramienta
 
-> **[PENDIENTE — En construcción en la conversación actual]**
->
-> Esta sección detallará las mejoras específicas de cada una de las 23 herramientas.
-> Las mejoras del sistema base (Secciones 1-5) aplican automáticamente a todas.
-> Esta sección cubre funcionalidades nuevas específicas de cada herramienta.
+*Base: lectura completa de cada window.py y engine. Solo se propone lo que NO existe hoy.*
+*Las mejoras del sistema base (Secciones 1-5) aplican automáticamente a todas.*
+
+---
+
+### 01 — Clasificador OCR
+
+Gaps reales: no hay edición de resultados antes de aplicar, sin exportación de mapeo, sin
+código de color por confianza, sin historial de plantillas.
+
+- **Tabla editable pre-aplicación** — antes de renombrar, mostrar tabla: archivo original
+  → nombre sugerido → campo editable. Confirmar todo o fila por fila.
+- **Código de color de confianza** — verde/amarillo/rojo en cada fila según nivel de
+  confianza. Las filas rojas requieren revisión antes de aplicar.
+- **Exportar CSV del mapeo** — genera `clasificacion_YYYY-MM-DD.csv`: archivo_original,
+  nombre_sugerido, tipo, confianza, rfc, fecha detectada.
+- **Historial de plantillas** — últimas 5 plantillas de nombre usadas disponibles como
+  dropdown para reutilizar.
+
+---
+
+### 02 — Compresor
+
+Gaps reales: solo 3 perfiles fijos, sin estimación previa, sin comparativa visual.
+
+- **Perfil personalizado** — cuarta opción "Personalizado": sliders de DPI (50–300) y
+  calidad JPEG (10–100%) editables directamente.
+- **Estimación de reducción esperada** — al seleccionar perfil, analizar el PDF y mostrar
+  "Estimado: ~X MB → ~Y MB (~Z% menos)" antes de procesar.
+- **Barra antes/después en resultados** — por cada documento: barra horizontal solapada
+  (gris=original, acento=comprimido) con tamaños anotados. Más visual que solo números.
+
+---
+
+### 03 — Comparador
+
+Gaps reales: no hay vista simultánea de ambos PDFs, sin filtro de páginas iguales,
+sin score por página expuesto en UI.
+
+- **Vista lado a lado** — panel dividido 50/50 con el PDF base izquierda y revisado
+  derecha, sincronizados en scroll, diferencias resaltadas en ambos paneles.
+- **Filtrar solo páginas con cambios** — toggle: oculta páginas idénticas en la lista
+  de resultados, muestra solo las modificadas.
+- **Score de similitud por página** — porcentaje junto a cada página en la lista
+  (el engine ya lo calcula, falta exponerlo en la UI).
+
+---
+
+### 04 — Extraer Imágenes
+
+Gaps reales: filtro de formato no existe en UI, sin galería exploratoria previa,
+sin patrón de nombre configurable. (Tamaño mínimo ya existe.)
+
+- **Filtro por formato** — checkboxes PNG / JPG / Cualquiera. El engine extrae ambos;
+  falta filtro en UI.
+- **Galería exploratoria previa** — botón "Ver imágenes encontradas": escanea PDFs y
+  muestra galería con dimensiones y formato de cada imagen. El usuario desmarca las que
+  no quiere antes de extraer.
+- **Patrón de nombre de salida** — campo: `{pdf}_{pagina}_{n}` (default), con variables
+  documentadas en tooltip.
+
+---
+
+### 05 — Firmador Masivo
+
+Gaps reales: preview siempre del primer documento, sin rotación base fija,
+el intervalo de páginas es global (no por firma individual).
+(Librería de firmas, variación, canvas multi-firma, drag ya existen.)
+
+- **Selector de documento para preview** — dropdown o lista para elegir sobre cuál PDF
+  del lote se visualiza el canvas. Hoy siempre muestra el primero.
+- **Ángulo base fijo de firma** — control de "ángulo base" (ej. -15°) sobre el que se
+  aplica la variación aleatoria existente. Hoy solo existe la variación, no una
+  inclinación intencional base.
+- **Intervalo de páginas por firma** — cada entrada de firma en la lista puede tener su
+  propio intervalo de páginas (ej. firma A en pp. 1-3, firma B en última).
+
+---
+
+### 06 — Foleador
+
+Gaps reales: sin alineación configurable del texto en el placeholder, sin numeración
+romana, sin modo espejo para doble cara.
+(Fuente, color, bold, italic, tamaño, número inicial, paso ya existen.)
+
+- **Alineación del número** — botones izquierda/centro/derecha dentro del placeholder.
+  Actualmente siempre centrado.
+- **Numeración romana** — variable `{n:roman}` en el patrón (I, II, III…).
+  Implementar en `folio_format.py`.
+- **Modo espejo (doble cara)** — toggle: páginas impares a la derecha, pares a la
+  izquierda. Para documentos impresos a doble cara.
+
+---
+
+### 07 — Formularios PDF
+
+Gaps reales: sin relleno por lote desde CSV, sin reutilización de valores frecuentes.
+
+- **Relleno por lote desde CSV/Excel** — modo lote: importar CSV donde cada fila = un
+  formulario resultado. Paso de mapeo columna→campo. Genera N PDFs, uno por fila.
+- **Valores frecuentes por campo** — botón [★] junto a cada campo de texto: lista los
+  últimos 5 valores usados en ese campo (persistidos en JSON local). Evita reescribir
+  empresa, RFC, etc.
+
+---
+
+### 08 — Imágenes a PDF
+
+Gaps reales: sin corrección de perspectiva (dewarp), sin estimación del PDF resultante.
+(Deskew, crop bordes, enhance contraste, tamaño página, márgenes, presets ya existen.)
+
+- **Corrección de perspectiva (dewarp)** — detectar y corregir distorsión trapezoidal
+  en fotos tomadas con cámara inclinada. Más que deskew: corrige la perspectiva.
+  Usando OpenCV `getPerspectiveTransform`.
+- **Estimación del PDF resultante** — mostrar antes de procesar: "~X páginas, ~Y MB
+  estimado" según resolución y formato elegidos.
+
+---
+
+### 09 — Marca de Agua
+
+Gaps reales: texto usa fuente fija (sin selector), sin modo mosaico, sin múltiples sellos.
+(9 posiciones, rotación, opacidad, presets, rango de páginas ya existen.)
+
+- **Selector de fuente para texto** — `QFontComboBox` para elegir la fuente del sello.
+  Actualmente Helvetica fijo. Documentos corporativos requieren la fuente del branding.
+- **Modo mosaico/filigrana** — repetir el sello en cuadrícula por toda la página.
+  Controles: espaciado H y V. Ideal para "BORRADOR" o "CONFIDENCIAL" en todo el fondo.
+- **Múltiples capas de sello** — lista de hasta 3 sellos independientes con reordenamiento.
+  Ejemplo: texto "CONFIDENCIAL" + logo corporativo aplicados simultáneamente.
+
+---
+
+### 10 — Membretado
+
+Gaps reales: sin regla primera página / resto, sin escala del membrete, sin preview
+lado a lado. (Librería de membretes, detección de márgenes, sliders de margen ya existen.)
+
+- **Regla primera página / resto** — toggle con selector independiente de membrete para
+  portada vs. páginas siguientes. Caso muy común: portada sin membrete o con membrete
+  diferente al resto del documento.
+- **Escala del membrete** — slider 50–100%: reduce el membrete si ocupa demasiado.
+  Actualmente siempre llena la página completa.
+- **Preview lado a lado** — dos paneles sincronizados: página sin membrete | con membrete.
+  Valida antes de procesar el lote completo.
+
+---
+
+### 11 — OCR de PDF
+
+Gaps reales: sin búsqueda en el texto transcrito, el panel de texto no es editable,
+sin exportación a PDF con capa de texto.
+(Idiomas, DPI, estrategias, TextResultsViewer con estadísticas ya existen.)
+
+- **Búsqueda en transcripción** — campo de búsqueda en Resultados que resalta matches
+  en el TextResultsViewer. Verificar que nombre/número fue reconocido correctamente
+  antes de exportar.
+- **Edición en línea del texto transcrito** — hacer editable el panel de texto para
+  corregir errores de OCR (siglas, nombres propios) antes de guardar el DOCX.
+- **Exportar PDF con capa de texto** — generar PDF con texto OCR como capa invisible
+  (text-behind-image). El PDF sigue visualmente igual pero es buscable/copiable
+  en cualquier lector PDF.
+
+---
+
+### 12 — Organizador Visual
+
+Gaps reales: sin rotación de página en la UI, sin duplicar página, sin preview del resultado.
+(Drag & drop multi-lane, merge toggle, nombres por lane ya existen.)
+
+- **Botones de rotación en miniaturas** — ícono de rotación 90° CW / CCW en hover
+  sobre cada thumbnail. Actualmente no hay forma de rotar páginas en el organizador.
+- **Duplicar página** — botón o `Ctrl+D` sobre página seleccionada para crear copia
+  en la misma lane.
+- **Preview del resultado final** — botón "Vista previa" que genera PDF temporal de
+  baja resolución para revisar orden y rotaciones antes de confirmar el proceso.
+
+---
+
+### 13 — PDF a Imágenes
+
+Gaps reales: sin modo escala de grises / B&N, sin estimación de peso total.
+(DPI, formato PNG/JPG/WebP, rango de páginas, modo panorámico ya existen.)
+
+- **Modo de color** — selector: RGB (actual) / Escala de grises / Blanco y negro
+  (umbral 0–255 configurable). Grises reduce peso considerablemente para escaneados.
+- **Estimación de peso total** — al cambiar DPI o formato: "~X imágenes, ~Y MB en total"
+  calculado antes de procesar.
+
+---
+
+### 14 — PDF a Word
+
+Gaps reales: sin vista previa del contenido antes de exportar, sin opción TXT adicional.
+(Idioma, precisión, DPI, OCR fallback, preservación de texto nativo ya existen.)
+
+- **Vista del texto extraído antes de exportar** — panel de previsualización del
+  contenido en la sección Procesar: el texto que irá al DOCX visible antes de generarlo
+  para decidir si continuar o ajustar opciones.
+- **Exportar TXT adicional** — checkbox "También generar TXT plano" junto al DOCX.
+  Para quien necesita el texto sin estructura de Word.
+
+---
+
+### 15 — Protector
+
+Gaps reales: sin modo desproteger, sin generador de contraseña.
+(AES-256, contraseña apertura/propietario, 8 permisos granulares ya existen.)
+
+- **Modo desproteger** — pestaña o toggle "Quitar contraseña": introduce la contraseña
+  actual de un PDF protegido y genera copia sin cifrado. La funcionalidad opuesta que hoy falta.
+- **Generador de contraseña segura** — botón [Generar] junto al campo: crea password
+  aleatorio fuerte (12+ chars, mayúsculas + dígitos + símbolos) con opción de copiar
+  al portapapeles.
+
+---
+
+### 16 — Quitar Fondo
+
+Gaps reales: sin selector de color manual, sin comparativa antes/después en la sección
+de ajustes. (Slider de tolerancia, ImageResultsViewer con comparison_mode ya existen.)
+
+- **Selector de color a eliminar** — cuentagotas sobre el preview de la imagen para
+  seleccionar exactamente qué color eliminar. El modo automático existente falla en
+  fondos con variación; este modo lo resuelve.
+- **Vista antes/después con divisor** — slider vertical sobre el preview en la sección
+  Ajustes (antes de procesar): arrastra para comparar original vs sin fondo en tiempo real
+  mientras ajustas la tolerancia.
+
+---
+
+### 17 — Reparador
+
+Gaps reales: sin diagnóstico previo que oriente al perfil, sin recuperación parcial.
+(3 perfiles de normalización con opciones configurables ya existen.)
+
+- **Diagnóstico previo** — botón "Analizar" al cargar: reporta problemas detectados
+  (xrefs rotas, streams inválidos, páginas inaccesibles) y recomienda qué perfil usar.
+  Hoy el usuario elige perfil sin información sobre qué está mal.
+- **Extracción de páginas legibles** — si no se puede reparar completamente, opción
+  "Extraer páginas recuperables": genera PDF solo con las páginas que sí se pudieron leer.
+
+---
+
+### 18 — Separador
+
+Gaps reales: sin miniaturas del rango activo, sin detección de separadores automáticos,
+sin exportar como ZIP. (Rangos editables, "N partes iguales", "1 pág/archivo" ya existen.)
+
+- **Miniaturas del rango activo** — panel lateral que muestra thumbnails de las páginas
+  incluidas en el rango seleccionado/activo. Confirmar visualmente sin contar páginas.
+- **Detectar páginas en blanco como separadores** — botón "Dividir en páginas en blanco":
+  analiza el PDF y propone rangos automáticamente usando páginas vacías como cortes.
+  Muy común en expedientes escaneados.
+- **Empaquetar en ZIP** — opción de salida: generar `.zip` con todos los fragmentos.
+  Facilita compartir el resultado como archivo único.
+
+---
+
+### 19 — Unir PDFs
+
+Gaps reales: sin portada automática, sin página divisoria con título, sin numeración en
+salida. (Nombre de salida, página en blanco entre docs, bookmarks ya existen.)
+
+- **Portada automática** — checkbox: primera página generada con título editable, fecha
+  y lista de documentos incluidos. Renderizada con PyMuPDF.
+- **Página divisoria con título** — en lugar de (o además de) página en blanco, insertar
+  página de transición con el nombre del documento siguiente centrado.
+- **Numeración automática en salida** — checkbox: añadir foliado al PDF unificado
+  usando el FoleadorEngine internamente. Posición y formato configurables.
+
+---
+
+### 20 — Word a PDF
+
+Gaps reales: sin fallback a LibreOffice, sin thumbnails inline en resultados.
+(Conversión COM, detección de Office, WordListCard ya existen.)
+
+- **Fallback a LibreOffice** — detectar si LibreOffice está instalado y ofrecerlo si
+  Word no está disponible. El diálogo "Office no encontrado" pasa de bloqueante a
+  "¿Usar LibreOffice como alternativa?".
+- **Thumbnails en lista de resultados** — miniatura de primera página por documento
+  generado (igual que otras herramientas). Actualmente solo hay visor general.
+
+---
+
+### 21 — Redactor
+
+Gaps reales: sin auto-detección de patrones, sin "buscar y redactar", sin undo,
+sin reutilización de zonas. (Canvas de dibujo, redacción real PyMuPDF, limpiar página ya existen.)
+
+- **Buscar y redactar texto** — campo de búsqueda: el texto escrito se marca
+  automáticamente en todas sus ocurrencias en todas las páginas. Evita dibujar
+  rectángulos sobre texto repetido.
+- **Auto-detección de patrones** — botón "Detectar automáticamente": busca y propone
+  zonas para emails, teléfonos, RFC/CURP, importes. Zonas sugeridas en color diferente;
+  el usuario aprueba o descarta cada una.
+- **Undo/redo** — Ctrl+Z / Ctrl+Y para deshacer zonas dibujadas. Hoy un trazo erróneo
+  obliga a "Limpiar página" y empezar de cero.
+- **Plantilla de zonas reutilizable** — exportar coordenadas de redacción como JSON para
+  aplicar las mismas zonas a otros PDFs del mismo tipo (formularios recurrentes, contratos tipo).
 
 ---
 
@@ -539,5 +835,5 @@ Registrados en `ShellWindow` con `QShortcut`:
 
 ---
 
-*Spec escrito el 2026-06-06. Última actualización: Secciones 1-5.*
-*Próximo paso: completar Sección 6 (mejoras por herramienta), luego invocar writing-plans.*
+*Spec escrito el 2026-06-06. Última actualización: Secciones 1-6 completas.*
+*Próximo paso: self-review del spec, aprobación del usuario, invocar writing-plans.*

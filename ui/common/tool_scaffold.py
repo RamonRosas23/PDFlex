@@ -144,6 +144,7 @@ class PipelineWindow(QWidget):
         self._apply_tool_accent()
         from PyQt6.QtCore import QTimer
         QTimer.singleShot(0, self._apply_primary_glows)
+        QTimer.singleShot(0, lambda: self._update_navbar(0) if self.SECTIONS else None)
 
     # ------------------------------------------------------------------ #
     # Construcción del caparazón (sidebar + stack)
@@ -156,9 +157,19 @@ class PipelineWindow(QWidget):
 
         root.addWidget(self._build_sidebar())
 
+        content_area = QWidget()
+        content_area.setStyleSheet("background: #050507;")
+        content_layout = QVBoxLayout(content_area)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(0)
+
         self.stack = QStackedWidget()
-        self.stack.setStyleSheet("background-color: #0A0A0B;")
-        root.addWidget(self.stack, 1)
+        content_layout.addWidget(self.stack, 1)
+
+        self._navbar = self._build_navbar()
+        content_layout.addWidget(self._navbar)
+
+        root.addWidget(content_area, 1)
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
@@ -234,6 +245,68 @@ class PipelineWindow(QWidget):
         sb.addWidget(footer)
 
         return sidebar
+
+    def _build_navbar(self) -> "QFrame":
+        """Barra de navegación fija al pie del content area."""
+        navbar = QFrame()
+        navbar.setObjectName("ToolNavBar")
+        navbar.setFixedHeight(56)
+        navbar.setStyleSheet(
+            "QFrame#ToolNavBar {"
+            "background: #0A0A0B;"
+            "border-top: 1px solid #1E1E28;"
+            "}"
+        )
+
+        row = QHBoxLayout(navbar)
+        row.setContentsMargins(20, 0, 20, 0)
+        row.setSpacing(12)
+
+        self._nav_prev_btn = QPushButton("Anterior")
+        self._nav_prev_btn.setProperty("class", "Ghost")
+        self._nav_prev_btn.setFixedHeight(36)
+        self._nav_prev_btn.clicked.connect(self._on_nav_prev)
+        self._nav_prev_btn.setVisible(False)
+        row.addWidget(self._nav_prev_btn)
+
+        row.addStretch()
+
+        self._nav_next_btn = QPushButton("Siguiente")
+        self._nav_next_btn.setProperty("class", "Primary")
+        self._nav_next_btn.setFixedHeight(36)
+        self._nav_next_btn.clicked.connect(self._on_nav_next)
+        self._nav_next_btn.setVisible(False)
+        row.addWidget(self._nav_next_btn)
+
+        return navbar
+
+    def _on_nav_prev(self) -> None:
+        idx = self.stack.currentIndex()
+        if idx > 0:
+            self._slide_to_section(idx - 1)
+
+    def _on_nav_next(self) -> None:
+        idx = self.stack.currentIndex()
+        if idx < self.stack.count() - 1:
+            self._slide_to_section(idx + 1)
+
+    def _update_navbar(self, idx: int) -> None:
+        """Actualiza visibilidad y textos de botones de navegación."""
+        if not self.SECTIONS:
+            return
+        total = len(self.SECTIONS)
+        if idx > 0:
+            prev_name = self.SECTIONS[idx - 1][1]
+            self._nav_prev_btn.setText(f"← {prev_name}")
+            self._nav_prev_btn.setVisible(True)
+        else:
+            self._nav_prev_btn.setVisible(False)
+        if idx < total - 1:
+            next_name = self.SECTIONS[idx + 1][1]
+            self._nav_next_btn.setText(f"{next_name} →")
+            self._nav_next_btn.setVisible(True)
+        else:
+            self._nav_next_btn.setVisible(False)
 
     # ------------------------------------------------------------------ #
     # Acento visual por herramienta
@@ -395,6 +468,10 @@ QListWidget::item:selected:!active {{
 }}
 """)
 
+        if hasattr(self, "_nav_next_btn"):
+            from ui.common.animations import AnimationHelper
+            AnimationHelper.apply_glow(self._nav_next_btn, accent, blur=16, alpha=70)
+
     def _apply_primary_glows(self) -> None:
         """Aplica QGraphicsDropShadowEffect a botones Primary para reforzar el accent."""
         from ui.common.animations import AnimationHelper
@@ -455,6 +532,8 @@ QListWidget::item:selected:!active {{
             pct = int((idx + 1) / len(self.SECTIONS) * 100)
             self._step_progress.setValue(pct)
         self._on_section_activated(idx)
+        if hasattr(self, "_nav_prev_btn"):
+            self._update_navbar(idx)
 
     def _on_section_activated(self, idx: int) -> None:
         """Hook para que subclases reaccionen al cambio de paso."""

@@ -32,7 +32,6 @@ from PyQt6.QtWidgets import (
     QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
-from ui.common.animations import AnimationHelper
 from ui.common.icons import set_button_icon
 from ui.common.result_ui import ElidedLabel
 from ui.styles import COLORS

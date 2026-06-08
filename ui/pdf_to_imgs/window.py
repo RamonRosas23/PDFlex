@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
+import fitz
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
 from PyQt6.QtWidgets import (
@@ -19,14 +20,14 @@ from ui.common.process_step import ProcessStep
 
 from core.pdf_to_images_engine import (
     PdfToImagesConfig, PdfToImagesJob, PdfToImagesEngine,
-    PdfToImagesJobResult,
+    PdfToImagesJobResult, parse_page_selection,
 )
 from core.output_paths import make_run_dir, unique_name
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.image_results_viewer import ImageResultsViewer
 from ui.common.slider import SliderWithValue
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import show_error, show_success, show_warning
@@ -90,8 +91,10 @@ class PdfToImgsWindow(PipelineWindow):
         self.last_results: List[PdfToImagesJobResult] = []
         self._worker_thread: Optional[QThread] = None
         self._worker: Optional[PdfToImgsWorker] = None
+        self._pdf_page_cache: dict[str, int] = {}
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -128,17 +131,8 @@ class PdfToImgsWindow(PipelineWindow):
             thumb_size=(64, 82),
             file_filter="PDF (*.pdf)",
         )
+        self._docs_card.files_changed.connect(self._on_docs_changed)
         outer.addWidget(self._docs_card, 1)
-
-        nav = QHBoxLayout()
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
 
         return page
 
@@ -258,21 +252,6 @@ class PdfToImgsWindow(PipelineWindow):
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
-
         return page
 
     # ------------------------------------------------------------------ #
@@ -295,18 +274,8 @@ class PdfToImgsWindow(PipelineWindow):
             run_label="Convertir a imágenes",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
-
-        nav = QHBoxLayout()
-        back = QPushButton("Formato")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
 
         return page
 
@@ -330,31 +299,63 @@ class PdfToImgsWindow(PipelineWindow):
         self._img_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._img_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
-
-        # Las imágenes generadas sólo se ofrecerán a herramientas compatibles.
-        self._send_btn = SendToToolButton(self.ctx, "pdf_to_imgs")
-        nav.addWidget(self._send_btn)
-
-        restart_btn = QPushButton("Nueva sesión")
-        restart_btn.setProperty("class", "Primary")
-        restart_btn.setMinimumWidth(180)
-        set_button_icon(restart_btn, "refresh-cw")
-        restart_btn.clicked.connect(self._reset_session)
-        nav.addWidget(restart_btn)
-        outer.addLayout(nav)
-
         return page
+
+    # ------------------------------------------------------------------ #
+    # Action buttons (navbar footer)
+    # ------------------------------------------------------------------ #
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.icons import set_button_icon
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Convertir a imagenes")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._send_btn = SendToToolButton(self.ctx, "pdf_to_imgs")
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ------------------------------------------------------------------ #
     # Hooks
     # ------------------------------------------------------------------ #
+
+    def _on_docs_changed(self, paths: List[str]) -> None:
+        """Actualiza caché de páginas para nuevos archivos (evita fitz.open en el resumen)."""
+        for p in paths:
+            if p not in self._pdf_page_cache:
+                try:
+                    doc = fitz.open(p)
+                    self._pdf_page_cache[p] = doc.page_count
+                    doc.close()
+                except Exception:
+                    self._pdf_page_cache[p] = 0
 
     def _on_section_activated(self, idx: int) -> None:
         if idx == 2:
@@ -414,6 +415,7 @@ class PdfToImgsWindow(PipelineWindow):
         fmt_names = {"png": "PNG", "jpg": "JPG", "webp": "WebP"}
         mode_txt = "una imagen panorámica por PDF" if cfg.panoramic else "una imagen por página"
         range_txt = cfg.page_range or "Todas"
+        estimate, estimate_error = self._selection_estimate(cfg) if n else (0, "")
         rows = [
             f"<b>Documentos:</b> &nbsp; {n}",
             f"<b>Preset:</b> &nbsp; {self._preset_combo.currentText()}",
@@ -422,14 +424,58 @@ class PdfToImgsWindow(PipelineWindow):
             f"<b>Páginas:</b> &nbsp; {range_txt}",
             f"<b>Modo:</b> &nbsp; {mode_txt}",
         ]
+        if estimate_error:
+            rows.insert(
+                0,
+                f"<span style='color:#E5484D;'>Rango inválido: {estimate_error}</span>",
+            )
+        elif n:
+            rows.append(
+                f"<b>Salidas estimadas:</b> &nbsp; {estimate} imagen"
+                + ("es" if estimate != 1 else "")
+            )
         if cfg.format in ("jpg", "webp"):
             rows.append(f"<b>Calidad:</b> &nbsp; {cfg.jpg_quality} %")
         html = "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         self._proc_step.set_summary_html(html)
 
-    def _validate_ready(self) -> Optional[str]:
+    def _selection_estimate(self, cfg: PdfToImagesConfig) -> tuple[int, str]:
+        total = 0
+        for raw_path in self._docs_card.paths():
+            path = Path(raw_path)
+            # Usar caché para evitar fitz.open en el hilo principal
+            if raw_path in self._pdf_page_cache:
+                page_count = self._pdf_page_cache[raw_path]
+            else:
+                doc = None
+                try:
+                    doc = fitz.open(str(path))
+                    page_count = doc.page_count
+                    self._pdf_page_cache[raw_path] = page_count
+                except Exception as exc:
+                    return 0, f"{path.name}: {exc}"
+                finally:
+                    if doc is not None:
+                        try:
+                            doc.close()
+                        except Exception:
+                            pass
+            try:
+                pages = parse_page_selection(cfg.page_range, page_count)
+            except Exception as exc:
+                return 0, f"{path.name}: {exc}"
+            if not pages:
+                return 0, f"{path.name}: el rango no selecciona páginas"
+            total += 1 if cfg.panoramic else len(pages)
+        return total, ""
+
+    def _validate_ready(self, cfg: PdfToImagesConfig | None = None) -> Optional[str]:
         if self._docs_card.is_empty():
             return "Agrega al menos un documento."
+        cfg = cfg or self._read_config()
+        _, estimate_error = self._selection_estimate(cfg)
+        if estimate_error:
+            return f"Revisa el rango de páginas. {estimate_error}"
         return None
 
     def _build_jobs(self, cfg: PdfToImagesConfig) -> List[PdfToImagesJob]:
@@ -457,7 +503,8 @@ class PdfToImgsWindow(PipelineWindow):
 
     def _on_run(self) -> None:
         self._stop_active_worker()
-        err = self._validate_ready()
+        cfg = self._read_config()
+        err = self._validate_ready(cfg)
         if err:
             show_warning(self, "Falta información", err)
             return
@@ -466,21 +513,19 @@ class PdfToImgsWindow(PipelineWindow):
 
         self._img_viewer.clear_results()
         self._send_btn.set_output_paths([])
-        cfg = self._read_config()
         jobs = self._build_jobs(cfg)
 
         self._proc_step.set_running(True)
         self._proc_step.set_progress(0, "Iniciando…")
 
-        self._worker_thread = QThread(self)
         self._worker = PdfToImgsWorker(jobs, cfg)
-        self._worker.moveToThread(self._worker_thread)
-
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_worker_error)
         self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.finished.connect(self._worker_thread.deleteLater)
 
         self._worker_thread.start()
@@ -517,12 +562,9 @@ class PdfToImgsWindow(PipelineWindow):
     def _on_worker_error(self, msg: str) -> None:
         show_error(self, "Error", msg)
         self._proc_step.set_running(False)
-        if self._worker_thread:
-            self._worker_thread.quit()
-            self._worker_thread.wait(2000)
-            self._worker_thread.deleteLater()
-            self._worker_thread = None
-            self._worker = None
+        # thread.quit + deleteLater happen automatically via signal connections in _on_run
+        self._worker_thread = None
+        self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
         from PyQt6.QtCore import QUrl

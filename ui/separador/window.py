@@ -8,10 +8,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import fitz
-from PIL import Image
 from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
 from PyQt6.QtGui import (
-    QPixmap, QImage,
+    QPixmap,
     QDragEnterEvent, QDropEvent, QDesktopServices,
 )
 from PyQt6.QtWidgets import (
@@ -32,7 +31,7 @@ from core.output_naming import output_filename_for_source
 from shell.context import ShellContext
 from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_card, card_layout, make_page_header
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
@@ -111,10 +110,12 @@ class SeparadorWindow(PipelineWindow):
         self._worker: Optional[SplitterWorker] = None
         self._conv_thread: Optional[QThread] = None
         self._conv_dlg = None
+        self._thumb_threads: list = []
 
         self._ranges_layout: Optional[QVBoxLayout] = None  # set during _build
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -212,16 +213,6 @@ class SeparadorWindow(PipelineWindow):
         il.addLayout(doc_body)
         outer.addWidget(info_card)
         outer.addStretch(1)
-
-        nav = QHBoxLayout()
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
 
         return page
 
@@ -349,21 +340,6 @@ class SeparadorWindow(PipelineWindow):
 
         outer.addWidget(list_card, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documento")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
-
         return page
 
     # ------------------------------------------------------------------ #
@@ -386,18 +362,8 @@ class SeparadorWindow(PipelineWindow):
             run_label="Separar documento",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
-        self._proc_step.set_run_enabled(True)
+        self._proc_step.set_run_enabled(False)
         outer.addWidget(self._proc_step, 1)
-
-        nav = QHBoxLayout()
-        back = QPushButton("Rangos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
 
         return page
 
@@ -421,26 +387,48 @@ class SeparadorWindow(PipelineWindow):
         self._results_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._results_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
+        return page
+
+    # ------------------------------------------------------------------ #
+    # Action buttons (navbar footer)
+    # ------------------------------------------------------------------ #
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.icons import set_button_icon
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Separar documento")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
 
         self._send_btn = SendToToolButton(self.ctx, "separador")
-        nav.addWidget(self._send_btn)
 
-        restart_btn = QPushButton("Nueva sesión")
-        restart_btn.setProperty("class", "Primary")
-        restart_btn.setMinimumWidth(180)
-        set_button_icon(restart_btn, "refresh-cw")
-        restart_btn.clicked.connect(self._reset_session)
-        nav.addWidget(restart_btn)
-        outer.addLayout(nav)
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
 
-        return page
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ------------------------------------------------------------------ #
     # Hooks de navegación
@@ -508,22 +496,6 @@ class SeparadorWindow(PipelineWindow):
         try:
             doc = fitz.open(path)
             self._total_pages = doc.page_count
-
-            # Miniatura de la primera página
-            page = doc[0]
-            mat = fitz.Matrix(0.4, 0.4)
-            pm = page.get_pixmap(matrix=mat, alpha=False)
-            img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
-            data = img.tobytes("raw", "RGBA")
-            qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-            thumb = QPixmap.fromImage(qimg.copy()).scaledToWidth(
-                94, Qt.TransformationMode.SmoothTransformation
-            )
-            self._thumb_lbl.setPixmap(thumb)
-            self._thumb_lbl.setStyleSheet(
-                "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
-            )
-
             doc.close()
         except Exception as e:
             show_warning(self, "Error al abrir", str(e))
@@ -538,9 +510,41 @@ class SeparadorWindow(PipelineWindow):
         self._doc_size_lbl.setText(size_str)
         self._remove_doc_btn.setEnabled(True)
 
+        # Mostrar placeholder mientras el thumbnail carga en hilo separado
+        self._thumb_lbl.setText("")
+        self._thumb_lbl.setStyleSheet(
+            "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
+        )
+        self._schedule_thumb(path)
+
         # Actualizar validación de rangos existentes
         if self._ranges:
             self._rebuild_ranges_ui()
+        self._sync_run_enabled()
+
+    def _schedule_thumb(self, path: str) -> None:
+        """Genera el thumbnail del PDF en hilo secundario (no bloquea GUI)."""
+        from ui.common.thumb_utils import ThumbnailLoader
+        loader = ThumbnailLoader(path, width=94)
+        thread = RunnerThread(loader.run, self)
+        loader.ready.connect(self._apply_thumb)
+        loader.ready.connect(thread.quit)
+        thread.finished.connect(loader.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(
+            lambda t=thread: self._thumb_threads.remove(t) if t in self._thumb_threads else None
+        )
+        self._thumb_threads.append(thread)
+        thread.start()
+
+    def _apply_thumb(self, path: str, qimage) -> None:
+        """Slot en GUI thread — convierte QImage→QPixmap; ignora resultados obsoletos."""
+        if path != self._pdf_path or qimage is None:
+            return
+        pix = QPixmap.fromImage(qimage)
+        if not pix.isNull():
+            thumb = pix.scaledToWidth(94, Qt.TransformationMode.SmoothTransformation)
+            self._thumb_lbl.setPixmap(thumb)
 
     def _on_remove_document(self) -> None:
         if not self._pdf_path:
@@ -577,6 +581,7 @@ class SeparadorWindow(PipelineWindow):
         )
         self._proc_step.reset()
         self._rebuild_ranges_ui()
+        self._sync_run_enabled()
 
     # ------------------------------------------------------------------ #
     # Word → PDF
@@ -602,9 +607,7 @@ class SeparadorWindow(PipelineWindow):
             paths,
             make_run_dir("converted"),
         )
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
+        thread = RunnerThread(worker.run, self)
         worker.progress.connect(self._conv_dlg.on_progress)
         worker.finished.connect(self._conv_dlg.on_finished)
         worker.error.connect(self._conv_dlg.on_error)
@@ -661,6 +664,7 @@ class SeparadorWindow(PipelineWindow):
         n = len(self._ranges)
         self._tramo_count_lbl.setText(f"{n} tramo{'s' if n != 1 else ''}")
         self._update_validation_display()
+        self._sync_run_enabled()
 
     def _make_range_row(self, idx: int, rng: SplitRange) -> QFrame:
         row = QFrame()
@@ -867,6 +871,7 @@ class SeparadorWindow(PipelineWindow):
 
         html = "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         self._proc_step.set_summary_html(html)
+        self._sync_run_enabled()
 
     def _validate_ready(self) -> Optional[str]:
         if not self._pdf_path:
@@ -878,6 +883,11 @@ class SeparadorWindow(PipelineWindow):
         if errors:
             return errors[0].message
         return None
+
+    def _sync_run_enabled(self) -> None:
+        if not hasattr(self, "_proc_step"):
+            return
+        self._proc_step.set_run_enabled(self._validate_ready() is None)
 
     def _on_cancel(self) -> None:
         if self._worker:
@@ -912,15 +922,14 @@ class SeparadorWindow(PipelineWindow):
         self._proc_step.set_running(True)
         self._proc_step.set_progress(0, "Iniciando…")
 
-        self._worker_thread = QThread(self)
         self._worker = SplitterWorker(job)
-        self._worker.moveToThread(self._worker_thread)
-
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_worker_error)
         self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.finished.connect(self._worker_thread.deleteLater)
 
         self._worker_thread.start()
@@ -956,12 +965,9 @@ class SeparadorWindow(PipelineWindow):
     def _on_worker_error(self, msg: str) -> None:
         show_error(self, "Error", msg)
         self._proc_step.set_running(False)
-        if self._worker_thread:
-            self._worker_thread.quit()
-            self._worker_thread.wait(2000)
-            self._worker_thread.deleteLater()
-            self._worker_thread = None
-            self._worker = None
+        # thread.quit + deleteLater happen automatically via signal connections in _on_run
+        self._worker_thread = None
+        self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
         from PyQt6.QtCore import QUrl

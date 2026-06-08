@@ -760,7 +760,9 @@ class PdfFullViewDialog(QDialog):
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.finished.connect(lambda: self._after_sidebar_toggle(target_w))
         self._sidebar_anim = anim
-        self._sidebar_sep.setVisible(self._sidebar_visible)
+        if not self._sidebar_visible:   # just toggled to hidden
+            self._sidebar_sep.setVisible(False)
+        self._sidebar_container.setMinimumWidth(0)
         anim.start()
 
     def _after_sidebar_toggle(self, target_w: int) -> None:
@@ -770,6 +772,7 @@ class PdfFullViewDialog(QDialog):
         else:
             self._sidebar_container.setMaximumWidth(_SIDEBAR_W)
             self._sidebar_container.setFixedWidth(_SIDEBAR_W)
+            self._sidebar_sep.setVisible(True)   # show AFTER expand completes
         if self._current_doc and self._fit_mode != "manual":
             self._render_page()
 

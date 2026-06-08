@@ -5,7 +5,7 @@ These tests describe the POST-refactor contract where ProcessStep:
   - Adds run_enabled_changed(bool) signal  (emitted by set_run_enabled)
   - Adds running_changed(bool) signal       (emitted by start/stop_processing_ui)
 
-All 6 tests MUST fail against the current (pre-refactor) implementation.
+All 8 tests MUST fail against the current (pre-refactor) implementation.
 Do NOT implement the feature until these tests are green.
 """
 from __future__ import annotations
@@ -27,7 +27,10 @@ def app():
 @pytest.fixture()
 def step(app):
     from ui.common.process_step import ProcessStep
-    return ProcessStep(run_label="Procesar", show_output_dir=False)
+    s = ProcessStep(run_label="Procesar", show_output_dir=False)
+    yield s
+    s.deleteLater()
+    app.processEvents()
 
 
 # ── Test 1 ──────────────────────────────────────────────────────────────────
@@ -108,8 +111,9 @@ def test_start_stop_processing_ui_emit_running_changed(step):
     assert running_values == [True], (
         f"Expected running_changed(True) after start_processing_ui; got {running_values}"
     )
-
-    # Clear any initial emissions before checking stop behavior
+    assert enabled_values == [], (
+        f"start_processing_ui must NOT emit run_enabled_changed; got {enabled_values}"
+    )
     enabled_values.clear()
 
     step.stop_processing_ui()

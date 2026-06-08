@@ -23,7 +23,7 @@ def test_action_zone_hidden_by_default(app):
     w = CompresorWindow(_make_ctx())
     try:
         w._switch_section(0)
-        assert not w._action_zone.isVisible()
+        assert w._action_zone.isHidden()
     finally:
         w.deleteLater(); app.processEvents()
 
@@ -35,8 +35,8 @@ def test_action_zone_visible_on_procesar_step(app):
     try:
         procesar_idx = next(i for i, s in enumerate(w.SECTIONS) if s[1] == "Procesar")
         w._switch_section(procesar_idx)
-        assert w._action_zone.isVisible()
-        assert not w._nav_next_btn.isVisible()
+        assert not w._action_zone.isHidden()
+        assert w._nav_next_btn.isHidden()
     finally:
         w.deleteLater(); app.processEvents()
 
@@ -48,7 +48,7 @@ def test_action_zone_visible_on_resultados_step(app):
     try:
         resultados_idx = next(i for i, s in enumerate(w.SECTIONS) if s[1] == "Resultados")
         w._switch_section(resultados_idx)
-        assert w._action_zone.isVisible()
+        assert not w._action_zone.isHidden()
     finally:
         w.deleteLater(); app.processEvents()
 
@@ -59,8 +59,8 @@ def test_nav_next_shows_on_non_action_step(app):
     w = CompresorWindow(_make_ctx())
     try:
         w._switch_section(0)  # Documentos — no actions
-        assert not w._action_zone.isVisible()
-        assert w._nav_next_btn.isVisible()
+        assert w._action_zone.isHidden()
+        assert not w._nav_next_btn.isHidden()
         assert "Siguiente:" in w._nav_next_btn.text()
     finally:
         w.deleteLater(); app.processEvents()

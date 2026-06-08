@@ -34,8 +34,7 @@ from shell.context import ShellContext
 from shell.tippy import TippyButton
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.slider import SliderWithValue
-from ui.common.tool_scaffold import PipelineWindow
-from ui.common.send_to_tool import SendToToolButton
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.documents_step import DocumentsCard
 from ui.common.process_step import ProcessStep
@@ -134,6 +133,7 @@ class FoleadorWindow(PipelineWindow):
         self._pos_dragging: bool = False
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -175,15 +175,6 @@ class FoleadorWindow(PipelineWindow):
         self._docs_card.files_changed.connect(self._on_docs_changed)
         outer.addWidget(self._docs_card, 1)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(1))   # → Formato
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
         return page
 
     # ------------------------------------------------------------------ #
@@ -279,20 +270,6 @@ class FoleadorWindow(PipelineWindow):
         outer.addWidget(preview_card)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Formato")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))  # → Formato
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(3))   # → Posición
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
         return page
 
     # ------------------------------------------------------------------ #
@@ -399,20 +376,6 @@ class FoleadorWindow(PipelineWindow):
 
         outer.addLayout(body, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Estilo")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))  # → Estilo
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(4))   # → Procesar
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
         return page
 
     # ------------------------------------------------------------------ #
@@ -508,21 +471,6 @@ class FoleadorWindow(PipelineWindow):
         inner.addWidget(preview_card)
         inner.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))  # → Documentos
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(2))   # → Estilo
-        nav.addWidget(nxt)
-        inner.addLayout(nav)
-
         scroll.setWidget(content)
         outer.addWidget(scroll)
 
@@ -546,18 +494,9 @@ class FoleadorWindow(PipelineWindow):
             run_label="Foliar documentos",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Posición")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(3))  # → Posición
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     # ------------------------------------------------------------------ #
@@ -577,23 +516,43 @@ class FoleadorWindow(PipelineWindow):
         self._results_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._results_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(4))
-        nav.addWidget(back)
-        nav.addStretch()
-        self._send_btn = SendToToolButton(self.ctx, "foleador")
-        nav.addWidget(self._send_btn)
-        restart_btn = QPushButton("Nueva sesión")
-        restart_btn.setProperty("class", "Primary")
-        restart_btn.setMinimumWidth(180)
-        set_button_icon(restart_btn, "refresh-cw")
-        restart_btn.clicked.connect(self._reset_session)
-        nav.addWidget(restart_btn)
-        outer.addLayout(nav)
         return page
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Foliar documentos")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesión")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._send_btn = SendToToolButton(self.ctx, "foleador")
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ------------------------------------------------------------------ #
     # Hooks de navegación — ÍNDICES ACTUALIZADOS
@@ -1068,14 +1027,14 @@ class FoleadorWindow(PipelineWindow):
         style = self._read_style()
         self._proc_step.set_running(True)
         self._proc_step.set_progress(0, "Iniciando…")
-        self._worker_thread = QThread(self)
         self._worker = FoleadorWorker(jobs, config, style)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_worker_error)
         self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.finished.connect(self._worker_thread.deleteLater)
         self._worker_thread.start()
 
@@ -1110,12 +1069,9 @@ class FoleadorWindow(PipelineWindow):
     def _on_worker_error(self, msg: str) -> None:
         show_error(self, "Error", msg)
         self._proc_step.set_running(False)
-        if self._worker_thread:
-            self._worker_thread.quit()
-            self._worker_thread.wait(2000)
-            self._worker_thread.deleteLater()
-            self._worker_thread = None
-            self._worker = None
+        # thread.quit + deleteLater happen automatically via signal connections in _on_run
+        self._worker_thread = None
+        self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
         from PyQt6.QtCore import QUrl

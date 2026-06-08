@@ -3,7 +3,7 @@ from __future__ import annotations
 import os, sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
-from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
+from PyQt6.QtWidgets import QApplication
 
 @pytest.fixture(scope="module")
 def app():
@@ -86,6 +86,7 @@ def test_get_step_actions_returns_send_restart_on_resultados(app):
     try:
         resultados_idx = next(i for i, s in enumerate(w.SECTIONS) if s[1] == "Resultados")
         actions = w._get_step_actions(resultados_idx)
+        assert w._send_btn in actions
         assert w._restart_btn in actions
     finally:
         w.deleteLater(); app.processEvents()

@@ -78,6 +78,43 @@ class ProtectorWindowTests(unittest.TestCase):
                 viewer.deleteLater()
                 self.app.processEvents()
 
+    def test_run_button_requires_valid_passwords(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            window = ProtectorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._docs_card.add_paths([str(pdf_path)])
+                self.app.processEvents()
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._open_pw_edit.setText("abc")
+                self.app.processEvents()
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._open_pw_edit.setText("abrir123")
+                self.app.processEvents()
+                self.assertTrue(window._run_btn.isEnabled())
+
+                window._require_open_chk.setChecked(False)
+                window._open_pw_edit.clear()
+                self.app.processEvents()
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._owner_pw_edit.setText("dueno123")
+                self.app.processEvents()
+                self.assertTrue(window._run_btn.isEnabled())
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_tool_registry_exposes_protector_for_pdfs(self) -> None:
         tool = get_tool("protector")
 

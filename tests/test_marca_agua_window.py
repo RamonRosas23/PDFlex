@@ -65,9 +65,65 @@ class MarcaAguaWindowTests(unittest.TestCase):
                 window._rotation_spin.setValue(0)
                 window._refresh_preview()
 
+                # Preview now runs in a QThread — wait up to 5 s for it to finish
+                import time
+                deadline = time.time() + 5.0
+                while (
+                    window._preview_thread is not None
+                    and window._preview_thread.isRunning()
+                    and time.time() < deadline
+                ):
+                    self.app.processEvents()
+                    time.sleep(0.05)
+                # Drain queued signals (QueuedConnection from worker thread → main thread)
+                self.app.processEvents()
+
                 pixmap = window._preview_lbl.pixmap()
                 self.assertIsNotNone(pixmap)
                 self.assertFalse(pixmap.isNull())
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_run_button_follows_stamp_and_page_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdf_path = self._make_pdf(root / "input.pdf")
+            image_path = root / "logo.png"
+            from PIL import Image
+            Image.new("RGB", (32, 24), "white").save(image_path)
+
+            window = MarcaAguaWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._docs_card.add_paths([str(pdf_path)])
+                self.app.processEvents()
+                self.assertTrue(window._run_btn.isEnabled())
+
+                window._mode_combo.setCurrentIndex(1)
+                self.app.processEvents()
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._image_edit.setText(str(image_path))
+                self.app.processEvents()
+                self.assertTrue(window._run_btn.isEnabled())
+
+                window._mode_combo.setCurrentIndex(0)
+                window._scope_combo.setCurrentIndex(3)
+                window._pages_edit.setText("99")
+                self.app.processEvents()
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._pages_edit.setText("1")
+                self.app.processEvents()
+                self.assertTrue(window._run_btn.isEnabled())
             finally:
                 window.deleteLater()
                 self.app.processEvents()

@@ -38,7 +38,60 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
+
+
+class WatermarkPreviewWorker(QObject):
+    """Genera preview de marca de agua en hilo secundario. Emite QImage."""
+    ready = pyqtSignal(object)   # QImage
+    failed = pyqtSignal(str)
+
+    def __init__(
+        self,
+        source_path: str,
+        options: "WatermarkOptions",
+        preview_dir: "Path",
+        target_w: int,
+        target_h: int,
+    ) -> None:
+        super().__init__()
+        self._source_path = source_path
+        self._options = options
+        self._preview_dir = preview_dir
+        self._target_w = target_w
+        self._target_h = target_h
+
+    def run(self) -> None:
+        try:
+            sample_source = self._preview_dir / "preview_source.pdf"
+            sample_output = self._preview_dir / "preview_sellado.pdf"
+            src = fitz.open(self._source_path)
+            try:
+                pages = parse_page_selection(
+                    self._options.page_scope, self._options.custom_pages, src.page_count
+                )
+                page_index = pages[0] if pages else 0
+                sample_doc = fitz.open()
+                sample_doc.insert_pdf(src, from_page=page_index, to_page=page_index)
+                sample_doc.save(sample_source)
+                sample_doc.close()
+            finally:
+                src.close()
+            preview_options = replace(self._options, page_scope="all", custom_pages="")
+            result = WatermarkEngine().run_job(
+                WatermarkJob(str(sample_source), str(sample_output), preview_options)
+            )
+            if not result.success:
+                self.failed.emit(result.error or "No se pudo generar el preview.")
+                return
+            doc = fitz.open(result.output_path)
+            try:
+                qimage = _render_preview_qimage(doc[0], self._target_w, self._target_h)
+                self.ready.emit(qimage)
+            finally:
+                doc.close()
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class WatermarkWorker(QObject):
@@ -85,8 +138,12 @@ class MarcaAguaWindow(PipelineWindow):
         self.last_results: List[WatermarkResult] = []
         self._worker: Optional[WatermarkWorker] = None
         self._worker_thread: Optional[QThread] = None
+        self._pdf_page_cache: dict[str, int] = {}
+        self._preview_worker: Optional[WatermarkPreviewWorker] = None
+        self._preview_thread: Optional[QThread] = None
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -95,6 +152,40 @@ class MarcaAguaWindow(PipelineWindow):
         self.stack.addWidget(self._build_stamp_section())
         self.stack.addWidget(self._build_process_section())
         self.stack.addWidget(self._build_results_section())
+
+    def _build_action_buttons(self) -> None:
+        self._run_btn = QPushButton("Aplicar sello")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesión")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._send_btn = SendToToolButton(self.ctx, "marca_agua")
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     def _build_documents_section(self) -> QWidget:
         page = QWidget()
@@ -123,15 +214,6 @@ class MarcaAguaWindow(PipelineWindow):
         self._docs_summary_lbl.setWordWrap(True)
         outer.addWidget(self._docs_summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_stamp_section(self) -> QWidget:
@@ -259,21 +341,6 @@ class MarcaAguaWindow(PipelineWindow):
         outer.addLayout(grid)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
-
         self._on_preset_changed()
         self._sync_mode_visibility()
         self._sync_scope_visibility()
@@ -296,18 +363,9 @@ class MarcaAguaWindow(PipelineWindow):
             run_label="Aplicar sello",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
-        self._proc_step.watch_documents(self._docs_card)
+        self._proc_step.set_run_enabled(False)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Sello")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     def _build_results_section(self) -> QWidget:
@@ -326,24 +384,6 @@ class MarcaAguaWindow(PipelineWindow):
         self._result_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._result_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
-
-        self._send_btn = SendToToolButton(self.ctx, "marca_agua")
-        nav.addWidget(self._send_btn)
-
-        restart = QPushButton("Nueva sesion")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
-        outer.addLayout(nav)
         return page
 
     def _on_section_activated(self, idx: int) -> None:
@@ -365,11 +405,21 @@ class MarcaAguaWindow(PipelineWindow):
         if count == 0:
             self._docs_summary_lbl.setText("Sin documentos cargados.")
             self._mark_preview_stale()
+            self._sync_run_enabled()
             return
         self._docs_summary_lbl.setText(
             f"{count} documento{'s' if count != 1 else ''} listo{'s' if count != 1 else ''} para sellar."
         )
+        for p in paths:
+            if p not in self._pdf_page_cache:
+                try:
+                    doc = fitz.open(p)
+                    self._pdf_page_cache[p] = doc.page_count
+                    doc.close()
+                except Exception:
+                    self._pdf_page_cache[p] = 0
         self._mark_preview_stale()
+        self._sync_run_enabled()
 
     def _on_preset_changed(self) -> None:
         preset_id = str(self._preset_combo.currentData() or "custom")
@@ -451,11 +501,21 @@ class MarcaAguaWindow(PipelineWindow):
         if options.page_scope == "custom" and not options.custom_pages:
             return "Escribe el rango de paginas."
         if options.page_scope == "custom":
-            try:
-                parse_page_selection("custom", options.custom_pages, 999999)
-            except Exception as exc:
-                return f"Rango de paginas no valido: {exc}"
+            range_error = self._custom_page_range_error(options)
+            if range_error:
+                return range_error
         return None
+
+    def _custom_page_range_error(self, options: WatermarkOptions) -> str:
+        for raw_path in self._docs_card.paths():
+            page_count = self._pdf_page_cache.get(raw_path)
+            if page_count is None:
+                continue  # Aún cargando en background — omitir validación por ahora
+            try:
+                parse_page_selection("custom", options.custom_pages, page_count)
+            except Exception as exc:
+                return f"Rango de paginas no valido en {Path(raw_path).name}: {exc}"
+        return ""
 
     def _refresh_summary(self) -> None:
         paths = self._docs_card.paths()
@@ -483,13 +543,21 @@ class MarcaAguaWindow(PipelineWindow):
         self._proc_step.set_summary_html(
             "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         )
+        self._sync_run_enabled()
 
     def _mark_preview_stale(self) -> None:
         if hasattr(self, "_preview_lbl"):
             self._preview_lbl.setText("Actualiza el preview para ver la configuracion actual.")
             self._preview_lbl.setPixmap(QPixmap())
+        self._sync_run_enabled()
+
+    def _sync_run_enabled(self) -> None:
+        if hasattr(self, "_proc_step"):
+            self._proc_step.set_run_enabled(self._validate_ready() is None)
 
     def _refresh_preview(self) -> None:
+        if self._preview_thread and self._preview_thread.isRunning():
+            return  # Ya hay un preview en curso
         if self._docs_card.is_empty():
             self._preview_lbl.setText("Carga un PDF para generar preview.")
             self._preview_lbl.setPixmap(QPixmap())
@@ -500,48 +568,49 @@ class MarcaAguaWindow(PipelineWindow):
             self._preview_lbl.setPixmap(QPixmap())
             return
 
+        self._preview_lbl.setText("Generando preview…")
+        self._preview_lbl.setPixmap(QPixmap())
+
         source_path = self._docs_card.paths()[0]
         options = self._build_options()
-        try:
-            preview_dir = make_run_dir("MarcaAguaPreview", cleanup_days=1)
-            sample_source = preview_dir / "preview_source.pdf"
-            sample_output = preview_dir / "preview_sellado.pdf"
-            page_index = self._preview_page_index(source_path, options)
+        preview_dir = make_run_dir("MarcaAguaPreview", cleanup_days=1)
+        target_w = max(120, self._preview_lbl.width())
+        target_h = max(220, self._preview_lbl.height())
 
-            src = fitz.open(source_path)
-            try:
-                sample_doc = fitz.open()
-                sample_doc.insert_pdf(src, from_page=page_index, to_page=page_index)
-                sample_doc.save(sample_source)
-                sample_doc.close()
-            finally:
-                src.close()
+        self._preview_worker = WatermarkPreviewWorker(
+            source_path, options, preview_dir, target_w, target_h
+        )
+        self._preview_thread = RunnerThread(self._preview_worker.run, self)
+        self._preview_worker.ready.connect(self._on_preview_ready)
+        self._preview_worker.failed.connect(self._on_preview_failed)
+        self._preview_worker.ready.connect(self._preview_thread.quit)
+        self._preview_worker.failed.connect(self._preview_thread.quit)
+        self._preview_thread.finished.connect(self._preview_worker.deleteLater)
+        self._preview_thread.finished.connect(self._preview_thread.deleteLater)
+        self._preview_thread.start()
 
-            preview_options = replace(options, page_scope="all", custom_pages="")
-            result = WatermarkEngine().run_job(
-                WatermarkJob(str(sample_source), str(sample_output), preview_options)
-            )
-            if not result.success:
-                raise RuntimeError(result.error or "No se pudo generar el preview.")
-
-            doc = fitz.open(result.output_path)
-            try:
-                pix = _render_preview_page(doc[0], self._preview_lbl.width(), 220)
-                self._preview_lbl.setPixmap(pix)
-                self._preview_lbl.setText("")
-            finally:
-                doc.close()
-        except Exception as exc:
+    def _on_preview_ready(self, qimage: "QImage") -> None:
+        self._preview_worker = None
+        self._preview_thread = None
+        if qimage is None or qimage.isNull():
             self._preview_lbl.setPixmap(QPixmap())
-            self._preview_lbl.setText(f"No se pudo generar preview: {exc}")
+            self._preview_lbl.setText("No se pudo generar el preview.")
+            return
+        qpix = QPixmap.fromImage(qimage)
+        scaled = qpix.scaled(
+            max(120, self._preview_lbl.width() - 24),
+            max(220, self._preview_lbl.height()),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._preview_lbl.setPixmap(scaled)
+        self._preview_lbl.setText("")
 
-    def _preview_page_index(self, source_path: str, options: WatermarkOptions) -> int:
-        doc = fitz.open(source_path)
-        try:
-            pages = parse_page_selection(options.page_scope, options.custom_pages, doc.page_count)
-            return pages[0] if pages else 0
-        finally:
-            doc.close()
+    def _on_preview_failed(self, msg: str) -> None:
+        self._preview_worker = None
+        self._preview_thread = None
+        self._preview_lbl.setPixmap(QPixmap())
+        self._preview_lbl.setText(f"No se pudo generar preview: {msg}")
 
     def _connect_preview_stale_signals(self) -> None:
         self._text_edit.textChanged.connect(lambda _value: self._mark_preview_stale())
@@ -589,9 +658,7 @@ class MarcaAguaWindow(PipelineWindow):
         self._proc_step.set_progress(0, "Preparando sellos...")
 
         self._worker = WatermarkWorker(self._build_jobs())
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
@@ -704,7 +771,8 @@ class MarcaAguaWindow(PipelineWindow):
         event.acceptProposedAction()
 
 
-def _render_preview_page(page: fitz.Page, target_width: int, target_height: int) -> QPixmap:
+def _render_preview_qimage(page: fitz.Page, target_width: int, target_height: int) -> QImage:
+    """Renderiza página como QImage — thread-safe, sin QPixmap."""
     page_long = max(1.0, page.rect.width, page.rect.height)
     target_long = max(180, min(520, max(target_width - 24, target_height)))
     dpi = max(24.0, min(130.0, target_long * 72.0 / page_long))
@@ -712,7 +780,12 @@ def _render_preview_page(page: fitz.Page, target_width: int, target_height: int)
     image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
     data = image.tobytes("raw", "RGBA")
     qimage = QImage(data, image.width, image.height, QImage.Format.Format_RGBA8888)
-    qpix = QPixmap.fromImage(qimage.copy())
+    return qimage.copy()
+
+
+def _render_preview_page(page: fitz.Page, target_width: int, target_height: int) -> QPixmap:
+    qimage = _render_preview_qimage(page, target_width, target_height)
+    qpix = QPixmap.fromImage(qimage)
     return qpix.scaled(
         max(120, target_width - 24),
         max(120, target_height),

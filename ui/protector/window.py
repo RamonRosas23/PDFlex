@@ -29,7 +29,7 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 class ProtectWorker(QObject):
@@ -78,6 +78,7 @@ class ProtectorWindow(PipelineWindow):
         self._worker_thread: Optional[QThread] = None
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -86,6 +87,40 @@ class ProtectorWindow(PipelineWindow):
         self.stack.addWidget(self._build_security_section())
         self.stack.addWidget(self._build_process_section())
         self.stack.addWidget(self._build_results_section())
+
+    def _build_action_buttons(self) -> None:
+        self._run_btn = QPushButton("Proteger PDFs")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesión")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._send_btn = SendToToolButton(self.ctx, "protector")
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     def _build_documents_section(self) -> QWidget:
         page = QWidget()
@@ -114,15 +149,6 @@ class ProtectorWindow(PipelineWindow):
         self._docs_summary_lbl.setWordWrap(True)
         outer.addWidget(self._docs_summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_security_section(self) -> QWidget:
@@ -151,11 +177,13 @@ class ProtectorWindow(PipelineWindow):
         self._open_pw_edit = QLineEdit()
         self._open_pw_edit.setPlaceholderText("Contraseña de apertura")
         self._open_pw_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._open_pw_edit.textChanged.connect(lambda _value: self._sync_run_enabled())
         card_layout(passwords).addWidget(self._open_pw_edit)
 
         self._owner_pw_edit = QLineEdit()
         self._owner_pw_edit.setPlaceholderText("Contraseña de propietario")
         self._owner_pw_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self._owner_pw_edit.textChanged.connect(lambda _value: self._sync_run_enabled())
         card_layout(passwords).addWidget(self._owner_pw_edit)
 
         hint = QLabel("Si dejas propietario vacío, PDFlex usará la contraseña de apertura como propietario.")
@@ -206,21 +234,6 @@ class ProtectorWindow(PipelineWindow):
         outer.addLayout(grid)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
-
         self._sync_open_password_enabled()
         return page
 
@@ -240,18 +253,9 @@ class ProtectorWindow(PipelineWindow):
             run_label="Proteger PDFs",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
-        self._proc_step.watch_documents(self._docs_card)
+        self._proc_step.set_run_enabled(False)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Seguridad")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     def _build_results_section(self) -> QWidget:
@@ -270,24 +274,6 @@ class ProtectorWindow(PipelineWindow):
         self._result_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._result_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
-
-        self._send_btn = SendToToolButton(self.ctx, "protector")
-        nav.addWidget(self._send_btn)
-
-        restart = QPushButton("Nueva sesion")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
-        outer.addLayout(nav)
         return page
 
     def _on_section_activated(self, idx: int) -> None:
@@ -306,13 +292,16 @@ class ProtectorWindow(PipelineWindow):
         count = len(paths)
         if count == 0:
             self._docs_summary_lbl.setText("Sin documentos cargados.")
+            self._sync_run_enabled()
             return
         self._docs_summary_lbl.setText(
             f"{count} documento{'s' if count != 1 else ''} listo{'s' if count != 1 else ''} para proteger."
         )
+        self._sync_run_enabled()
 
     def _sync_open_password_enabled(self) -> None:
         self._open_pw_edit.setEnabled(self._require_open_chk.isChecked())
+        self._sync_run_enabled()
 
     def _build_options(self) -> ProtectOptions:
         return ProtectOptions(
@@ -359,6 +348,11 @@ class ProtectorWindow(PipelineWindow):
         self._proc_step.set_summary_html(
             "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         )
+        self._sync_run_enabled()
+
+    def _sync_run_enabled(self) -> None:
+        if hasattr(self, "_proc_step"):
+            self._proc_step.set_run_enabled(self._validate_ready() is None)
 
     def _build_jobs(self) -> List[ProtectJob]:
         out_dir = make_run_dir("ProtegerPDF")
@@ -396,9 +390,7 @@ class ProtectorWindow(PipelineWindow):
         self._proc_step.set_progress(0, "Preparando proteccion...")
 
         self._worker = ProtectWorker(self._build_jobs())
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)

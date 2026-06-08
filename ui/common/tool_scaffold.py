@@ -323,9 +323,9 @@ class PipelineWindow(QWidget):
 
         # Zona de acciones contextuales por paso
         self._action_zone = QWidget()
-        _az_layout = QHBoxLayout(self._action_zone)
-        _az_layout.setContentsMargins(0, 0, 0, 0)
-        _az_layout.setSpacing(8)
+        self._action_zone_layout = QHBoxLayout(self._action_zone)
+        self._action_zone_layout.setContentsMargins(0, 0, 0, 0)
+        self._action_zone_layout.setSpacing(8)
         self._action_zone.setVisible(False)
         row.addWidget(self._action_zone)
 
@@ -346,6 +346,10 @@ class PipelineWindow(QWidget):
           'Procesar'   → [_cancel_btn, _run_btn]  (if attrs exist)
           'Resultados' → [_send_btn, _restart_btn] (if attrs exist)
         Subclasses may override for custom behavior.
+
+        CONTRACT: returned widgets must be referenced by self (e.g., self._run_btn).
+        Returning locally-created widgets risks silent GC after setParent(None) in
+        _refresh_action_zone detaches them from the Qt ownership chain.
         """
         if not self.SECTIONS or idx >= len(self.SECTIONS):
             return []
@@ -367,16 +371,20 @@ class PipelineWindow(QWidget):
         return []
 
     def _refresh_action_zone(self, idx: int) -> None:
-        """Swaps contextual action widgets into the navbar for the current step."""
-        az_layout = self._action_zone.layout()
-        while az_layout.count():
-            item = az_layout.takeAt(0)
+        """Swaps contextual action widgets into the navbar for the current step.
+
+        Must be called AFTER _update_navbar: when there are no actions, _nav_next_btn
+        visibility is left as-is (already set by _update_navbar). When there are actions,
+        _nav_next_btn is explicitly hidden to make room.
+        """
+        while self._action_zone_layout.count():
+            item = self._action_zone_layout.takeAt(0)
             if item.widget():
                 item.widget().setParent(None)
 
         actions = self._get_step_actions(idx)
         for widget in actions:
-            az_layout.addWidget(widget)
+            self._action_zone_layout.addWidget(widget)
 
         has_actions = bool(actions)
         self._action_zone.setVisible(has_actions)

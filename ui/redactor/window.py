@@ -43,7 +43,7 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 class RedactionWorker(QObject):
@@ -74,6 +74,41 @@ class RedactionWorker(QObject):
             self.error.emit(str(exc))
 
 
+class PageRenderWorker(QObject):
+    """Renderiza una página PDF en hilo secundario y emite QImage."""
+    ready = pyqtSignal(object, int)  # (QImage | None, guard_id)
+
+    def __init__(self, path: str, page_index: int, guard: int) -> None:
+        super().__init__()
+        self._path = path
+        self._page_index = page_index
+        self._guard = guard
+
+    def run(self) -> None:
+        try:
+            doc = fitz.open(self._path)
+            try:
+                if self._page_index >= doc.page_count:
+                    self.ready.emit(None, self._guard)
+                    return
+                page = doc[self._page_index]
+                page_long = max(1.0, page.rect.width, page.rect.height)
+                dpi = max(36.0, min(140.0, 1400.0 * 72.0 / page_long))
+                pix = page.get_pixmap(
+                    matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False
+                )
+                image = Image.frombytes(
+                    "RGB", (pix.width, pix.height), pix.samples
+                ).convert("RGBA")
+                data = image.tobytes("raw", "RGBA")
+                qimage = QImage(data, image.width, image.height, QImage.Format.Format_RGBA8888)
+                self.ready.emit(qimage.copy(), self._guard)
+            finally:
+                doc.close()
+        except Exception:
+            self.ready.emit(None, self._guard)
+
+
 class RedactionCanvas(QWidget):
     changed = pyqtSignal()
     pageChanged = pyqtSignal(int, int)
@@ -87,6 +122,8 @@ class RedactionCanvas(QWidget):
         self._rects: dict[int, list[QRectF]] = {}
         self._drag_start: QPointF | None = None
         self._drag_current: QPointF | None = None
+        self._render_guard = 0
+        self._render_thread: Optional[QThread] = None
         self.setMinimumSize(520, 640)
         self.setMouseTracking(True)
         self.setStyleSheet("background:#0D0D10;")
@@ -106,6 +143,7 @@ class RedactionCanvas(QWidget):
         self.pageChanged.emit(self._page_index, self.page_count())
 
     def close_doc(self) -> None:
+        self._render_guard += 1  # Descarta cualquier render pendiente
         if self._doc is not None:
             try:
                 self._doc.close()
@@ -209,15 +247,30 @@ class RedactionCanvas(QWidget):
             self.setFixedSize(520, 640)
             self.update()
             return
-        page = self._doc[self._page_index]
-        page_long = max(1.0, page.rect.width, page.rect.height)
-        dpi = max(36.0, min(140.0, 1400.0 * 72.0 / page_long))
-        pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
-        image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
-        data = image.tobytes("raw", "RGBA")
-        qimage = QImage(data, image.width, image.height, QImage.Format.Format_RGBA8888)
-        self._pixmap = QPixmap.fromImage(qimage.copy())
-        self.setFixedSize(self._pixmap.size())
+        # Incrementar guard cancela cualquier render pendiente
+        self._render_guard += 1
+        guard = self._render_guard
+        if self._pixmap.isNull():
+            self.setFixedSize(520, 640)
+        worker = PageRenderWorker(self._path, self._page_index, guard)
+        thread = RunnerThread(worker.run, self)
+        worker.ready.connect(self._on_render_ready)
+        worker.ready.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._render_thread = thread
+        thread.start()
+
+    def _on_render_ready(self, qimage, guard: int) -> None:
+        """Slot en GUI thread: convierte QImage→QPixmap; descarta renders obsoletos."""
+        if guard != self._render_guard:
+            return
+        if qimage is None:
+            self._pixmap = QPixmap()
+            self.setFixedSize(520, 640)
+        else:
+            self._pixmap = QPixmap.fromImage(qimage)
+            self.setFixedSize(self._pixmap.size())
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -313,6 +366,7 @@ class RedactorWindow(PipelineWindow):
         self._worker_thread: Optional[QThread] = None
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -349,15 +403,6 @@ class RedactorWindow(PipelineWindow):
         self._docs_summary_lbl.setWordWrap(True)
         outer.addWidget(self._docs_summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_redaction_section(self) -> QWidget:
@@ -384,39 +429,39 @@ class RedactorWindow(PipelineWindow):
         cl.addWidget(self._page_lbl)
 
         nav_row = QHBoxLayout()
-        prev_btn = QPushButton("Anterior")
-        prev_btn.setProperty("class", "Ghost")
-        set_button_icon(prev_btn, "chevron-left")
-        prev_btn.clicked.connect(self._previous_page)
-        nav_row.addWidget(prev_btn)
-        next_btn = QPushButton("Siguiente")
-        next_btn.setProperty("class", "Ghost")
-        set_button_icon(next_btn, "chevron-right")
-        next_btn.clicked.connect(self._next_page)
-        nav_row.addWidget(next_btn)
+        self._prev_page_btn = QPushButton("Anterior")
+        self._prev_page_btn.setProperty("class", "Ghost")
+        set_button_icon(self._prev_page_btn, "chevron-left")
+        self._prev_page_btn.clicked.connect(self._previous_page)
+        nav_row.addWidget(self._prev_page_btn)
+        self._next_page_btn = QPushButton("Siguiente")
+        self._next_page_btn.setProperty("class", "Ghost")
+        set_button_icon(self._next_page_btn, "chevron-right")
+        self._next_page_btn.clicked.connect(self._next_page)
+        nav_row.addWidget(self._next_page_btn)
         cl.addLayout(nav_row)
 
         self._rect_count_lbl = QLabel("0 zonas")
         self._rect_count_lbl.setProperty("class", "CardHint")
         cl.addWidget(self._rect_count_lbl)
 
-        undo_btn = QPushButton("Deshacer zona")
-        undo_btn.setProperty("class", "Ghost")
-        set_button_icon(undo_btn, "arrow-left")
-        undo_btn.clicked.connect(self._undo_page)
-        cl.addWidget(undo_btn)
+        self._undo_btn = QPushButton("Deshacer zona")
+        self._undo_btn.setProperty("class", "Ghost")
+        set_button_icon(self._undo_btn, "arrow-left")
+        self._undo_btn.clicked.connect(self._undo_page)
+        cl.addWidget(self._undo_btn)
 
-        clear_page_btn = QPushButton("Limpiar pagina")
-        clear_page_btn.setProperty("class", "Ghost")
-        set_button_icon(clear_page_btn, "eraser")
-        clear_page_btn.clicked.connect(self._clear_page)
-        cl.addWidget(clear_page_btn)
+        self._clear_page_btn = QPushButton("Limpiar pagina")
+        self._clear_page_btn.setProperty("class", "Ghost")
+        set_button_icon(self._clear_page_btn, "eraser")
+        self._clear_page_btn.clicked.connect(self._clear_page)
+        cl.addWidget(self._clear_page_btn)
 
-        clear_all_btn = QPushButton("Limpiar todo")
-        clear_all_btn.setProperty("class", "Danger")
-        set_button_icon(clear_all_btn, "trash-2", color="#E5484D")
-        clear_all_btn.clicked.connect(self._clear_all)
-        cl.addWidget(clear_all_btn)
+        self._clear_all_btn = QPushButton("Limpiar todo")
+        self._clear_all_btn.setProperty("class", "Danger")
+        set_button_icon(self._clear_all_btn, "trash-2", color="#E5484D")
+        self._clear_all_btn.clicked.connect(self._clear_all)
+        cl.addWidget(self._clear_all_btn)
 
         self._fill_combo = QComboBox()
         self._fill_combo.addItem("Relleno negro", "black")
@@ -439,20 +484,7 @@ class RedactorWindow(PipelineWindow):
 
         outer.addLayout(body, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documento")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        next_step = QPushButton("Continuar")
-        next_step.setProperty("class", "Primary")
-        next_step.setMinimumWidth(160)
-        set_button_icon(next_step, "arrow-right")
-        next_step.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(next_step)
-        outer.addLayout(nav)
+        self._sync_redaction_labels()
         return page
 
     def _build_process_section(self) -> QWidget:
@@ -471,18 +503,9 @@ class RedactorWindow(PipelineWindow):
             run_label="Redactar PDF",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
-        self._proc_step.watch_documents(self._docs_card)
+        self._proc_step.set_run_enabled(False)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Redactar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     def _build_results_section(self) -> QWidget:
@@ -501,25 +524,44 @@ class RedactorWindow(PipelineWindow):
         self._result_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._result_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
+        return page
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.icons import set_button_icon
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Redactar PDF")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
 
         self._send_btn = SendToToolButton(self.ctx, "redactor")
-        nav.addWidget(self._send_btn)
 
-        restart = QPushButton("Nueva sesion")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
-        outer.addLayout(nav)
-        return page
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     def _on_section_activated(self, idx: int) -> None:
         if idx == 1:
@@ -576,13 +618,25 @@ class RedactorWindow(PipelineWindow):
         self._canvas.clear_all()
 
     def _sync_redaction_labels(self) -> None:
-        current = self._canvas.current_page() + 1 if self._canvas.page_count() else 0
         total = self._canvas.page_count()
+        current_index = self._canvas.current_page()
+        current = current_index + 1 if total else 0
+        current_redactions = self._canvas.current_page_redactions()
+        total_redactions = self._canvas.total_redactions()
         self._page_lbl.setText(f"Pagina {current}/{total}" if total else "Pagina -/-")
         self._rect_count_lbl.setText(
-            f"{self._canvas.current_page_redactions()} en esta pagina · "
-            f"{self._canvas.total_redactions()} total"
+            f"{current_redactions} en esta pagina · "
+            f"{total_redactions} total"
         )
+        self._prev_page_btn.setEnabled(total > 0 and current_index > 0)
+        self._next_page_btn.setEnabled(total > 0 and current_index < total - 1)
+        self._undo_btn.setEnabled(current_redactions > 0)
+        self._clear_page_btn.setEnabled(current_redactions > 0)
+        self._clear_all_btn.setEnabled(total_redactions > 0)
+        if hasattr(self, "_proc_step"):
+            self._proc_step.set_run_enabled(
+                len(self._docs_card.paths()) == 1 and total_redactions > 0
+            )
 
     def _fill_color(self) -> tuple[float, float, float]:
         return (1.0, 1.0, 1.0) if self._fill_combo.currentData() == "white" else (0.0, 0.0, 0.0)
@@ -653,9 +707,7 @@ class RedactorWindow(PipelineWindow):
         self._proc_step.set_progress(0, "Preparando redaccion...")
 
         self._worker = RedactionWorker(self._build_jobs())
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)

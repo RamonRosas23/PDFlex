@@ -30,13 +30,14 @@ from PyQt6.QtCore import QUrl
 from shell.context import ShellContext
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
 from ui.common.cards import make_card, card_layout, make_page_header
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.process_step import ProcessStep
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.dialogs import show_error, show_warning
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
+from ui.common.result_ui import format_file_size
 
 
 # ── Constantes ───────────────────────────────────────────────────────── #
@@ -391,6 +392,46 @@ def _make_img_thumb(path: str, size: int = 72) -> Optional[QPixmap]:
         return None
 
 
+def _make_img_placeholder(size: int = 80) -> QPixmap:
+    """Placeholder inmediato mientras el thumbnail carga en background."""
+    pix = QPixmap(size, size)
+    pix.fill(QColor("#E8EBF0"))
+    return pix
+
+
+class ImageThumbnailLoader(QObject):
+    """Carga thumbnail de imagen en hilo secundario. Emite QImage (thread-safe)."""
+    ready = pyqtSignal(str, object)  # (path, QImage | None)
+
+    def __init__(self, img_path: str, size: int = 80) -> None:
+        super().__init__()
+        self._img_path = img_path
+        self._size = size
+
+    def run(self) -> None:
+        try:
+            img = Image.open(self._img_path).convert("RGBA")
+            img.thumbnail((self._size, self._size), Image.LANCZOS)
+            data = img.tobytes("raw", "RGBA")
+            qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
+            self.ready.emit(self._img_path, qimg.copy())
+        except Exception:
+            self.ready.emit(self._img_path, None)
+
+
+def _image_detail(path: str) -> str:
+    parts: list[str] = []
+    try:
+        with Image.open(path) as img:
+            parts.append(f"{img.width} x {img.height} px")
+    except Exception:
+        parts.append("Imagen")
+    size = format_file_size(path)
+    if size:
+        parts.append(size)
+    return " · ".join(parts)
+
+
 class ImageListCard(QFrame):
     """Tarjeta de carga y reordenado de imágenes."""
 
@@ -401,6 +442,7 @@ class ImageListCard(QFrame):
         self.setProperty("class", "Card")
         self._paths: List[str] = []
         self._path_set: set = set()
+        self._thumb_threads: list = []
         self._build()
 
     def _build(self) -> None:
@@ -527,13 +569,13 @@ class ImageListCard(QFrame):
             if p not in self._path_set:
                 self._path_set.add(p)
                 self._paths.append(p)
-                item = QListWidgetItem(path.name)
+                item = QListWidgetItem(f"{path.name}\n{_image_detail(p)}")
                 item.setData(Qt.ItemDataRole.UserRole, p)
                 item.setToolTip(p)
-                thumb = _make_img_thumb(p)
-                if thumb:
-                    item.setIcon(QIcon(thumb))
+                item.setSizeHint(QSize(200, 74))
+                item.setIcon(QIcon(_make_img_placeholder(self.list_widget.iconSize().width())))
                 self.list_widget.addItem(item)
+                self._schedule_img_thumb(p, item)
                 changed = True
         if changed:
             self._update_count()
@@ -562,6 +604,33 @@ class ImageListCard(QFrame):
         if files:
             self.add_paths(files)
 
+    def _schedule_img_thumb(self, img_path: str, item: "QListWidgetItem") -> None:
+        loader = ImageThumbnailLoader(img_path, self.list_widget.iconSize().width())
+        thread = RunnerThread(loader.run, self)
+        loader.ready.connect(lambda _p, qimg, _item=item: self._apply_img_thumb(_item, qimg))
+        loader.ready.connect(thread.quit)
+        thread.finished.connect(loader.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._cleanup_img_thumb_job(t))
+        self._thumb_threads.append(thread)
+        thread.start()
+
+    def _apply_img_thumb(self, item: "QListWidgetItem", qimage) -> None:
+        if qimage is None:
+            return
+        try:
+            pix = QPixmap.fromImage(qimage)
+            if not pix.isNull():
+                item.setIcon(QIcon(pix))
+        except RuntimeError:
+            pass  # Item eliminado mientras cargaba
+
+    def _cleanup_img_thumb_job(self, thread: "QThread") -> None:
+        try:
+            self._thumb_threads.remove(thread)
+        except ValueError:
+            pass
+
 
 # ====================================================================== #
 #  Ventana principal
@@ -588,6 +657,7 @@ class ImgsAPdfWindow(PipelineWindow):
         self._worker_thread: Optional[QThread] = None
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -627,16 +697,6 @@ class ImgsAPdfWindow(PipelineWindow):
         self._imgs_summary_lbl = QLabel("Sin imágenes cargadas.")
         self._imgs_summary_lbl.setProperty("class", "CardHint")
         outer.addWidget(self._imgs_summary_lbl)
-
-        nav = QHBoxLayout()
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
 
         return page
 
@@ -850,21 +910,6 @@ class ImgsAPdfWindow(PipelineWindow):
         scroll.setWidget(inner)
         outer.addWidget(scroll, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Imágenes")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
-
         return page
 
     # ------------------------------------------------------------------ #
@@ -887,18 +932,8 @@ class ImgsAPdfWindow(PipelineWindow):
             run_label="Generar PDF",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
-        self._proc_step.set_run_enabled(True)
+        self._proc_step.set_run_enabled(False)
         outer.addWidget(self._proc_step, 1)
-
-        nav = QHBoxLayout()
-        back = QPushButton("Opciones")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
 
         return page
 
@@ -922,26 +957,48 @@ class ImgsAPdfWindow(PipelineWindow):
         self._result_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._result_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
+        return page
+
+    # ------------------------------------------------------------------ #
+    # Action buttons (navbar footer)
+    # ------------------------------------------------------------------ #
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.icons import set_button_icon
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Generar PDF")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
 
         self._send_btn = SendToToolButton(self.ctx, "imgs_a_pdf")
-        nav.addWidget(self._send_btn)
 
-        restart_btn = QPushButton("Nueva sesión")
-        restart_btn.setProperty("class", "Primary")
-        restart_btn.setMinimumWidth(180)
-        set_button_icon(restart_btn, "refresh-cw")
-        restart_btn.clicked.connect(self._reset_session)
-        nav.addWidget(restart_btn)
-        outer.addLayout(nav)
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
 
-        return page
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ------------------------------------------------------------------ #
     # Hooks de navegación
@@ -979,6 +1036,7 @@ class ImgsAPdfWindow(PipelineWindow):
             self._imgs_summary_lbl.setText(
                 f"{n} imagen{'es' if n != 1 else ''} · se generará 1 página por imagen"
             )
+        self._sync_run_enabled()
 
     def _on_size_changed(self, text: str) -> None:
         is_adaptive = PAGE_SIZES.get(text, (1, 1)) == (0.0, 0.0)
@@ -1035,6 +1093,11 @@ class ImgsAPdfWindow(PipelineWindow):
             rows.insert(0, "<span style='color:#E5484D;'>Atención: no hay imágenes cargadas.</span>")
 
         self._proc_step.set_summary_html("<br>".join(rows))
+        self._sync_run_enabled()
+
+    def _sync_run_enabled(self) -> None:
+        if hasattr(self, "_proc_step"):
+            self._proc_step.set_run_enabled(len(self._img_paths) > 0)
 
     # ------------------------------------------------------------------ #
     # Ejecutar
@@ -1071,9 +1134,7 @@ class ImgsAPdfWindow(PipelineWindow):
             dpi=int(self._dpi_combo.currentText()),
             scan_options=self._scan_options(),
         )
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
@@ -1114,7 +1175,7 @@ class ImgsAPdfWindow(PipelineWindow):
     def _cleanup_thread(self) -> None:
         if self._worker_thread:
             self._worker_thread.quit()
-            self._worker_thread.wait()
+            self._worker_thread.wait(3000)
             self._worker_thread = None
         self._worker = None
 

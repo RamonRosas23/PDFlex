@@ -19,6 +19,7 @@ from ui.imgs_a_pdf.window import (
     ImgsAPdfWindow,
     ImgsToPdfWorker,
     ScanProcessingOptions,
+    _image_detail,
     crop_light_borders,
     enhance_document_contrast,
     preprocess_document_image,
@@ -136,6 +137,31 @@ class ImgsAPdfWindowTests(unittest.TestCase):
                 self.assertTrue(options.crop_borders)
                 self.assertTrue(options.deskew)
                 self.assertTrue(options.enhance_contrast)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_image_rows_show_dimensions_and_run_button_requires_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = self._make_scan_photo(Path(tmp) / "scan.png")
+            window = ImgsAPdfWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window.set_inputs([str(image_path)])
+                self.app.processEvents()
+
+                self.assertTrue(window._run_btn.isEnabled())
+                item_text = window._img_card.list_widget.item(0).text()
+                self.assertIn("260 x 180 px", item_text)
+                self.assertIn("B", item_text)
+                self.assertIn("260 x 180 px", _image_detail(str(image_path)))
             finally:
                 window.deleteLater()
                 self.app.processEvents()

@@ -47,6 +47,54 @@ class RedactorWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_redaction_controls_follow_canvas_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf", pages=2)
+            window = RedactorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                self.assertFalse(window._prev_page_btn.isEnabled())
+                self.assertFalse(window._next_page_btn.isEnabled())
+                self.assertFalse(window._undo_btn.isEnabled())
+                self.assertFalse(window._clear_page_btn.isEnabled())
+                self.assertFalse(window._clear_all_btn.isEnabled())
+
+                window._docs_card.add_paths([str(pdf_path)])
+                self.app.processEvents()
+
+                self.assertFalse(window._prev_page_btn.isEnabled())
+                self.assertTrue(window._next_page_btn.isEnabled())
+                self.assertFalse(window._undo_btn.isEnabled())
+                self.assertFalse(window._clear_page_btn.isEnabled())
+                self.assertFalse(window._clear_all_btn.isEnabled())
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window._canvas.add_redaction_norm(0, 0.10, 0.20, 0.35, 0.32)
+                self.app.processEvents()
+
+                self.assertTrue(window._undo_btn.isEnabled())
+                self.assertTrue(window._clear_page_btn.isEnabled())
+                self.assertTrue(window._clear_all_btn.isEnabled())
+                self.assertTrue(window._run_btn.isEnabled())
+
+                window._canvas.next_page()
+                self.app.processEvents()
+
+                self.assertTrue(window._prev_page_btn.isEnabled())
+                self.assertFalse(window._next_page_btn.isEnabled())
+                self.assertFalse(window._undo_btn.isEnabled())
+                self.assertFalse(window._clear_page_btn.isEnabled())
+                self.assertTrue(window._clear_all_btn.isEnabled())
+            finally:
+                window._canvas.close_doc()
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_tool_registry_exposes_redactor_for_pdfs(self) -> None:
         tool = get_tool("redactor")
 
@@ -56,10 +104,11 @@ class RedactorWindowTests(unittest.TestCase):
         self.assertIn(".pdf", tool.input_extensions)
 
     @staticmethod
-    def _make_pdf(path: Path) -> Path:
+    def _make_pdf(path: Path, pages: int = 1) -> Path:
         doc = fitz.open()
-        page = doc.new_page(width=300, height=200)
-        page.insert_text((36, 72), "Secreto")
+        for index in range(pages):
+            page = doc.new_page(width=300, height=200)
+            page.insert_text((36, 72), f"Secreto {index + 1}")
         doc.save(path)
         doc.close()
         return path

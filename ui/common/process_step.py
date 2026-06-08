@@ -14,8 +14,6 @@ Uso:
         settings_key="firmador/output_dir",
         default_output=str(Path.home() / "PDFlex" / "Firmador"),
     )
-    step.run_requested.connect(self._on_run)
-    step.cancel_requested.connect(self._on_cancel)
     step.run_enabled_changed.connect(run_btn.setEnabled)
     step.running_changed.connect(cancel_btn.setEnabled)
     layout.addWidget(step)
@@ -63,14 +61,10 @@ class ProcessStep(QWidget):
     """Widget de paso de procesamiento completo y reutilizable.
 
     Signals:
-        run_requested():          El usuario pulsó el botón Ejecutar (en la navbar).
-        cancel_requested():       El usuario pulsó Cancelar (en la navbar).
         run_enabled_changed(bool): El estado habilitado del botón Ejecutar cambió.
         running_changed(bool):    El estado de ejecución cambió.
     """
 
-    run_requested = pyqtSignal()
-    cancel_requested = pyqtSignal()
     run_enabled_changed = pyqtSignal(bool)
     running_changed = pyqtSignal(bool)
 

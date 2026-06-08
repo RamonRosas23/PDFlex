@@ -4,17 +4,20 @@ Consolida el paso "Procesar" que era idéntico en los 5 herramientas:
   - Selector opcional de carpeta de salida (con persistencia QSettings)
   - Tarjeta de resumen del trabajo (inyectable desde la herramienta)
   - Barra de progreso + label
-  - Botones Cancelar / Ejecutar (con señales)
+
+Los botones Ejecutar/Cancelar ya NO se incluyen aquí; la ventana padre
+los añade en la navbar y se conecta a las señales de esta clase.
 
 Uso:
     step = ProcessStep(
-        ctx=ctx,
         run_label="Firmar documentos",
         settings_key="firmador/output_dir",
         default_output=str(Path.home() / "PDFlex" / "Firmador"),
     )
     step.run_requested.connect(self._on_run)
     step.cancel_requested.connect(self._on_cancel)
+    step.run_enabled_changed.connect(run_btn.setEnabled)
+    step.running_changed.connect(cancel_btn.setEnabled)
     layout.addWidget(step)
 """
 from __future__ import annotations
@@ -60,12 +63,16 @@ class ProcessStep(QWidget):
     """Widget de paso de procesamiento completo y reutilizable.
 
     Signals:
-        run_requested():      El usuario pulsó el botón Ejecutar.
-        cancel_requested():   El usuario pulsó Cancelar.
+        run_requested():          El usuario pulsó el botón Ejecutar (en la navbar).
+        cancel_requested():       El usuario pulsó Cancelar (en la navbar).
+        run_enabled_changed(bool): El estado habilitado del botón Ejecutar cambió.
+        running_changed(bool):    El estado de ejecución cambió.
     """
 
     run_requested = pyqtSignal()
     cancel_requested = pyqtSignal()
+    run_enabled_changed = pyqtSignal(bool)
+    running_changed = pyqtSignal(bool)
 
     def __init__(
         self,
@@ -81,6 +88,10 @@ class ProcessStep(QWidget):
         self._show_output_dir = show_output_dir
         self._initial_output = _load_output_dir(settings_key, default_output) if show_output_dir else ""
         self._run_label = run_label
+        self._accent = COLORS["accent"]
+        self._run_enabled_requested: bool = False
+        self._is_running: bool = False
+        self._shimmer_timer = None
         self._build()
 
     # ------------------------------------------------------------------ #
@@ -143,6 +154,7 @@ class ProcessStep(QWidget):
         self._prog_bar.setValue(0)
         self._prog_bar.setTextVisible(False)
         self._prog_bar.setFixedHeight(6)
+        self._apply_progress_accent()
         pcl.addWidget(self._prog_bar)
 
         self._prog_lbl = QLabel("Listo para iniciar")
@@ -151,28 +163,6 @@ class ProcessStep(QWidget):
         layout.addWidget(prog_card)
 
         layout.addStretch(1)
-
-        # ── Botones ───────────────────────────────────────────────────
-        nav = QHBoxLayout()
-        nav.addStretch()
-
-        self._cancel_btn = QPushButton("Cancelar")
-        self._cancel_btn.setProperty("class", "Danger")
-        set_button_icon(self._cancel_btn, "square", color="#E5484D")
-        self._cancel_btn.setEnabled(False)
-        self._cancel_btn.clicked.connect(self.cancel_requested)
-        nav.addWidget(self._cancel_btn)
-
-        self._run_btn = QPushButton(self._run_label)
-        self._run_btn.setProperty("class", "Primary")
-        set_button_icon(self._run_btn, "play")
-        self._run_btn.setMinimumWidth(200)
-        self._run_btn.setMinimumHeight(38)
-        self._run_btn.setEnabled(False)   # se activa cuando hay documentos
-        self._run_btn.clicked.connect(self.run_requested)
-        nav.addWidget(self._run_btn)
-
-        layout.addLayout(nav)
 
     # ------------------------------------------------------------------ #
     # API pública
@@ -197,30 +187,86 @@ class ProcessStep(QWidget):
             self._pct_lbl.setText(f"{pct} %" if pct > 0 else "—")
 
     def set_running(self, running: bool) -> None:
-        self._run_btn.setEnabled(not running)
-        self._cancel_btn.setEnabled(running)
+        if running:
+            self.start_processing_ui()
+        else:
+            self.stop_processing_ui()
 
     def set_run_enabled(self, enabled: bool) -> None:
-        """Activa o desactiva el botón Ejecutar."""
-        self._run_btn.setEnabled(enabled)
+        """Notifica al padre el estado habilitado del botón Ejecutar."""
+        self._run_enabled_requested = enabled
+        if not self._is_running:
+            self.run_enabled_changed.emit(enabled)
 
     def watch_documents(self, doc_card) -> None:
         """Conecta al files_changed de un DocumentsCard para habilitar Ejecutar
         automáticamente cuando hay al menos un documento cargado."""
-        self._run_btn.setEnabled(False)
+        self.set_run_enabled(False)
         doc_card.files_changed.connect(
-            lambda paths: self._run_btn.setEnabled(len(paths) > 0)
+            lambda paths: self.set_run_enabled(len(paths) > 0)
         )
 
     def reset(self) -> None:
+        self.stop_processing_ui()
         self._prog_bar.setValue(0)
         self._prog_lbl.setText("Listo para iniciar")
-        self._cancel_btn.setEnabled(False)
         # run_btn se mantiene en el estado que dictó watch_documents
+
+    def set_accent(self, accent: str) -> None:
+        """Inyecta el accent de herramienta para progreso y shimmer."""
+        self._accent = accent or COLORS["accent"]
+        if not self._is_running:
+            self._apply_progress_accent()
+
+    def start_processing_ui(self) -> None:
+        """Inicia shimmer y bloquea ejecución duplicada mientras procesa."""
+        if self._is_running:
+            return
+        self._is_running = True
+        self.running_changed.emit(True)
+        from ui.common.animations import AnimationHelper
+        if self._shimmer_timer is not None:
+            self._shimmer_timer.stop()
+        self._shimmer_timer = AnimationHelper.start_shimmer(self._prog_bar, self._accent)
+
+    def stop_processing_ui(self) -> None:
+        """Detiene shimmer y restaura controles según disponibilidad real."""
+        if self._shimmer_timer is not None:
+            self._shimmer_timer.stop()
+            self._shimmer_timer = None
+        self._apply_progress_accent()
+        self.running_changed.emit(False)
+        self._is_running = False
+        self.run_enabled_changed.emit(self._run_enabled_requested)
+
+    def animate_stats(self, stats: dict[str, int]) -> None:
+        """Anima QLabel cuyos objectName coincidan con claves de stats."""
+        from PyQt6.QtWidgets import QLabel
+        from ui.common.animations import AnimationHelper
+        labels = {lbl.objectName(): lbl for lbl in self.findChildren(QLabel)}
+        for name, value in stats.items():
+            lbl = labels.get(name)
+            if lbl is not None:
+                AnimationHelper.count_up(lbl, value, duration=400)
 
     # ------------------------------------------------------------------ #
     # Interno
     # ------------------------------------------------------------------ #
+
+    def _apply_progress_accent(self) -> None:
+        self._prog_bar.setStyleSheet(
+            "QProgressBar {"
+            f"background-color: {COLORS['surface_3']};"
+            "border: none;"
+            "border-radius: 3px;"
+            "height: 6px;"
+            "max-height: 6px;"
+            "}"
+            "QProgressBar::chunk {"
+            f"background-color: {self._accent};"
+            "border-radius: 3px;"
+            "}"
+        )
 
     def _on_browse(self) -> None:
         folder = get_existing_directory(

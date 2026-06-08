@@ -32,8 +32,7 @@ from ui.common.dialogs import show_error, show_warning
 from ui.common.icons import set_button_icon
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
-from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.organizador.lane_container import LaneContainer
 
 
@@ -78,6 +77,7 @@ class OrganizadorWindow(PipelineWindow):
         self._worker: Optional[_MultiWorker] = None
         self._worker_thread: Optional[QThread] = None
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -109,15 +109,6 @@ class OrganizadorWindow(PipelineWindow):
         self._summary_lbl.setProperty("class", "CardHint")
         outer.addWidget(self._summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_process_section(self) -> QWidget:
@@ -153,17 +144,8 @@ class OrganizadorWindow(PipelineWindow):
         outer.addLayout(merge_row)
 
         self._proc_step = ProcessStep(run_label="Generar PDFs", show_output_dir=False)
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Paginas")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     def _build_results_section(self) -> QWidget:
@@ -182,23 +164,45 @@ class OrganizadorWindow(PipelineWindow):
         self._result_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._result_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        nav.addStretch()
-        self._send_btn = SendToToolButton(self.ctx, "organizador")
-        nav.addWidget(self._send_btn)
-        restart_btn = QPushButton("Nueva sesion")
-        restart_btn.setProperty("class", "Primary")
-        restart_btn.setMinimumWidth(180)
-        set_button_icon(restart_btn, "refresh-cw")
-        restart_btn.clicked.connect(self._reset_session)
-        nav.addWidget(restart_btn)
-        outer.addLayout(nav)
         return page
+
+    # ── Action buttons (navbar footer) ────────────────────────────────────
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Generar PDFs")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._send_btn = SendToToolButton(self.ctx, "organizador")
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ── PipelineWindow hooks ───────────────────────────────────────────────
 
@@ -329,9 +333,7 @@ class OrganizadorWindow(PipelineWindow):
         self._proc_step.set_progress(0, "Preparando...")
 
         self._worker = _MultiWorker(self._build_multi_job())
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
@@ -360,13 +362,15 @@ class OrganizadorWindow(PipelineWindow):
         self._send_btn.set_output_paths(output_paths)
         self.outputs_ready.emit(output_paths)
 
-        if output_paths and result.results:
-            first = result.results[0]
-            self._result_viewer.set_results([first])
-            if first.job.pages:
-                self._result_viewer.set_source_dirs(
-                    [str(Path(first.job.pages[0].source_path).parent)]
-                )
+        if result.results:
+            self._result_viewer.set_results(result.results)
+            self._result_viewer.set_source_dirs(
+                [
+                    str(Path(r.job.pages[0].source_path).parent)
+                    if r.job.pages else str(Path.home())
+                    for r in result.results
+                ]
+            )
 
         self._switch_section(2)
 

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QEvent, QObject, QThread, pyqtSignal, QUrl
+from PyQt6.QtCore import Qt, QEvent, QObject, QThread, pyqtSignal, QUrl, QSize
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QKeyEvent, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
@@ -18,11 +18,11 @@ from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_page_header
 from ui.common.dialogs import show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_open_file_names
-from ui.common.icons import make_icon_label, set_button_icon
+from ui.common.icons import icon, make_icon_label, set_button_icon
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
-from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.result_ui import configure_result_list, format_file_size
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 WORD_EXTS = {".doc", ".docx"}
@@ -128,6 +128,7 @@ class WordListCard(QFrame):
         self._content_stack.addWidget(self._empty_w)
 
         self.list_widget = QListWidget()
+        configure_result_list(self.list_widget)
         self.list_widget.setMinimumHeight(280)
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list_widget.itemSelectionChanged.connect(self._update_remove_btn)
@@ -186,7 +187,13 @@ class WordListCard(QFrame):
             if key in self._path_set:
                 continue
             self._path_set.add(key)
-            item = QListWidgetItem(path.name)
+            size = format_file_size(path)
+            detail = path.suffix.upper().lstrip(".")
+            if size:
+                detail += f" · {size}"
+            item = QListWidgetItem(f"{path.name}\n{detail}")
+            item.setIcon(icon("file-text", "#63B3ED", 15))
+            item.setSizeHint(QSize(200, 46))
             item.setData(Qt.ItemDataRole.UserRole, value)
             item.setToolTip(value)
             self.list_widget.addItem(item)
@@ -270,6 +277,7 @@ class WordAPdfWindow(PipelineWindow):
         self._worker: Optional[QObject] = None
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -293,15 +301,6 @@ class WordAPdfWindow(PipelineWindow):
         self._word_card = WordListCard()
         outer.addWidget(self._word_card, 1)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_process_section(self) -> QWidget:
@@ -320,18 +319,9 @@ class WordAPdfWindow(PipelineWindow):
             run_label="Convertir a PDF",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._word_card)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     def _build_results_section(self) -> QWidget:
@@ -350,25 +340,43 @@ class WordAPdfWindow(PipelineWindow):
         self._results_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._results_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        nav.addStretch()
+        return page
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Convertir a PDF")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
 
         self._send_btn = SendToToolButton(self.ctx, "word_a_pdf")
-        nav.addWidget(self._send_btn)
 
-        restart = QPushButton("Nueva sesión")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
-        outer.addLayout(nav)
-        return page
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     def _on_section_activated(self, idx: int) -> None:
         if idx == 1:
@@ -428,11 +436,8 @@ class WordAPdfWindow(PipelineWindow):
             self._word_card.paths(),
             make_run_dir("WordPDF"),
         )
-        self._worker_thread = QThread(self)
         self._worker = worker
-        worker.moveToThread(self._worker_thread)
-
-        self._worker_thread.started.connect(worker.run)
+        self._worker_thread = RunnerThread(worker.run, self)
         worker.progress.connect(self._on_progress)
         worker.finished.connect(self._on_finished)
         worker.error.connect(self._on_worker_error)

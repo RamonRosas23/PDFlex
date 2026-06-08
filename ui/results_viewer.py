@@ -17,14 +17,17 @@ from PyQt6.QtCore import Qt, QSize, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QIcon, QColor, QBrush
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
-    QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy,
+    QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy, QSpinBox,
 )
+
+from ui.styles import COLORS as _COLORS
 
 from core.signature_engine import JobResult
 from ui.common.save_utils import save_files_as_batch
 from ui.common.result_ui import ElidedLabel, configure_result_list
 from ui.common.file_dialogs import get_save_file_name
 from ui.common.icons import icon, set_button_icon
+from ui.common.pdf_fullview_dialog import PdfFullViewDialog
 
 
 def _pil_to_qpixmap(img: Image.Image) -> QPixmap:
@@ -88,37 +91,77 @@ class ResultsViewer(QWidget):
         center_v.setContentsMargins(14, 14, 14, 14)
         center_v.setSpacing(12)
 
-        # Header: título + acciones
-        header = QVBoxLayout()
-        header.setSpacing(8)
+        # ── Fila 1: título + acciones de archivo ───────────────────────
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
 
         self.title_label = ElidedLabel("Selecciona un documento")
         self.title_label.setProperty("class", "CardTitle")
-        header.addWidget(self.title_label)
+        title_row.addWidget(self.title_label, 1)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
+        self.open_file_btn = QPushButton("Abrir PDF")
+        self.open_file_btn.setProperty("class", "Ghost")
+        set_button_icon(self.open_file_btn, "external-link")
+        self.open_file_btn.clicked.connect(self._open_file_directly)
+        self.open_file_btn.setEnabled(False)
+        title_row.addWidget(self.open_file_btn)
+
+        self.fullview_btn = QPushButton("Vista completa")
+        self.fullview_btn.setProperty("class", "Ghost")
+        set_button_icon(self.fullview_btn, "maximize")
+        self.fullview_btn.setToolTip("Abrir en vista completa (modal inmersivo)")
+        self.fullview_btn.clicked.connect(self._on_fullview)
+        self.fullview_btn.setEnabled(False)
+        title_row.addWidget(self.fullview_btn)
+
+        self.open_btn = QPushButton("Abrir carpeta")
+        self.open_btn.setProperty("class", "Ghost")
+        set_button_icon(self.open_btn, "folder-open")
+        self.open_btn.clicked.connect(self._open_in_explorer)
+        self.open_btn.setEnabled(False)
+        title_row.addWidget(self.open_btn)
+
+        self.save_as_btn = QPushButton("Guardar como")
+        self.save_as_btn.setProperty("class", "Ghost")
+        set_button_icon(self.save_as_btn, "save")
+        self.save_as_btn.clicked.connect(self._on_save_as)
+        self.save_as_btn.setEnabled(False)
+        title_row.addWidget(self.save_as_btn)
+
+        self.save_all_btn = QPushButton("Guardar todo")
+        self.save_all_btn.setProperty("class", "Ghost")
+        set_button_icon(self.save_all_btn, "download")
+        self.save_all_btn.clicked.connect(self._on_save_all)
+        self.save_all_btn.setEnabled(False)
+        title_row.addWidget(self.save_all_btn)
+
+        center_v.addLayout(title_row)
+
+        # ── Fila 2: controles de vista (zoom + ajuste) ─────────────────
+        view_bar = QHBoxLayout()
+        view_bar.setSpacing(8)
+        view_bar.setContentsMargins(0, 0, 0, 0)
 
         self.zoom_out_btn = QPushButton()
         self.zoom_out_btn.setProperty("class", "IconBtn")
-        self.zoom_out_btn.setToolTip("Reducir")
+        self.zoom_out_btn.setToolTip("Reducir zoom")
         set_button_icon(self.zoom_out_btn, "minus", size=14, icon_only=True)
         self.zoom_out_btn.clicked.connect(self._zoom_out)
         self.zoom_out_btn.setEnabled(False)
-        actions.addWidget(self.zoom_out_btn)
+        view_bar.addWidget(self.zoom_out_btn)
 
         self.zoom_label = QLabel("100%")
         self.zoom_label.setStyleSheet("color: #9094A0; min-width: 40px;")
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        actions.addWidget(self.zoom_label)
+        view_bar.addWidget(self.zoom_label)
 
         self.zoom_in_btn = QPushButton()
         self.zoom_in_btn.setProperty("class", "IconBtn")
-        self.zoom_in_btn.setToolTip("Aumentar")
+        self.zoom_in_btn.setToolTip("Aumentar zoom")
         set_button_icon(self.zoom_in_btn, "plus", size=14, icon_only=True)
         self.zoom_in_btn.clicked.connect(self._zoom_in)
         self.zoom_in_btn.setEnabled(False)
-        actions.addWidget(self.zoom_in_btn)
+        view_bar.addWidget(self.zoom_in_btn)
 
         self.fit_width_btn = QPushButton()
         self.fit_width_btn.setProperty("class", "IconBtn")
@@ -126,7 +169,7 @@ class ResultsViewer(QWidget):
         set_button_icon(self.fit_width_btn, "maximize", size=14, icon_only=True)
         self.fit_width_btn.clicked.connect(self._fit_width)
         self.fit_width_btn.setEnabled(False)
-        actions.addWidget(self.fit_width_btn)
+        view_bar.addWidget(self.fit_width_btn)
 
         self.fit_page_btn = QPushButton()
         self.fit_page_btn.setProperty("class", "IconBtn")
@@ -134,40 +177,10 @@ class ResultsViewer(QWidget):
         set_button_icon(self.fit_page_btn, "file-text", size=14, icon_only=True)
         self.fit_page_btn.clicked.connect(self._fit_page)
         self.fit_page_btn.setEnabled(False)
-        actions.addWidget(self.fit_page_btn)
+        view_bar.addWidget(self.fit_page_btn)
 
-        actions.addStretch(1)
-
-        self.open_file_btn = QPushButton("Abrir PDF")
-        self.open_file_btn.setProperty("class", "Ghost")
-        set_button_icon(self.open_file_btn, "external-link")
-        self.open_file_btn.clicked.connect(self._open_file_directly)
-        self.open_file_btn.setEnabled(False)
-        actions.addWidget(self.open_file_btn)
-
-        self.open_btn = QPushButton("Abrir carpeta")
-        self.open_btn.setProperty("class", "Ghost")
-        set_button_icon(self.open_btn, "folder-open")
-        self.open_btn.clicked.connect(self._open_in_explorer)
-        self.open_btn.setEnabled(False)
-        actions.addWidget(self.open_btn)
-
-        self.save_as_btn = QPushButton("Guardar como")
-        self.save_as_btn.setProperty("class", "Ghost")
-        set_button_icon(self.save_as_btn, "save")
-        self.save_as_btn.clicked.connect(self._on_save_as)
-        self.save_as_btn.setEnabled(False)
-        actions.addWidget(self.save_as_btn)
-
-        self.save_all_btn = QPushButton("Guardar todo")
-        self.save_all_btn.setProperty("class", "Ghost")
-        set_button_icon(self.save_all_btn, "download")
-        self.save_all_btn.clicked.connect(self._on_save_all)
-        self.save_all_btn.setEnabled(False)
-        actions.addWidget(self.save_all_btn)
-
-        header.addLayout(actions)
-        center_v.addLayout(header)
+        view_bar.addStretch(1)
+        center_v.addLayout(view_bar)
 
         # Body: páginas + canvas
         inner = QHBoxLayout()
@@ -206,11 +219,54 @@ class ResultsViewer(QWidget):
 
         center_v.addLayout(inner, 1)
 
-        # Footer con metadata
-        self.meta_label = QLabel("")
+        # ── Footer: metadata (izquierda) + paginador (derecha) ────────
+        footer_bar = QHBoxLayout()
+        footer_bar.setSpacing(6)
+        footer_bar.setContentsMargins(0, 4, 0, 0)
+
+        self.meta_label = ElidedLabel("")
         self.meta_label.setProperty("class", "CardHint")
-        self.meta_label.setWordWrap(True)
-        center_v.addWidget(self.meta_label)
+        footer_bar.addWidget(self.meta_label, 1)
+
+        self.prev_page_btn = QPushButton()
+        self.prev_page_btn.setProperty("class", "IconBtn")
+        self.prev_page_btn.setToolTip("Página anterior")
+        set_button_icon(self.prev_page_btn, "chevron-left", size=14, icon_only=True)
+        self.prev_page_btn.clicked.connect(self._prev_page)
+        self.prev_page_btn.setEnabled(False)
+        footer_bar.addWidget(self.prev_page_btn)
+
+        _pag_lbl = QLabel("Pág.")
+        _pag_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
+        footer_bar.addWidget(_pag_lbl)
+
+        self.page_spin = QSpinBox()
+        self.page_spin.setRange(1, 1)
+        self.page_spin.setEnabled(False)
+        self.page_spin.setFixedWidth(54)
+        self.page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_spin.setStyleSheet(
+            f"QSpinBox {{ background: {_COLORS['surface_3']}; color: {_COLORS['text']}; "
+            f"border: 1px solid {_COLORS['border']}; border-radius: 4px; "
+            f"padding: 1px 4px; font-size: 12px; }}"
+        )
+        self.page_spin.editingFinished.connect(self._on_page_jump)
+        footer_bar.addWidget(self.page_spin)
+
+        self._page_total_lbl = QLabel("/ —")
+        self._page_total_lbl.setStyleSheet("color: #9094A0; font-size: 12px; min-width: 32px;")
+        footer_bar.addWidget(self._page_total_lbl)
+
+        self.next_page_btn = QPushButton()
+        self.next_page_btn.setProperty("class", "IconBtn")
+        self.next_page_btn.setToolTip("Página siguiente")
+        set_button_icon(self.next_page_btn, "chevron-right", size=14, icon_only=True)
+        self.next_page_btn.clicked.connect(self._next_page)
+        self.next_page_btn.setEnabled(False)
+        footer_bar.addWidget(self.next_page_btn)
+
+        center_v.addLayout(footer_bar)
 
         layout.addWidget(center, 1)
 
@@ -257,6 +313,7 @@ class ResultsViewer(QWidget):
         self.title_label.setText("Selecciona un documento")
         self.meta_label.setText("")
         self._set_actions_enabled(False)
+        self._update_page_status()
 
     # ================================================================== #
     # Estado de acciones
@@ -264,12 +321,18 @@ class ResultsViewer(QWidget):
     def _set_actions_enabled(self, enabled: bool) -> None:
         self.open_btn.setEnabled(enabled)
         self.open_file_btn.setEnabled(enabled)
+        self.fullview_btn.setEnabled(enabled)
         self.zoom_in_btn.setEnabled(enabled)
         self.zoom_out_btn.setEnabled(enabled)
         self.fit_width_btn.setEnabled(enabled)
         self.fit_page_btn.setEnabled(enabled)
         self.save_as_btn.setEnabled(enabled)
         self.save_all_btn.setEnabled(self._has_saveable_results())
+        if not enabled:
+            self.prev_page_btn.setEnabled(False)
+            self.next_page_btn.setEnabled(False)
+            self.page_spin.setEnabled(False)
+            self._page_total_lbl.setText("/ —")
 
     def _saveable_paths(self) -> List[str]:
         return [
@@ -347,6 +410,7 @@ class ResultsViewer(QWidget):
 
         if self._current_doc.page_count > 0:
             self.page_list.setCurrentRow(0)
+        self._update_page_status()
 
         clean = sum(1 for pr in result.page_results if pr.clean)
         snapped = sum(1 for pr in result.page_results if pr.snapped_to_line)
@@ -388,6 +452,7 @@ class ResultsViewer(QWidget):
             return
         self._current_page = row
         self._render_current()
+        self._update_page_status()
 
     # ================================================================== #
     # Render adaptativo
@@ -493,6 +558,13 @@ class ResultsViewer(QWidget):
                 from PyQt6.QtGui import QDesktopServices
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
 
+    def _on_fullview(self) -> None:
+        row = self.doc_list.currentRow()
+        if row < 0 or not self._results:
+            return
+        dlg = PdfFullViewDialog(self, results=self._results, current_index=row)
+        dlg.exec()
+
     def _open_in_explorer(self) -> None:
         if self._current_result and self._current_result.output_path:
             self.openInExplorer.emit(self._current_result.output_path)
@@ -532,6 +604,47 @@ class ResultsViewer(QWidget):
             self._saveable_paths(),
             title="Guardar todo",
             start_dir=start_dir,
+        )
+
+    def _update_page_status(self) -> None:
+        if self._current_doc is None or self._current_doc.page_count <= 0:
+            self.page_spin.blockSignals(True)
+            self.page_spin.setRange(1, 1)
+            self.page_spin.setValue(1)
+            self.page_spin.blockSignals(False)
+            self.page_spin.setEnabled(False)
+            self._page_total_lbl.setText("/ —")
+            self.prev_page_btn.setEnabled(False)
+            self.next_page_btn.setEnabled(False)
+            return
+        page_count = self._current_doc.page_count
+        page = min(max(self._current_page, 0), page_count - 1)
+        self.page_spin.blockSignals(True)
+        self.page_spin.setRange(1, page_count)
+        self.page_spin.setValue(page + 1)
+        self.page_spin.blockSignals(False)
+        self.page_spin.setEnabled(page_count > 1)
+        self._page_total_lbl.setText(f"/ {page_count}")
+        self.prev_page_btn.setEnabled(page > 0)
+        self.next_page_btn.setEnabled(page < page_count - 1)
+
+    def _on_page_jump(self) -> None:
+        if self._current_doc is None:
+            return
+        target = max(0, min(self.page_spin.value() - 1, self._current_doc.page_count - 1))
+        if target != self._current_page:
+            self.page_list.setCurrentRow(target)
+
+    def _prev_page(self) -> None:
+        if self._current_doc is None:
+            return
+        self.page_list.setCurrentRow(max(0, self._current_page - 1))
+
+    def _next_page(self) -> None:
+        if self._current_doc is None:
+            return
+        self.page_list.setCurrentRow(
+            min(self._current_doc.page_count - 1, self._current_page + 1)
         )
 
     # ================================================================== #

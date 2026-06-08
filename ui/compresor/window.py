@@ -7,7 +7,7 @@ from typing import List, Optional
 from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
-    QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
+    QWidget, QVBoxLayout, QPushButton, QLabel,
     QComboBox, QGridLayout,
 )
 
@@ -30,7 +30,7 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 class CompressWorker(QObject):
@@ -87,6 +87,7 @@ class CompresorWindow(PipelineWindow):
         self.stack.addWidget(self._build_profile_section())
         self.stack.addWidget(self._build_process_section())
         self.stack.addWidget(self._build_results_section())
+        self._build_action_buttons()
 
     def _build_documents_section(self) -> QWidget:
         page = QWidget()
@@ -115,15 +116,6 @@ class CompresorWindow(PipelineWindow):
         self._docs_summary_lbl.setWordWrap(True)
         outer.addWidget(self._docs_summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_profile_section(self) -> QWidget:
@@ -179,21 +171,6 @@ class CompresorWindow(PipelineWindow):
         outer.addLayout(grid)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
-
         self._sync_profile_desc()
         return page
 
@@ -213,18 +190,9 @@ class CompresorWindow(PipelineWindow):
             run_label="Comprimir PDFs",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Perfil")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     def _build_results_section(self) -> QWidget:
@@ -243,25 +211,43 @@ class CompresorWindow(PipelineWindow):
         self._result_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._result_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
-
         self._send_btn = SendToToolButton(self.ctx, "compresor")
-        nav.addWidget(self._send_btn)
+        # _send_btn is exposed via _get_step_actions for the navbar; no inline row needed.
 
-        restart = QPushButton("Nueva sesion")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
-        outer.addLayout(nav)
         return page
+
+    def _build_action_buttons(self) -> None:
+        self._run_btn = QPushButton("Comprimir PDFs")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesión")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        # Wire signals from ProcessStep
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     def _on_section_activated(self, idx: int) -> None:
         if idx == 2:
@@ -362,9 +348,7 @@ class CompresorWindow(PipelineWindow):
         self._proc_step.set_progress(0, "Preparando compresion...")
 
         self._worker = CompressWorker(self._build_jobs())
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
@@ -408,6 +392,27 @@ class CompresorWindow(PipelineWindow):
         before = sum(result.input_bytes for result in self.last_results if result.success)
         after = sum(result.output_bytes for result in self.last_results if result.success)
         reduction = 0.0 if before <= 0 else max(0.0, (1.0 - after / before) * 100.0)
+        saved = max(0, before - after)
+        from ui.styles import COLORS as _C
+
+        self._result_viewer.set_extra_stats([
+            {
+                "value": f"{reduction:.1f}%",
+                "label": "reducción",
+                "color": _C["success"] if reduction >= 5 else _C["text_muted"],
+            },
+            {
+                "value": format_bytes(saved),
+                "label": "ahorrado",
+                "color": _C["accent"],
+            },
+            {
+                "value": format_bytes(after),
+                "label": "peso final",
+                "color": _C["text"],
+            },
+        ])
+
         msg = (
             f"Se comprimieron {ok} PDF{'s' if ok != 1 else ''}.\n"
             f"Entrada: {format_bytes(before)}\n"
@@ -420,6 +425,31 @@ class CompresorWindow(PipelineWindow):
         else:
             show_success(self, "Compresion completa", msg)
         self._switch_section(3)
+
+    def _results_summary_html(self, results: List[CompressResult]) -> str:
+        ok = [result for result in results if result.success]
+        failed = len(results) - len(ok)
+        before = sum(result.input_bytes for result in ok)
+        after = sum(result.output_bytes for result in ok)
+        reduction = 0.0 if before <= 0 else max(0.0, (1.0 - after / before) * 100.0)
+        saved = max(0, before - after)
+        warnings = sum(1 for result in ok if result.warning)
+        pieces = [
+            f"<b>{len(ok)} PDF{'s' if len(ok) != 1 else ''} optimizado{'s' if len(ok) != 1 else ''}</b>",
+            f"Entrada: {format_bytes(before)}",
+            f"Salida: {format_bytes(after)}",
+            f"Ahorro: {format_bytes(saved)} ({reduction:.1f}%)",
+        ]
+        if warnings:
+            pieces.append(
+                f"{warnings} ya estaba{'n' if warnings != 1 else ''} optimizado"
+                + ("s" if warnings != 1 else "")
+            )
+        if failed:
+            pieces.append(f"<span style='color:#E5484D;'>Errores: {failed}</span>")
+        if not results:
+            return "Sin resultados."
+        return " &nbsp; · &nbsp; ".join(pieces)
 
     def _on_error(self, msg: str) -> None:
         self._cleanup_thread()

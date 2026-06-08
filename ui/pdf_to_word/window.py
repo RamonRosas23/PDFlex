@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
+import fitz
 from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
@@ -26,8 +27,7 @@ from ui.common.documents_step import DocumentsCard
 from ui.common.icons import set_button_icon
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.process_step import ProcessStep
-from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.ocr.window import TextResultsViewer
 
 
@@ -75,8 +75,10 @@ class PdfToWordWindow(PipelineWindow):
         self.last_results = []
         self._worker: Optional[PdfToWordWorker] = None
         self._worker_thread: Optional[QThread] = None
+        self._pdf_page_cache: dict[str, int] = {}
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -113,15 +115,6 @@ class PdfToWordWindow(PipelineWindow):
         self._docs_summary_lbl.setWordWrap(True)
         outer.addWidget(self._docs_summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_conversion_section(self) -> QWidget:
@@ -196,21 +189,6 @@ class PdfToWordWindow(PipelineWindow):
         outer.addLayout(grid)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
-
         self._sync_precision_options()
         return page
 
@@ -230,18 +208,9 @@ class PdfToWordWindow(PipelineWindow):
             run_label="Convertir a Word",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Conversion")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     def _build_results_section(self) -> QWidget:
@@ -260,25 +229,43 @@ class PdfToWordWindow(PipelineWindow):
         self._results_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._results_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
+        return page
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Convertir a Word")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
 
         self._send_btn = SendToToolButton(self.ctx, "pdf_to_word")
-        nav.addWidget(self._send_btn)
 
-        restart = QPushButton("Nueva sesion")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
-        outer.addLayout(nav)
-        return page
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     def _on_section_activated(self, idx: int) -> None:
         if idx == 2:
@@ -297,8 +284,14 @@ class PdfToWordWindow(PipelineWindow):
         if count == 0:
             self._docs_summary_lbl.setText("Sin documentos cargados.")
             return
+        pages, total_size, error = self._input_stats(paths)
+        if error:
+            self._docs_summary_lbl.setText(f"{count} documento{'s' if count != 1 else ''} · {error}")
+            return
         self._docs_summary_lbl.setText(
-            f"{count} documento{'s' if count != 1 else ''} listo{'s' if count != 1 else ''} para convertir."
+            f"{count} documento{'s' if count != 1 else ''} · "
+            f"{pages} pagina{'s' if pages != 1 else ''} · "
+            f"{_format_bytes(total_size)} de entrada"
         )
 
     def _sync_precision_options(self) -> None:
@@ -320,6 +313,9 @@ class PdfToWordWindow(PipelineWindow):
     def _validate_ready(self) -> Optional[str]:
         if self._docs_card.is_empty():
             return "Agrega al menos un PDF."
+        _, _, input_error = self._input_stats(self._docs_card.paths())
+        if input_error:
+            return input_error
         config = self._build_config()
         model_error = validate_tessdata(config.languages)
         if model_error:
@@ -332,6 +328,7 @@ class PdfToWordWindow(PipelineWindow):
 
     def _refresh_summary(self) -> None:
         config = self._build_config()
+        pages, total_size, input_error = self._input_stats(self._docs_card.paths())
         mode_names = {
             "maximum": "Maxima precision",
             "balanced": "Equilibrado",
@@ -339,6 +336,8 @@ class PdfToWordWindow(PipelineWindow):
         }
         rows = [
             f"<b>Documentos:</b>&nbsp;&nbsp;{len(self._docs_card.paths())}",
+            f"<b>Paginas estimadas:</b>&nbsp;&nbsp;{pages}",
+            f"<b>Peso de entrada:</b>&nbsp;&nbsp;{_format_bytes(total_size)}",
             f"<b>Idiomas:</b>&nbsp;&nbsp;{describe_languages(config.languages)}",
             f"<b>Resolucion OCR:</b>&nbsp;&nbsp;{config.dpi} DPI",
             f"<b>Estrategia:</b>&nbsp;&nbsp;{mode_names.get(config.precision_mode, 'Equilibrado')}",
@@ -346,11 +345,38 @@ class PdfToWordWindow(PipelineWindow):
             "<b>Salida:</b>&nbsp;&nbsp;Word editable temporal por documento",
         ]
         error = self._validate_ready()
+        if input_error:
+            error = input_error
         if error:
             rows.insert(0, f"<span style='color:#E5484D;'>Atencion: {error}</span>")
         self._proc_step.set_summary_html(
             "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         )
+
+    def _input_stats(self, paths: List[str]) -> tuple[int, int, str]:
+        pages = 0
+        total_size = 0
+        for raw_path in paths:
+            path = Path(raw_path)
+            total_size += _file_size(path)
+            if raw_path in self._pdf_page_cache:
+                pages += self._pdf_page_cache[raw_path]
+            else:
+                doc = None
+                try:
+                    doc = fitz.open(str(path))
+                    count = doc.page_count
+                    self._pdf_page_cache[raw_path] = count
+                    pages += count
+                except Exception as exc:
+                    return pages, total_size, f"No se pudo leer {path.name}: {exc}"
+                finally:
+                    if doc is not None:
+                        try:
+                            doc.close()
+                        except Exception:
+                            pass
+        return pages, total_size, ""
 
     def _build_jobs(self) -> List[PdfToWordJob]:
         return make_pdf_to_word_jobs(
@@ -376,9 +402,7 @@ class PdfToWordWindow(PipelineWindow):
         self._proc_step.set_progress(0, "Preparando conversion...")
 
         self._worker = PdfToWordWorker(self._build_jobs())
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
@@ -465,3 +489,21 @@ class PdfToWordWindow(PipelineWindow):
     def dropEvent(self, event: QDropEvent) -> None:
         self.handle_drop([url.toLocalFile() for url in event.mimeData().urls()])
         event.acceptProposedAction()
+
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _format_bytes(value: int) -> str:
+    size = float(max(0, value))
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024.0 or unit == "GB":
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024.0
+    return f"{size:.1f} GB"

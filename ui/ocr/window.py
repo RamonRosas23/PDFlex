@@ -17,7 +17,7 @@ import threading
 import time
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QObject, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import Qt, QObject, QThread, QUrl, QSize, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QListWidget,
@@ -35,8 +35,8 @@ from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.documents_step import DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.save_utils import save_files_as_batch
-from ui.common.result_ui import ElidedLabel, configure_result_list
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.result_ui import ElidedLabel, configure_result_list, format_file_size
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_save_file_name
@@ -427,15 +427,7 @@ class TextResultsViewer(QWidget):
         self.clear_results()
         self._results = list(results)
         for result in results:
-            name = Path(result.job.pdf_path).name
-            item = QListWidgetItem(name)
-            item.setToolTip(result.job.pdf_path)
-            if not result.success:
-                item.setIcon(icon("warning", "#E5484D", 16))
-                item.setForeground(QColor("#E5484D"))
-            elif result.warning_pages:
-                item.setIcon(icon("warning", "#F5A623", 16))
-                item.setForeground(QColor("#F5A623"))
+            item = _text_result_item(result)
             self._doc_list.addItem(item)
         if results:
             self._doc_list.setCurrentRow(0)
@@ -604,6 +596,43 @@ class TextResultsViewer(QWidget):
         )
 
 
+def _text_result_item(result: OcrJobResult) -> QListWidgetItem:
+    name = Path(result.job.pdf_path).name
+    detail_parts: list[str] = []
+
+    if not result.success:
+        status = "Cancelado" if result.cancelled else "Error"
+        color = "#E5484D"
+        item_icon = icon("warning", color, 15)
+        if result.error:
+            detail_parts.append(result.error)
+    elif result.warning_pages:
+        status = f"Revisar {result.warning_pages} pág."
+        color = "#F5A623"
+        item_icon = icon("warning", color, 15)
+    else:
+        status = "Listo"
+        color = "#3BD37C"
+        item_icon = icon("check", color, 15)
+
+    for label, path in (("DOCX", result.docx_path), ("TXT", result.txt_path)):
+        if path and Path(path).exists():
+            size = format_file_size(path)
+            detail_parts.append(f"{label} {size}".strip())
+
+    if result.success and not detail_parts:
+        detail_parts.append(f"{result.word_count:,} palabras")
+
+    detail = status if not detail_parts else f"{status} · {' · '.join(detail_parts)}"
+    item = QListWidgetItem(f"{name}\n{detail}")
+    item.setToolTip(result.job.pdf_path)
+    item.setIcon(item_icon)
+    item.setSizeHint(QSize(200, 46))
+    if not result.success or result.warning_pages:
+        item.setForeground(QColor(color))
+    return item
+
+
 # ====================================================================== #
 #  Ventana OCR
 # ====================================================================== #
@@ -628,6 +657,7 @@ class OcrWindow(PipelineWindow):
         self._shutting_down = False
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
         app = QApplication.instance()
@@ -666,15 +696,6 @@ class OcrWindow(PipelineWindow):
         )
         outer.addWidget(self._docs_card, 1)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
         return page
 
     # ------------------------------------------------------------------ #
@@ -789,21 +810,6 @@ class OcrWindow(PipelineWindow):
         outer.addLayout(grid)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
-
         self._sync_precision_options()
         return page
 
@@ -827,18 +833,9 @@ class OcrWindow(PipelineWindow):
             run_label="Extraer texto con OCR",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Precisión")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
         return page
 
     # ------------------------------------------------------------------ #
@@ -861,22 +858,43 @@ class OcrWindow(PipelineWindow):
         self._results_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._results_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
-
-        restart = QPushButton("Nueva sesión")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
-        outer.addLayout(nav)
         return page
+
+    # ------------------------------------------------------------------ #
+    # Action buttons (navbar footer)
+    # ------------------------------------------------------------------ #
+
+    def _build_action_buttons(self) -> None:
+        self._run_btn = QPushButton("Extraer texto con OCR")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ------------------------------------------------------------------ #
     # Navegacion y configuracion
@@ -983,15 +1001,14 @@ class OcrWindow(PipelineWindow):
         self._proc_step.set_running(True)
         self._proc_step.set_progress(0, "Preparando motor OCR aislado...")
 
-        self._worker_thread = QThread(self)
         self._worker = OcrProcessWorker(self._build_jobs(), self._read_config())
-        self._worker.moveToThread(self._worker_thread)
-
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_worker_error)
         self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.finished.connect(self._worker_thread.deleteLater)
         self._worker_thread.start()
 
@@ -1046,12 +1063,9 @@ class OcrWindow(PipelineWindow):
 
     def _on_worker_error(self, message: str) -> None:
         self._proc_step.set_running(False)
-        if self._worker_thread:
-            self._worker_thread.quit()
-            self._worker_thread.wait(2000)
-            self._worker_thread.deleteLater()
-            self._worker_thread = None
-            self._worker = None
+        # thread.quit + deleteLater happen automatically via signal connections in _on_run
+        self._worker_thread = None
+        self._worker = None
         if not self._shutting_down:
             show_error(self, "Error OCR", message)
 

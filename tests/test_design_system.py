@@ -124,11 +124,11 @@ def test_step_btn_completed_state():
     assert not btn._completed
 
 
-def test_documents_card_has_menu_btn():
-    """DocumentsCard tiene botón [≡] en lugar de Vaciar/Quitar inline."""
+def test_documents_card_has_inline_actions():
+    """DocumentsCard muestra Quitar y Vaciar como botones inline visibles."""
     import sys
     from unittest.mock import MagicMock
-    from PyQt6.QtWidgets import QApplication, QPushButton
+    from PyQt6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     ctx = MagicMock()
     ctx.tray.changed = MagicMock()
@@ -136,9 +136,169 @@ def test_documents_card_has_menu_btn():
     ctx.tray.count = MagicMock(return_value=0)
     from ui.common.documents_step import DocumentsCard
     card = DocumentsCard(ctx)
-    # Must have _menu_btn
-    assert hasattr(card, "_menu_btn")
-    # Must NOT have a visible "Vaciar" button
-    buttons = card.findChildren(QPushButton)
-    texts = [b.text() for b in buttons]
-    assert "Vaciar" not in texts
+    # Inline action buttons must exist (hidden until items are added)
+    assert hasattr(card, "_remove_btn")
+    assert hasattr(card, "_clear_btn")
+    assert hasattr(card, "_sort_btn")
+    # No hidden "..." menu button
+    assert not hasattr(card, "_menu_btn")
+
+
+def test_documents_card_drag_feedback_uses_accent():
+    """Drag highlight usa el acento inyectado y restaura estado base."""
+    import sys
+    from unittest.mock import MagicMock
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    ctx = MagicMock()
+    ctx.tray.changed = MagicMock()
+    ctx.tray.changed.connect = MagicMock()
+    ctx.tray.count = MagicMock(return_value=0)
+    from ui.common.documents_step import DocumentsCard
+    card = DocumentsCard(ctx)
+    card.set_accent("#2DD4BF")
+    card._set_drop_active(True)
+    assert "45, 212, 191" in card._empty_w.styleSheet()
+    assert card._empty_w.objectName() == "DropZoneActive"
+    card._set_drop_active(False)
+    assert card._empty_w.objectName() == "DropZone"
+    assert card._empty_w.styleSheet() == ""
+    card._flash_drop_success()
+    assert "0.15" in card._empty_w.styleSheet()
+
+
+def test_process_step_running_ui_shimmer_state():
+    """ProcessStep inicia/detiene shimmer y emite señales correctas.
+
+    Los botones Ejecutar/Cancelar viven en la ventana padre (navbar); aquí
+    verificamos el estado interno de ProcessStep y las señales que los controlan.
+    """
+    import sys
+    from PyQt6.QtWidgets import QApplication, QPushButton
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.process_step import ProcessStep
+
+    step = ProcessStep(run_label="Procesar", show_output_dir=False)
+    step.set_accent("#2DD4BF")
+
+    # Simular botones externos conectados a las señales de ProcessStep
+    run_btn = QPushButton("Procesar")
+    cancel_btn = QPushButton("Cancelar")
+    run_btn.setEnabled(False)
+    cancel_btn.setEnabled(False)
+    step.run_enabled_changed.connect(run_btn.setEnabled)
+    step.running_changed.connect(cancel_btn.setEnabled)
+
+    step.set_run_enabled(True)
+    assert run_btn.isEnabled()
+
+    step.set_running(True)
+    assert step._shimmer_timer is not None
+    assert cancel_btn.isEnabled()
+
+    step.set_running(False)
+    assert step._shimmer_timer is None
+    assert run_btn.isEnabled()
+    assert not cancel_btn.isEnabled()
+    assert "#2DD4BF" in step._prog_bar.styleSheet()
+
+
+def test_elided_label_has_compact_size_hint():
+    """ElidedLabel no fuerza layouts anchos con nombres largos."""
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.result_ui import ElidedLabel
+    label = ElidedLabel("X" * 240)
+    assert label.sizeHint().width() <= 140
+    assert label.minimumSizeHint().width() <= 32
+
+
+def test_result_file_size_and_item_status(tmp_path):
+    """Las filas compartidas describen estado y tamaño de salida."""
+    import sys
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.result_ui import format_file_size, make_result_list_item
+
+    out = tmp_path / "salida.bin"
+    out.write_bytes(b"x" * 1536)
+
+    assert format_file_size(out) == "1.5 KB"
+    assert format_file_size(tmp_path / "missing.bin") == ""
+
+    item = make_result_list_item(str(out), success=True)
+    assert "Listo" in item.text()
+    assert "1.5 KB" in item.text()
+
+    error_item = make_result_list_item("", success=False, error="fallo controlado")
+    assert "Error" in error_item.text()
+    assert "fallo controlado" in error_item.text()
+
+
+def test_pdf_viewer_page_status_and_navigation(tmp_path):
+    """GenericPdfViewer muestra Página X/Y y navega con botones."""
+    import sys
+    from types import SimpleNamespace
+    import fitz
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.pdf_viewer import GenericPdfViewer
+
+    pdf = tmp_path / "resultado.pdf"
+    doc = fitz.open()
+    doc.new_page(width=220, height=160).insert_text((36, 72), "Uno")
+    doc.new_page(width=220, height=160).insert_text((36, 72), "Dos")
+    doc.save(pdf)
+    doc.close()
+
+    viewer = GenericPdfViewer("PDFs")
+    try:
+        viewer.resize(900, 520)
+        viewer.show()
+        viewer.set_results([SimpleNamespace(output_path=str(pdf), success=True, error="")])
+        app.processEvents()
+
+        assert viewer.page_spin.value() == 1
+        assert viewer._page_total_lbl.text() == "/ 2"
+        assert not viewer.prev_page_btn.isEnabled()
+        assert viewer.next_page_btn.isEnabled()
+
+        viewer._next_page()
+        app.processEvents()
+
+        assert viewer.page_list.currentRow() == 1
+        assert viewer.page_spin.value() == 2
+        assert viewer._page_total_lbl.text() == "/ 2"
+        assert viewer.prev_page_btn.isEnabled()
+        assert not viewer.next_page_btn.isEnabled()
+    finally:
+        viewer.clear_results()
+        viewer.deleteLater()
+        app.processEvents()
+
+
+def test_image_viewer_result_rows_include_status_and_size(tmp_path):
+    """ImageResultsViewer usa filas enriquecidas para salidas generadas."""
+    import sys
+    from types import SimpleNamespace
+    from PIL import Image
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.image_results_viewer import ImageResultsViewer
+
+    png = tmp_path / "imagen.png"
+    Image.new("RGB", (24, 16), "white").save(png)
+
+    viewer = ImageResultsViewer("Imágenes")
+    try:
+        viewer.set_results([SimpleNamespace(output_path=str(png), success=True, error="")])
+        app.processEvents()
+
+        text = viewer.file_list.item(0).text()
+        assert "imagen.png" in text
+        assert "Listo" in text
+        assert "B" in text
+    finally:
+        viewer.deleteLater()
+        app.processEvents()

@@ -109,10 +109,48 @@ def test_start_stop_processing_ui_emit_running_changed(step):
         f"Expected running_changed(True) after start_processing_ui; got {running_values}"
     )
 
+    # Clear any initial emissions before checking stop behavior
+    enabled_values.clear()
+
     step.stop_processing_ui()
     assert running_values == [True, False], (
         f"Expected running_changed(False) after stop_processing_ui; got {running_values}"
     )
-    assert False in enabled_values, (
+    assert enabled_values == [False], (
         f"Expected run_enabled_changed(False) after stop_processing_ui; got {enabled_values}"
     )
+
+
+# ── Test 7 ──────────────────────────────────────────────────────────────────
+
+def test_set_run_enabled_while_running_defers_signal(app):
+    """set_run_enabled while running defers emission until stop_processing_ui."""
+    from ui.common.process_step import ProcessStep
+    step = ProcessStep(run_label="Test", show_output_dir=False)
+    enabled_values = []
+    step.run_enabled_changed.connect(lambda v: enabled_values.append(v))
+    try:
+        step.start_processing_ui()           # running = True
+        enabled_values.clear()               # clear any emissions from start
+        step.set_run_enabled(True)           # should NOT emit yet (running)
+        assert enabled_values == [], "run_enabled_changed must NOT emit while running"
+        step.stop_processing_ui()            # NOW it should emit run_enabled_changed(True)
+        assert True in enabled_values, "run_enabled_changed must emit on stop with requested value"
+    finally:
+        step.deleteLater()
+        app.processEvents()
+
+
+# ── Test 8 ──────────────────────────────────────────────────────────────────
+
+def test_refresh_run_glow_method_removed(app):
+    """_refresh_run_glow is fully removed from ProcessStep."""
+    from ui.common.process_step import ProcessStep
+    step = ProcessStep(run_label="Test", show_output_dir=False)
+    try:
+        assert not hasattr(step, "_refresh_run_glow"), (
+            "_refresh_run_glow should be removed in the refactor"
+        )
+    finally:
+        step.deleteLater()
+        app.processEvents()

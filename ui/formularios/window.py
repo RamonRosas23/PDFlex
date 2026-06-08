@@ -31,7 +31,7 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 class FormFillWorker(QObject):
@@ -81,8 +81,10 @@ class FormulariosWindow(PipelineWindow):
         self._fields: list[FormField] = []
         self._field_controls: dict[str, QWidget] = {}
         self._loaded_path = ""
+        self._fields_are_ready = False
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -119,16 +121,6 @@ class FormulariosWindow(PipelineWindow):
         self._docs_summary_lbl.setWordWrap(True)
         outer.addWidget(self._docs_summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        self._doc_next_btn = QPushButton("Continuar")
-        self._doc_next_btn.setProperty("class", "Primary")
-        self._doc_next_btn.setMinimumWidth(160)
-        self._doc_next_btn.setEnabled(False)
-        set_button_icon(self._doc_next_btn, "arrow-right")
-        self._doc_next_btn.clicked.connect(self._go_to_fields)
-        nav.addWidget(self._doc_next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_fields_section(self) -> QWidget:
@@ -196,21 +188,6 @@ class FormulariosWindow(PipelineWindow):
 
         outer.addLayout(grid, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documento")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        self._fields_next_btn = QPushButton("Continuar")
-        self._fields_next_btn.setProperty("class", "Primary")
-        self._fields_next_btn.setMinimumWidth(160)
-        self._fields_next_btn.setEnabled(False)
-        set_button_icon(self._fields_next_btn, "arrow-right")
-        self._fields_next_btn.clicked.connect(self._go_to_process)
-        nav.addWidget(self._fields_next_btn)
-        outer.addLayout(nav)
         self._clear_fields_ui("Carga un PDF para detectar sus campos.")
         return page
 
@@ -230,8 +207,6 @@ class FormulariosWindow(PipelineWindow):
             run_label="Rellenar formulario",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
 
@@ -266,25 +241,67 @@ class FormulariosWindow(PipelineWindow):
         set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(back)
-        nav.addStretch()
-
-        self._send_btn = SendToToolButton(self.ctx, "formularios")
-        nav.addWidget(self._send_btn)
-
-        restart = QPushButton("Nueva sesion")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
         outer.addLayout(nav)
         return page
 
+    def _build_action_buttons(self) -> None:
+        from ui.common.icons import set_button_icon
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Rellenar formulario")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._send_btn = SendToToolButton(self.ctx, "formularios")
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
+
     def _on_section_activated(self, idx: int) -> None:
-        if idx == 1:
+        if idx == 0 and hasattr(self, "_nav_next_btn"):
+            count = len(self._docs_card.paths()) if hasattr(self, "_docs_card") else 0
+            self._nav_next_btn.setEnabled(count == 1)
+        elif idx == 1:
             self._load_fields()
+            if hasattr(self, "_nav_next_btn"):
+                self._nav_next_btn.setEnabled(getattr(self, "_fields_are_ready", False))
+        elif hasattr(self, "_nav_next_btn"):
+            self._nav_next_btn.setEnabled(True)
         if idx == 2:
             self._refresh_summary()
+
+    def _on_nav_next(self) -> None:
+        idx = self.stack.currentIndex()
+        if idx == 0:
+            self._go_to_fields()
+        elif idx == 1:
+            self._go_to_process()
+        else:
+            super()._on_nav_next()
 
     def set_inputs(self, paths: List[str]) -> None:
         self._docs_card.add_paths(paths)
@@ -314,7 +331,8 @@ class FormulariosWindow(PipelineWindow):
         self._clear_fields_ui("Carga un PDF para detectar sus campos.")
         self._set_fields_ready(False)
         count = len(paths)
-        self._doc_next_btn.setEnabled(count == 1)
+        if hasattr(self, "_nav_next_btn") and self.stack.currentIndex() == 0:
+            self._nav_next_btn.setEnabled(count == 1)
         if count == 0:
             self._docs_summary_lbl.setText("Sin documento cargado.")
             return
@@ -390,8 +408,9 @@ class FormulariosWindow(PipelineWindow):
         self._fields_layout.addStretch(1)
 
     def _set_fields_ready(self, ready: bool) -> None:
-        if hasattr(self, "_fields_next_btn"):
-            self._fields_next_btn.setEnabled(ready)
+        self._fields_are_ready = ready
+        if hasattr(self, "_nav_next_btn") and self.stack.currentIndex() == 1:
+            self._nav_next_btn.setEnabled(ready)
 
     def _build_field_row(self, field: FormField, control: QWidget) -> QWidget:
         row = QFrame()
@@ -584,9 +603,7 @@ class FormulariosWindow(PipelineWindow):
         self._proc_step.set_progress(0, "Preparando formulario...")
 
         self._worker = FormFillWorker(self._build_jobs())
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)

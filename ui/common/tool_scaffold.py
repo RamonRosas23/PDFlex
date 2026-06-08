@@ -9,7 +9,7 @@ Provee:
 from __future__ import annotations
 from typing import TYPE_CHECKING, List, Tuple
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from ui.styles import COLORS
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
@@ -43,7 +43,7 @@ class _StepBtn(QWidget):
         if hint:
             self.setToolTip(hint)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(42)
+        self.setFixedHeight(44)
 
         row = QHBoxLayout(self)
         row.setContentsMargins(18, 0, 18, 0)
@@ -52,7 +52,7 @@ class _StepBtn(QWidget):
 
         # Badge numérico (cuadrado redondeado)
         self._badge = QLabel(num)
-        self._badge.setFixedSize(26, 20)
+        self._badge.setFixedSize(22, 22)
         self._badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._badge.setObjectName("StepBadge")
         row.addWidget(self._badge)
@@ -122,6 +122,25 @@ class _StepBtn(QWidget):
 
 
 # ──────────────────────────────────────────────────────────────
+# RunnerThread — evita el bug de moveToThread+started.connect en PyQt6/Windows
+# ──────────────────────────────────────────────────────────────
+
+class RunnerThread(QThread):
+    """QThread subclass that calls target() directly in run().
+
+    Use instead of QThread + moveToThread + started.connect, which fails on
+    PyQt6/Windows when the thread has a parent widget.
+    """
+
+    def __init__(self, target, parent=None) -> None:
+        super().__init__(parent)
+        self._target = target
+
+    def run(self) -> None:
+        self._target()
+
+
+# ──────────────────────────────────────────────────────────────
 # Ventana base del pipeline
 # ──────────────────────────────────────────────────────────────
 
@@ -140,6 +159,7 @@ class PipelineWindow(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._completed_steps: set[int] = set()
+        self._slide_animations: list = []
         self._build_scaffold()
         self._apply_tool_accent()
         from PyQt6.QtCore import QTimer
@@ -201,8 +221,8 @@ class PipelineWindow(QWidget):
         brand_frame = QFrame()
         brand_frame.setObjectName("SidebarBrandFrame")
         bf = QVBoxLayout(brand_frame)
-        bf.setContentsMargins(20, 22, 20, 18)
-        bf.setSpacing(2)
+        bf.setContentsMargins(20, 26, 20, 20)
+        bf.setSpacing(3)
 
         # Nombre de la herramienta (en acento) + app name (gris)
         brand_row = QHBoxLayout()
@@ -235,7 +255,7 @@ class PipelineWindow(QWidget):
         self._step_progress.setTextVisible(False)
         self._step_progress.setFixedHeight(3)
         self._step_progress.setStyleSheet(
-            "QProgressBar { background: transparent; border: none; border-radius: 0; }"
+            f"QProgressBar {{ background: {COLORS['surface_3']}; border: none; border-radius: 0; }}"
             "QProgressBar::chunk { background: #5E6AD2; border-radius: 0; }"
         )
         sb.addWidget(self._step_progress)
@@ -257,7 +277,7 @@ class PipelineWindow(QWidget):
         sb.addStretch(1)
 
         # Hint de atajos Alt+1-9
-        self._shortcut_hint = QLabel("⌨  Alt+1…9 para navegar")
+        self._shortcut_hint = QLabel("Alt+1-9 para navegar")
         self._shortcut_hint.setObjectName("SidebarShortcutHint")
         self._shortcut_hint.setStyleSheet(
             "color: #383B4A; font-size: 10px; padding: 0 18px 4px 18px;"
@@ -275,13 +295,15 @@ class PipelineWindow(QWidget):
 
     def _build_navbar(self) -> "QFrame":
         """Barra de navegación fija al pie del content area."""
+        from ui.common.icons import set_button_icon
+
         navbar = QFrame()
         navbar.setObjectName("ToolNavBar")
         navbar.setFixedHeight(56)
         navbar.setStyleSheet(
             "QFrame#ToolNavBar {"
-            "background: #0A0A0B;"
-            "border-top: 1px solid #1E1E28;"
+            f"background: {COLORS['bg']};"
+            f"border-top: 1px solid {COLORS['border']};"
             "}"
         )
 
@@ -292,20 +314,74 @@ class PipelineWindow(QWidget):
         self._nav_prev_btn = QPushButton("Anterior")
         self._nav_prev_btn.setProperty("class", "Ghost")
         self._nav_prev_btn.setFixedHeight(36)
+        set_button_icon(self._nav_prev_btn, "arrow-left", color=COLORS["text_muted"])
         self._nav_prev_btn.clicked.connect(self._on_nav_prev)
         self._nav_prev_btn.setVisible(False)
         row.addWidget(self._nav_prev_btn)
 
         row.addStretch()
 
+        # Zona de acciones contextuales por paso
+        self._action_zone = QWidget()
+        _az_layout = QHBoxLayout(self._action_zone)
+        _az_layout.setContentsMargins(0, 0, 0, 0)
+        _az_layout.setSpacing(8)
+        self._action_zone.setVisible(False)
+        row.addWidget(self._action_zone)
+
         self._nav_next_btn = QPushButton("Siguiente")
         self._nav_next_btn.setProperty("class", "Primary")
         self._nav_next_btn.setFixedHeight(36)
+        set_button_icon(self._nav_next_btn, "arrow-right", color="#FFFFFF")
         self._nav_next_btn.clicked.connect(self._on_nav_next)
         self._nav_next_btn.setVisible(False)
         row.addWidget(self._nav_next_btn)
 
         return navbar
+
+    def _get_step_actions(self, idx: int) -> list:
+        """Returns contextual navbar widgets for the given step index.
+
+        Default reads SECTIONS step names and attribute convention:
+          'Procesar'   → [_cancel_btn, _run_btn]  (if attrs exist)
+          'Resultados' → [_send_btn, _restart_btn] (if attrs exist)
+        Subclasses may override for custom behavior.
+        """
+        if not self.SECTIONS or idx >= len(self.SECTIONS):
+            return []
+        step_name = self.SECTIONS[idx][1]
+        if step_name == "Procesar":
+            actions = []
+            if hasattr(self, "_cancel_btn"):
+                actions.append(self._cancel_btn)
+            if hasattr(self, "_run_btn"):
+                actions.append(self._run_btn)
+            return actions
+        if step_name == "Resultados":
+            actions = []
+            if hasattr(self, "_send_btn"):
+                actions.append(self._send_btn)
+            if hasattr(self, "_restart_btn"):
+                actions.append(self._restart_btn)
+            return actions
+        return []
+
+    def _refresh_action_zone(self, idx: int) -> None:
+        """Swaps contextual action widgets into the navbar for the current step."""
+        az_layout = self._action_zone.layout()
+        while az_layout.count():
+            item = az_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+
+        actions = self._get_step_actions(idx)
+        for widget in actions:
+            az_layout.addWidget(widget)
+
+        has_actions = bool(actions)
+        self._action_zone.setVisible(has_actions)
+        if has_actions and hasattr(self, "_nav_next_btn"):
+            self._nav_next_btn.setVisible(False)
 
     def _on_nav_prev(self) -> None:
         idx = self.stack.currentIndex()
@@ -324,13 +400,13 @@ class PipelineWindow(QWidget):
         total = len(self.SECTIONS)
         if idx > 0:
             prev_name = self.SECTIONS[idx - 1][1]
-            self._nav_prev_btn.setText(f"← {prev_name}")
+            self._nav_prev_btn.setText(prev_name)
             self._nav_prev_btn.setVisible(True)
         else:
             self._nav_prev_btn.setVisible(False)
         if idx < total - 1:
             next_name = self.SECTIONS[idx + 1][1]
-            self._nav_next_btn.setText(f"{next_name} →")
+            self._nav_next_btn.setText(f"Siguiente: {next_name}")
             self._nav_next_btn.setVisible(True)
         else:
             self._nav_next_btn.setVisible(False)
@@ -351,13 +427,13 @@ class PipelineWindow(QWidget):
         # Actualizar el nombre de la herramienta en el sidebar
         if hasattr(self, "_brand_lbl"):
             self._brand_lbl.setStyleSheet(
-                f"color: {accent}; font-size: 16px; font-weight: 700;"
-                "letter-spacing: -0.3px; background: transparent;"
+                f"color: {accent}; font-size: 17px; font-weight: 700;"
+                "letter-spacing: -0.4px; background: transparent;"
             )
 
         if hasattr(self, "_step_progress"):
             self._step_progress.setStyleSheet(
-                "QProgressBar { background: transparent; border: none; border-radius: 0; }"
+                f"QProgressBar {{ background: {COLORS['surface_3']}; border: none; border-radius: 0; }}"
                 f"QProgressBar::chunk {{ background: {accent}; border-radius: 0; }}"
             )
 
@@ -380,20 +456,28 @@ class PipelineWindow(QWidget):
 QLabel#StepBadge {{
     background: #1E1E26;
     color: #6B6F7A;
-    border-radius: 4px;
+    border-radius: 5px;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.3px;
     border: 1px solid #2A2A32;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 QLabel#StepBadgeActive {{
     background: {badge_bg};
     color: {accent};
-    border-radius: 4px;
+    border-radius: 5px;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.3px;
     border: 1px solid {_rgba(accent, 0.35)};
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 
 /* Paso completado */
@@ -405,11 +489,15 @@ QLabel#StepBadgeActive {{
 QLabel#StepBadgeCompleted {{
     background: {_rgba(accent, 0.12)};
     color: {accent};
-    border-radius: 4px;
+    border-radius: 5px;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.4px;
+    letter-spacing: 0.3px;
     border: 1px solid {_rgba(accent, 0.25)};
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 QLabel#StepNameCompleted {{
     color: #6B6F7A;
@@ -449,6 +537,12 @@ QPushButton[class="Primary"]:pressed {{
     background: {press};
     background-color: {press};
     border: 1px solid {press};
+}}
+QPushButton[class="Primary"]:disabled {{
+    background: #1A1A21;
+    background-color: #1A1A21;
+    border: 1px solid #1E1E28;
+    color: #52566A;
 }}
 
 /* Ghost / Icon hover accent */
@@ -526,6 +620,8 @@ QListWidget::item:selected:!active {{
         from PyQt6.QtWidgets import QLabel
         from ui.common.animations import is_reduced_motion
 
+        if idx < 0 or idx >= self.stack.count():
+            return
         if is_reduced_motion() or idx == self.stack.currentIndex():
             self._switch_section(idx)
             return
@@ -541,6 +637,9 @@ QListWidget::item:selected:!active {{
         snapshot = current_widget.grab()
         w = self.stack.width()
         h = self.stack.height()
+        if w <= 0 or h <= 0:
+            self._switch_section(idx)
+            return
 
         overlay = QLabel(self.stack)
         overlay.setPixmap(snapshot)
@@ -555,10 +654,19 @@ QListWidget::item:selected:!active {{
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
         anim.setStartValue(QRect(0, 0, w, h))
         anim.setEndValue(QRect(-w * direction, 0, w, h))
-        anim.finished.connect(overlay.deleteLater)
+        self._slide_animations.append(anim)
+
+        def _cleanup() -> None:
+            if anim in self._slide_animations:
+                self._slide_animations.remove(anim)
+            overlay.deleteLater()
+
+        anim.finished.connect(_cleanup)
         anim.start()
 
     def _switch_section(self, idx: int) -> None:
+        if idx < 0 or idx >= self.stack.count():
+            return
         prev_idx = self.stack.currentIndex()
         if idx > prev_idx and prev_idx >= 0:
             self._completed_steps.add(prev_idx)
@@ -569,9 +677,21 @@ QListWidget::item:selected:!active {{
         if hasattr(self, "_step_progress") and self.SECTIONS:
             pct = int((idx + 1) / len(self.SECTIONS) * 100)
             self._step_progress.setValue(pct)
+        self._sync_child_accents()
         self._on_section_activated(idx)
         if hasattr(self, "_nav_prev_btn"):
             self._update_navbar(idx)
+        if hasattr(self, "_action_zone"):
+            self._refresh_action_zone(idx)
+        self._apply_primary_glows()
+
+    def _sync_child_accents(self) -> None:
+        """Propaga el accent a shared components creados por subclases."""
+        accent = getattr(self, "ACCENT_COLOR", "#5E6AD2") or "#5E6AD2"
+        for child in self.findChildren(QWidget):
+            setter = getattr(child, "set_accent", None)
+            if callable(setter):
+                setter(accent)
 
     def _on_section_activated(self, idx: int) -> None:
         """Hook para que subclases reaccionen al cambio de paso."""

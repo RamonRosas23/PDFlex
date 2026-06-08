@@ -25,7 +25,7 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.slider import SliderWithValue
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.icons import set_button_icon
 from ui.imgs_a_pdf.window import IMAGE_EXTS, ImageListCard
 
@@ -76,6 +76,7 @@ class QuitarFondoWindow(PipelineWindow):
         self._worker: Optional[RemoveBackgroundWorker] = None
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -105,15 +106,6 @@ class QuitarFondoWindow(PipelineWindow):
         self._imgs_summary_lbl.setProperty("class", "CardHint")
         outer.addWidget(self._imgs_summary_lbl)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_options_section(self) -> QWidget:
@@ -170,20 +162,6 @@ class QuitarFondoWindow(PipelineWindow):
         outer.addLayout(grid)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Imágenes")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        next_btn = QPushButton("Continuar")
-        next_btn.setProperty("class", "Primary")
-        next_btn.setMinimumWidth(160)
-        set_button_icon(next_btn, "arrow-right")
-        next_btn.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(next_btn)
-        outer.addLayout(nav)
         return page
 
     def _build_process_section(self) -> QWidget:
@@ -202,8 +180,6 @@ class QuitarFondoWindow(PipelineWindow):
             run_label="Quitar fondo",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._img_card)
         outer.addWidget(self._proc_step, 1)
 
@@ -238,19 +214,45 @@ class QuitarFondoWindow(PipelineWindow):
         set_button_icon(back, "arrow-left")
         back.clicked.connect(lambda: self._switch_section(2))
         nav.addWidget(back)
-        nav.addStretch()
-
-        self._send_btn = SendToToolButton(self.ctx, "quitar_fondo")
-        nav.addWidget(self._send_btn)
-
-        restart = QPushButton("Nueva sesión")
-        restart.setProperty("class", "Primary")
-        restart.setMinimumWidth(180)
-        set_button_icon(restart, "refresh-cw")
-        restart.clicked.connect(self._reset_session)
-        nav.addWidget(restart)
         outer.addLayout(nav)
         return page
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.icons import set_button_icon
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Quitar fondo")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._send_btn = SendToToolButton(self.ctx, "quitar_fondo")
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     def _on_section_activated(self, idx: int) -> None:
         if idx == 2:
@@ -321,11 +323,8 @@ class QuitarFondoWindow(PipelineWindow):
         self._proc_step.set_running(True)
         self._proc_step.set_progress(0, "Preparando imágenes...")
 
-        self._worker_thread = QThread(self)
         self._worker = RemoveBackgroundWorker(self._build_jobs())
-        self._worker.moveToThread(self._worker_thread)
-
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_worker_error)

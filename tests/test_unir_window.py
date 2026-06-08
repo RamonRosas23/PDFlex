@@ -62,6 +62,26 @@ class UnirWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_run_button_requires_at_least_two_pdfs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = self._make_pdf(root / "a.pdf", "A")
+            second = self._make_pdf(root / "b.pdf", "B")
+            window = UnirWindow(self._make_ctx())
+            try:
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window.set_inputs([str(first)])
+                self.app.processEvents()
+                self.assertFalse(window._run_btn.isEnabled())
+
+                window.set_inputs([str(second)])
+                self.app.processEvents()
+                self.assertTrue(window._run_btn.isEnabled())
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_tool_registry_exposes_merge_for_pdfs(self) -> None:
         tool = get_tool("unir")
 

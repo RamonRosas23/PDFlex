@@ -19,7 +19,7 @@ from PyQt6.QtWidgets import (
 from shell.context import ShellContext
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
 from ui.common.cards import make_card, card_layout, make_page_header
-from ui.common.tool_scaffold import PipelineWindow
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.documents_step import DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.pdf_viewer import GenericPdfViewer
@@ -152,8 +152,10 @@ class UnirWindow(PipelineWindow):
         self._last_result: Optional[MergeResult] = None
         self._worker: Optional[MergeWorker] = None
         self._worker_thread: Optional[QThread] = None
+        self._page_cache: dict[str, int] = {}
 
         self._build_pages()
+        self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
 
@@ -166,6 +168,41 @@ class UnirWindow(PipelineWindow):
         self.stack.addWidget(self._build_options_section())
         self.stack.addWidget(self._build_process_section())
         self.stack.addWidget(self._build_results_section())
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.icons import set_button_icon
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Unir PDFs")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesión")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
+
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
+
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ------------------------------------------------------------------ #
     # Paso 01: Documentos
@@ -199,16 +236,6 @@ class UnirWindow(PipelineWindow):
         self._docs_summary_lbl.setWordWrap(True)
         card_layout(self._docs_summary_card).addWidget(self._docs_summary_lbl)
         outer.addWidget(self._docs_summary_card)
-
-        nav = QHBoxLayout()
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
 
         return page
 
@@ -280,21 +307,6 @@ class UnirWindow(PipelineWindow):
         outer.addWidget(cfg_card)
         outer.addStretch(1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
-
         return page
 
     # ------------------------------------------------------------------ #
@@ -317,18 +329,8 @@ class UnirWindow(PipelineWindow):
             run_label="Unir PDFs",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
-        self._proc_step.watch_documents(self._docs_card)
+        self._proc_step.set_run_enabled(False)
         outer.addWidget(self._proc_step, 1)
-
-        nav = QHBoxLayout()
-        back = QPushButton("Opciones")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        outer.addLayout(nav)
 
         return page
 
@@ -352,24 +354,8 @@ class UnirWindow(PipelineWindow):
         self._result_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._result_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        nav.addStretch()
-
         self._send_btn = SendToToolButton(self.ctx, "unir")
-        nav.addWidget(self._send_btn)
-
-        restart_btn = QPushButton("Nueva sesión")
-        restart_btn.setProperty("class", "Primary")
-        restart_btn.setMinimumWidth(180)
-        set_button_icon(restart_btn, "refresh-cw")
-        restart_btn.clicked.connect(self._reset_session)
-        nav.addWidget(restart_btn)
-        outer.addLayout(nav)
+        # _send_btn is exposed via _get_step_actions for the navbar; no inline row needed.
 
         return page
 
@@ -406,18 +392,17 @@ class UnirWindow(PipelineWindow):
                 "1 documento cargado. Agrega al menos uno más para unir."
             )
         else:
-            # Contar páginas totales
-            total_pages = 0
             for p in paths:
-                try:
-                    d = fitz.open(p)
-                    total_pages += d.page_count
-                    d.close()
-                except Exception:
-                    pass
-            self._docs_summary_lbl.setText(
-                f"{n} documentos · {total_pages} páginas en total"
-            )
+                if p not in self._page_cache:
+                    try:
+                        doc = fitz.open(p)
+                        self._page_cache[p] = doc.page_count
+                        doc.close()
+                    except Exception:
+                        self._page_cache[p] = 0
+            total = sum(self._page_cache.get(p, 0) for p in paths)
+            self._docs_summary_lbl.setText(f"{n} documentos · {total} páginas en total")
+        self._sync_run_enabled()
 
     # ------------------------------------------------------------------ #
     # Resumen para el paso Procesar
@@ -445,6 +430,11 @@ class UnirWindow(PipelineWindow):
             rows.insert(0, "<span style='color:#F5A623;'>Atención: solo hay 1 documento — agrega más para unir.</span>")
 
         self._proc_step.set_summary_html("<br>".join(rows))
+        self._sync_run_enabled()
+
+    def _sync_run_enabled(self) -> None:
+        if hasattr(self, "_proc_step"):
+            self._proc_step.set_run_enabled(len(self._pdf_paths) >= 2)
 
     # ------------------------------------------------------------------ #
     # Ejecutar
@@ -475,12 +465,14 @@ class UnirWindow(PipelineWindow):
             blank_between=self._blank_between_chk.isChecked(),
             add_bookmarks=self._bookmarks_chk.isChecked(),
         )
-        self._worker_thread = QThread(self)
-        self._worker.moveToThread(self._worker_thread)
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_error)
+        self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
+        self._worker_thread.finished.connect(self._worker_thread.deleteLater)
 
         self._proc_step.set_running(True)
         self._result_viewer.clear_results()
@@ -521,7 +513,7 @@ class UnirWindow(PipelineWindow):
     def _cleanup_thread(self) -> None:
         if self._worker_thread:
             self._worker_thread.quit()
-            self._worker_thread.wait()
+            self._worker_thread.wait(3000)
             self._worker_thread = None
         self._worker = None
 

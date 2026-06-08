@@ -15,17 +15,26 @@ from typing import List
 import fitz
 from PIL import Image
 from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QBrush, QColor, QIcon
+from PyQt6.QtGui import QPixmap, QImage, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QScrollArea,
+    QScrollArea, QSpinBox,
 )
 
+from ui.styles import COLORS as _COLORS
+
 from ui.common.save_utils import save_files_as_batch
-from ui.common.result_ui import ElidedLabel, configure_result_list
+from ui.common.result_ui import (
+    ElidedLabel,
+    ResultsStatBar,
+    configure_result_list,
+    format_file_size,
+    make_result_list_item,
+)
 from ui.common.file_dialogs import get_save_file_name
-from ui.common.icons import icon, set_button_icon
+from ui.common.icons import set_button_icon
+from ui.common.pdf_fullview_dialog import PdfFullViewDialog
 
 
 ZOOM_LEVELS = [0.50, 0.75, 1.00, 1.25, 1.50, 2.00, 2.50, 3.00]
@@ -86,6 +95,14 @@ class GenericPdfViewer(QWidget):
         title_lbl.setProperty("class", "CardTitle")
         lv.addWidget(title_lbl)
 
+        # Barra de estadísticas (auto-populated por set_results)
+        self._stat_bar = ResultsStatBar()
+        lv.addWidget(self._stat_bar)
+
+        # Barra de stats extra (set_extra_stats, usada por herramientas con métricas propias)
+        self._extra_stat_bar = ResultsStatBar()
+        lv.addWidget(self._extra_stat_bar)
+
         self.doc_list = QListWidget()
         configure_result_list(self.doc_list)
         self.doc_list.itemSelectionChanged.connect(self._on_doc_selected)
@@ -100,78 +117,96 @@ class GenericPdfViewer(QWidget):
         cv.setContentsMargins(14, 14, 14, 14)
         cv.setSpacing(12)
 
-        # Header
-        header = QVBoxLayout()
-        header.setSpacing(8)
+        # ── Fila 1: título + acciones de archivo ───────────────────────
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
 
         self.title_label = ElidedLabel("Selecciona un documento")
         self.title_label.setProperty("class", "CardTitle")
-        header.addWidget(self.title_label)
-
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-
-        # Controles zoom
-        self.zoom_out_btn = QPushButton()
-        self.zoom_out_btn.setProperty("class", "IconBtn")
-        self.zoom_out_btn.setToolTip("Reducir")
-        set_button_icon(self.zoom_out_btn, "minus", size=14, icon_only=True)
-        self.zoom_out_btn.clicked.connect(self._zoom_out)
-        self.zoom_out_btn.setEnabled(False)
-        actions.addWidget(self.zoom_out_btn)
-
-        self.zoom_label = QLabel("100%")
-        self.zoom_label.setStyleSheet("color: #9094A0; min-width: 40px;")
-        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        actions.addWidget(self.zoom_label)
-
-        self.zoom_in_btn = QPushButton()
-        self.zoom_in_btn.setProperty("class", "IconBtn")
-        self.zoom_in_btn.setToolTip("Aumentar")
-        set_button_icon(self.zoom_in_btn, "plus", size=14, icon_only=True)
-        self.zoom_in_btn.clicked.connect(self._zoom_in)
-        self.zoom_in_btn.setEnabled(False)
-        actions.addWidget(self.zoom_in_btn)
-
-        fit_btn = QPushButton()
-        fit_btn.setProperty("class", "IconBtn")
-        fit_btn.setToolTip("Ajustar al ancho")
-        set_button_icon(fit_btn, "maximize", size=14, icon_only=True)
-        fit_btn.clicked.connect(self._fit_width)
-        actions.addWidget(fit_btn)
-
-        actions.addStretch(1)
+        title_row.addWidget(self.title_label, 1)
 
         self.open_file_btn = QPushButton("Abrir PDF")
         self.open_file_btn.setProperty("class", "Ghost")
         set_button_icon(self.open_file_btn, "external-link")
         self.open_file_btn.clicked.connect(self._on_open_file)
         self.open_file_btn.setEnabled(False)
-        actions.addWidget(self.open_file_btn)
+        title_row.addWidget(self.open_file_btn)
+
+        self.fullview_btn = QPushButton("Vista completa")
+        self.fullview_btn.setProperty("class", "Ghost")
+        set_button_icon(self.fullview_btn, "maximize")
+        self.fullview_btn.setToolTip("Abrir en vista completa (modal inmersivo)")
+        self.fullview_btn.clicked.connect(self._on_fullview)
+        self.fullview_btn.setEnabled(False)
+        title_row.addWidget(self.fullview_btn)
 
         self.open_btn = QPushButton("Abrir carpeta")
         self.open_btn.setProperty("class", "Ghost")
         set_button_icon(self.open_btn, "folder-open")
         self.open_btn.clicked.connect(self._on_open_in_explorer)
         self.open_btn.setEnabled(False)
-        actions.addWidget(self.open_btn)
+        title_row.addWidget(self.open_btn)
 
         self.save_as_btn = QPushButton("Guardar como")
         self.save_as_btn.setProperty("class", "Ghost")
         set_button_icon(self.save_as_btn, "save")
         self.save_as_btn.clicked.connect(self._on_save_as)
         self.save_as_btn.setEnabled(False)
-        actions.addWidget(self.save_as_btn)
+        title_row.addWidget(self.save_as_btn)
 
         self.save_all_btn = QPushButton("Guardar todo")
         self.save_all_btn.setProperty("class", "Ghost")
         set_button_icon(self.save_all_btn, "download")
         self.save_all_btn.clicked.connect(self._on_save_all)
         self.save_all_btn.setEnabled(False)
-        actions.addWidget(self.save_all_btn)
+        title_row.addWidget(self.save_all_btn)
 
-        header.addLayout(actions)
-        cv.addLayout(header)
+        cv.addLayout(title_row)
+
+        # ── Fila 2: controles de vista (zoom + ajuste) ─────────────────
+        view_bar = QHBoxLayout()
+        view_bar.setSpacing(8)
+        view_bar.setContentsMargins(0, 0, 0, 0)
+
+        self.zoom_out_btn = QPushButton()
+        self.zoom_out_btn.setProperty("class", "IconBtn")
+        self.zoom_out_btn.setToolTip("Reducir zoom")
+        set_button_icon(self.zoom_out_btn, "minus", size=14, icon_only=True)
+        self.zoom_out_btn.clicked.connect(self._zoom_out)
+        self.zoom_out_btn.setEnabled(False)
+        view_bar.addWidget(self.zoom_out_btn)
+
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setStyleSheet("color: #9094A0; min-width: 40px;")
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        view_bar.addWidget(self.zoom_label)
+
+        self.zoom_in_btn = QPushButton()
+        self.zoom_in_btn.setProperty("class", "IconBtn")
+        self.zoom_in_btn.setToolTip("Aumentar zoom")
+        set_button_icon(self.zoom_in_btn, "plus", size=14, icon_only=True)
+        self.zoom_in_btn.clicked.connect(self._zoom_in)
+        self.zoom_in_btn.setEnabled(False)
+        view_bar.addWidget(self.zoom_in_btn)
+
+        self.fit_btn = QPushButton()
+        self.fit_btn.setProperty("class", "IconBtn")
+        self.fit_btn.setToolTip("Ajustar al ancho")
+        set_button_icon(self.fit_btn, "maximize", size=14, icon_only=True)
+        self.fit_btn.clicked.connect(self._fit_width)
+        self.fit_btn.setEnabled(False)
+        view_bar.addWidget(self.fit_btn)
+
+        self.fit_page_btn = QPushButton()
+        self.fit_page_btn.setProperty("class", "IconBtn")
+        self.fit_page_btn.setToolTip("Ajustar página completa")
+        set_button_icon(self.fit_page_btn, "file-text", size=14, icon_only=True)
+        self.fit_page_btn.clicked.connect(self._fit_page)
+        self.fit_page_btn.setEnabled(False)
+        view_bar.addWidget(self.fit_page_btn)
+
+        view_bar.addStretch(1)
+        cv.addLayout(view_bar)
 
         # Body: página miniatura + canvas
         body = QHBoxLayout()
@@ -205,10 +240,54 @@ class GenericPdfViewer(QWidget):
 
         cv.addLayout(body, 1)
 
-        self.meta_label = QLabel("")
+        # ── Footer: metadata (izquierda) + paginador (derecha) ────────
+        footer_bar = QHBoxLayout()
+        footer_bar.setSpacing(6)
+        footer_bar.setContentsMargins(0, 4, 0, 0)
+
+        self.meta_label = ElidedLabel("")
         self.meta_label.setProperty("class", "CardHint")
-        self.meta_label.setWordWrap(True)
-        cv.addWidget(self.meta_label)
+        footer_bar.addWidget(self.meta_label, 1)
+
+        self.prev_page_btn = QPushButton()
+        self.prev_page_btn.setProperty("class", "IconBtn")
+        self.prev_page_btn.setToolTip("Página anterior")
+        set_button_icon(self.prev_page_btn, "chevron-left", size=14, icon_only=True)
+        self.prev_page_btn.clicked.connect(self._prev_page)
+        self.prev_page_btn.setEnabled(False)
+        footer_bar.addWidget(self.prev_page_btn)
+
+        _pag_lbl = QLabel("Pág.")
+        _pag_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
+        footer_bar.addWidget(_pag_lbl)
+
+        self.page_spin = QSpinBox()
+        self.page_spin.setRange(1, 1)
+        self.page_spin.setEnabled(False)
+        self.page_spin.setFixedWidth(54)
+        self.page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_spin.setStyleSheet(
+            f"QSpinBox {{ background: {_COLORS['surface_3']}; color: {_COLORS['text']}; "
+            f"border: 1px solid {_COLORS['border']}; border-radius: 4px; "
+            f"padding: 1px 4px; font-size: 12px; }}"
+        )
+        self.page_spin.editingFinished.connect(self._on_page_jump)
+        footer_bar.addWidget(self.page_spin)
+
+        self._page_total_lbl = QLabel("/ —")
+        self._page_total_lbl.setStyleSheet("color: #9094A0; font-size: 12px; min-width: 32px;")
+        footer_bar.addWidget(self._page_total_lbl)
+
+        self.next_page_btn = QPushButton()
+        self.next_page_btn.setProperty("class", "IconBtn")
+        self.next_page_btn.setToolTip("Página siguiente")
+        set_button_icon(self.next_page_btn, "chevron-right", size=14, icon_only=True)
+        self.next_page_btn.clicked.connect(self._next_page)
+        self.next_page_btn.setEnabled(False)
+        footer_bar.addWidget(self.next_page_btn)
+
+        cv.addLayout(footer_bar)
 
         layout.addWidget(center, 1)
 
@@ -223,17 +302,42 @@ class GenericPdfViewer(QWidget):
         self.doc_list.clear()
         for r in results:
             out = getattr(r, "output_path", "") or ""
-            name = Path(out).name if out else "(error)"
-            item = QListWidgetItem(name)
-            item.setToolTip(out or name)
-            if not getattr(r, "success", False):
-                item.setForeground(QBrush(QColor("#E5484D")))
-                item.setIcon(icon("warning", "#E5484D", 16))
+            item = make_result_list_item(
+                out,
+                success=getattr(r, "success", False),
+                error=getattr(r, "error", "") or "",
+            )
             self.doc_list.addItem(item)
         if results:
             self.doc_list.setCurrentRow(0)
+            self._refresh_auto_stats(results)
         else:
+            self._stat_bar.setVisible(False)
             self._clear_view()
+
+    def set_extra_stats(self, stats: list[dict]) -> None:
+        """Muestra una barra de stats específica de la herramienta (ej: compresión).
+
+        Cada dict: {"value": int|str, "label": str, "color": str?}
+        Llamar después de set_results() para que quede debajo de los stats base.
+        """
+        self._extra_stat_bar.set_stats(stats)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(60, self._extra_stat_bar.animate)
+
+    def _refresh_auto_stats(self, results: list) -> None:
+        from ui.styles import COLORS as _C
+        ok = sum(1 for r in results if getattr(r, "success", False))
+        errors = len(results) - ok
+        stats: list[dict] = [
+            {"value": len(results), "label": "archivos", "color": _C["text"]},
+            {"value": ok, "label": "correctos", "color": _C["success"]},
+        ]
+        if errors > 0:
+            stats.append({"value": errors, "label": "errores", "color": _C["danger"]})
+        self._stat_bar.set_stats(stats)
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(30, self._stat_bar.animate)
 
     def clear_results(self) -> None:
         self._close_doc()
@@ -241,6 +345,8 @@ class GenericPdfViewer(QWidget):
         self._source_dirs = {}
         self._current_result = None
         self.doc_list.clear()
+        self._stat_bar.setVisible(False)
+        self._extra_stat_bar.setVisible(False)
         self._clear_view()
 
     def set_source_dirs(self, dirs: list) -> None:
@@ -317,14 +423,41 @@ class GenericPdfViewer(QWidget):
         self.open_file_btn.setEnabled(False)
         self.save_as_btn.setEnabled(False)
         self.save_all_btn.setEnabled(False)
+        self._update_page_status()
 
     def _set_zoom_enabled(self, enabled: bool) -> None:
         self.zoom_in_btn.setEnabled(enabled)
         self.zoom_out_btn.setEnabled(enabled)
+        self.fit_btn.setEnabled(enabled)
+        self.fit_page_btn.setEnabled(enabled)
         self.open_btn.setEnabled(enabled)
         self.open_file_btn.setEnabled(enabled)
+        self.fullview_btn.setEnabled(enabled)
         self.save_as_btn.setEnabled(enabled)
         self.save_all_btn.setEnabled(self._has_saveable_results())
+        self._update_page_status()
+
+    def _update_page_status(self) -> None:
+        if self._current_doc is None or self._current_doc.page_count <= 0:
+            self.page_spin.blockSignals(True)
+            self.page_spin.setRange(1, 1)
+            self.page_spin.setValue(1)
+            self.page_spin.blockSignals(False)
+            self.page_spin.setEnabled(False)
+            self._page_total_lbl.setText("/ —")
+            self.prev_page_btn.setEnabled(False)
+            self.next_page_btn.setEnabled(False)
+            return
+        page_count = self._current_doc.page_count
+        page = min(max(self._current_page, 0), page_count - 1)
+        self.page_spin.blockSignals(True)
+        self.page_spin.setRange(1, page_count)
+        self.page_spin.setValue(page + 1)
+        self.page_spin.blockSignals(False)
+        self.page_spin.setEnabled(page_count > 1)
+        self._page_total_lbl.setText(f"/ {page_count}")
+        self.prev_page_btn.setEnabled(page > 0)
+        self.next_page_btn.setEnabled(page < page_count - 1)
 
     def _has_saveable_results(self) -> bool:
         return bool(self._saveable_paths())
@@ -420,11 +553,16 @@ class GenericPdfViewer(QWidget):
         else:
             self.canvas.clear()
 
-        meta = f"{self._current_doc.page_count} páginas · {Path(out_path).name}"
+        size = format_file_size(out_path)
+        meta_parts = [f"{self._current_doc.page_count} páginas"]
+        if size:
+            meta_parts.append(size)
+        meta_parts.append(Path(out_path).name)
         extra_meta = getattr(result, "meta_text", "")
         if extra_meta:
-            meta += f" · {extra_meta}"
-        self.meta_label.setText(meta)
+            meta_parts.append(extra_meta)
+        self.meta_label.setText(" · ".join(meta_parts))
+        self._update_page_status()
 
     def _on_page_selected(self) -> None:
         if self._current_doc is None:
@@ -434,6 +572,7 @@ class GenericPdfViewer(QWidget):
             return
         if row >= self._current_doc.page_count:
             self._current_page = 0
+            self._update_page_status()
             return
         self._current_page = row
         self._render_current()
@@ -496,6 +635,7 @@ class GenericPdfViewer(QWidget):
         self.canvas.setFixedSize(pix.size())
         zoom = ZOOM_LEVELS[self._zoom_index]
         self.zoom_label.setText(f"{int(zoom * 100)}%")
+        self._update_page_status()
 
     def _render(self, page_idx: int, dpi: float) -> QPixmap:
         page = self._current_doc[page_idx]
@@ -525,6 +665,30 @@ class GenericPdfViewer(QWidget):
         self._zoom_index = 2
         self._render_current()
 
+    def _fit_page(self) -> None:
+        self._fit_mode = "page"
+        self._zoom_index = 2
+        self._render_current()
+
+    def _on_page_jump(self) -> None:
+        if self._current_doc is None:
+            return
+        target = max(0, min(self.page_spin.value() - 1, self._current_doc.page_count - 1))
+        if target != self._current_page:
+            self.page_list.setCurrentRow(target)
+
+    def _prev_page(self) -> None:
+        if self._current_doc is None:
+            return
+        self.page_list.setCurrentRow(max(0, self._current_page - 1))
+
+    def _next_page(self) -> None:
+        if self._current_doc is None:
+            return
+        self.page_list.setCurrentRow(
+            min(self._current_doc.page_count - 1, self._current_page + 1)
+        )
+
     def _on_open_file(self) -> None:
         if self._current_result:
             out = getattr(self._current_result, "output_path", "")
@@ -532,6 +696,13 @@ class GenericPdfViewer(QWidget):
                 from PyQt6.QtCore import QUrl
                 from PyQt6.QtGui import QDesktopServices
                 QDesktopServices.openUrl(QUrl.fromLocalFile(out))
+
+    def _on_fullview(self) -> None:
+        row = self.doc_list.currentRow()
+        if row < 0 or not self._results:
+            return
+        dlg = PdfFullViewDialog(self, results=self._results, current_index=row)
+        dlg.exec()
 
     def _on_open_in_explorer(self) -> None:
         if self._current_result:

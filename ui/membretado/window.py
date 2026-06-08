@@ -34,8 +34,7 @@ from shell.context import ShellContext
 from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.slider import SliderWithValue
-from ui.common.tool_scaffold import PipelineWindow
-from ui.common.send_to_tool import SendToToolButton
+from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.documents_step import DocumentsCard
 from ui.common.process_step import ProcessStep
@@ -43,6 +42,103 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import ask_question, show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
+
+
+# ====================================================================== #
+#  Cargador asíncrono de membrete (preview + thumbnail en hilo de fondo)
+# ====================================================================== #
+
+class _MembretePageLoader(QObject):
+    """Carga un PDF de membrete: valida, renderiza thumbnail y preview,
+    detecta márgenes.  Emite QImage (nunca QPixmap) para ser convertido a
+    QPixmap únicamente en el hilo GUI.
+
+    Se usa junto con _MembretaLoadThread que llama run() en background.
+    El objeto NO se mueve al hilo (moveToThread) — las señales cruzan al
+    hilo GUI vía QueuedConnection automáticamente.
+    """
+
+    # path, source_name, QImage_thumb, QImage_prev, pw, ph, page_count, MembreteMargins
+    loaded = pyqtSignal(str, str, object, object, float, float, int, object)
+    error = pyqtSignal(str, str)  # path, error_msg
+
+    def __init__(self, path: str, source_name: str) -> None:
+        super().__init__()
+        self._path = path
+        self._source_name = source_name
+
+    def run(self) -> None:
+        doc = None
+        try:
+            doc = fitz.open(self._path)
+            if doc.is_encrypted:
+                self.error.emit(self._path, "El PDF esta protegido o cifrado.")
+                return
+            if doc.page_count <= 0:
+                self.error.emit(self._path, "El PDF no tiene paginas.")
+                return
+            page_count = int(doc.page_count)
+            page = doc[0]
+            pw = page.rect.width
+            ph = page.rect.height
+
+            # Thumbnail 0.4× (~30 ms)
+            mat = fitz.Matrix(0.4, 0.4)
+            pm = page.get_pixmap(matrix=mat, alpha=False)
+            img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
+            data = img.tobytes("raw", "RGBA")
+            qimg_thumb = QImage(
+                data, img.width, img.height, QImage.Format.Format_RGBA8888
+            ).copy()
+
+            # Preview 1.5× (puede ser 200–500 ms en PDFs complejos)
+            mat_prev = fitz.Matrix(1.5, 1.5)
+            pm_prev = page.get_pixmap(matrix=mat_prev, alpha=False)
+            img_prev = Image.frombytes(
+                "RGB", (pm_prev.width, pm_prev.height), pm_prev.samples
+            ).convert("RGBA")
+            data_prev = img_prev.tobytes("raw", "RGBA")
+            qimg_prev = QImage(
+                data_prev, img_prev.width, img_prev.height, QImage.Format.Format_RGBA8888
+            ).copy()
+
+        except Exception as e:
+            self.error.emit(self._path, str(e))
+            return
+        finally:
+            if doc is not None:
+                try:
+                    doc.close()
+                except Exception:
+                    pass
+
+        # detect_margins abre el PDF de nuevo (rápido pero bloquea si se hace en GUI)
+        margins = detect_margins(self._path)
+
+        self.loaded.emit(
+            self._path, self._source_name,
+            qimg_thumb, qimg_prev,
+            pw, ph, page_count,
+            margins,
+        )
+
+
+class _MembretaLoadThread(QThread):
+    """Hilo que ejecuta _MembretePageLoader.run() en background.
+
+    Usar subclase de QThread en vez de moveToThread+started.connect evita
+    el problema de PyQt6 donde thread.started no dispara el slot cuando el
+    loader está en un QThread con padre (QThread(parent)).
+    El loader permanece en el hilo GUI: sus señales llegarán al slot receptor
+    vía QueuedConnection automáticamente.
+    """
+
+    def __init__(self, loader: _MembretePageLoader, parent=None) -> None:
+        super().__init__(parent)
+        self._loader = loader
+
+    def run(self) -> None:
+        self._loader.run()
 
 
 # ====================================================================== #
@@ -252,8 +348,12 @@ class MembretadoWindow(PipelineWindow):
         self._conv_thread: Optional[QThread] = None
         self._conv_dlg = None
         self._letterhead_library: list[SavedLetterhead] = []
+        # Carga asíncrona de membrete
+        self._lh_load_thread: Optional[QThread] = None
+        self._lh_loading_path: Optional[str] = None  # guard contra resultados obsoletos
 
         self._build_pages()
+        self._build_action_buttons()
         self._refresh_letterhead_library()
         self._switch_section(0)
         self.setAcceptDrops(True)
@@ -401,17 +501,6 @@ class MembretadoWindow(PipelineWindow):
 
         outer.addLayout(body, 1)
 
-        nav = QHBoxLayout()
-        nav.addStretch()
-        self._membrete_next_btn = QPushButton("Continuar")
-        self._membrete_next_btn.setProperty("class", "Primary")
-        self._membrete_next_btn.setMinimumWidth(160)
-        self._membrete_next_btn.setEnabled(False)
-        set_button_icon(self._membrete_next_btn, "arrow-right")
-        self._membrete_next_btn.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(self._membrete_next_btn)
-        outer.addLayout(nav)
-
         return page
 
     # ------------------------------------------------------------------ #
@@ -437,21 +526,6 @@ class MembretadoWindow(PipelineWindow):
             thumb_size=(64, 82),
         )
         outer.addWidget(self._docs_card, 1)
-
-        nav = QHBoxLayout()
-        back = QPushButton("Membrete")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(0))
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
 
         return page
 
@@ -544,21 +618,6 @@ class MembretadoWindow(PipelineWindow):
         body.addLayout(right_col, 1)
         outer.addLayout(body, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Documentos")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(1))
-        nav.addWidget(back)
-        nav.addStretch()
-        nxt = QPushButton("Continuar")
-        nxt.setProperty("class", "Primary")
-        nxt.setMinimumWidth(160)
-        set_button_icon(nxt, "arrow-right")
-        nxt.clicked.connect(lambda: self._switch_section(3))
-        nav.addWidget(nxt)
-        outer.addLayout(nav)
-
         return page
 
     # ------------------------------------------------------------------ #
@@ -581,18 +640,8 @@ class MembretadoWindow(PipelineWindow):
             run_label="Membretar documentos",
             show_output_dir=False,
         )
-        self._proc_step.run_requested.connect(self._on_run)
-        self._proc_step.cancel_requested.connect(self._on_cancel)
         self._proc_step.watch_documents(self._docs_card)
         outer.addWidget(self._proc_step, 1)
-
-        nav = QHBoxLayout()
-        back = QPushButton("Márgenes")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(2))
-        nav.addWidget(back)
-        outer.addLayout(nav)
 
         return page
 
@@ -616,32 +665,57 @@ class MembretadoWindow(PipelineWindow):
         self._results_viewer.openInExplorer.connect(self._open_in_explorer)
         outer.addWidget(self._results_viewer, 1)
 
-        nav = QHBoxLayout()
-        back = QPushButton("Procesar")
-        back.setProperty("class", "Ghost")
-        set_button_icon(back, "arrow-left")
-        back.clicked.connect(lambda: self._switch_section(3))
-        nav.addWidget(back)
-        nav.addStretch()
+        return page
+
+    # ------------------------------------------------------------------ #
+    # Action buttons (navbar footer)
+    # ------------------------------------------------------------------ #
+
+    def _build_action_buttons(self) -> None:
+        from ui.common.send_to_tool import SendToToolButton
+
+        self._run_btn = QPushButton("Membretar documentos")
+        self._run_btn.setProperty("class", "Primary")
+        self._run_btn.setFixedHeight(36)
+        self._run_btn.setMinimumWidth(160)
+        set_button_icon(self._run_btn, "play")
+        self._run_btn.setEnabled(False)
+        self._run_btn.clicked.connect(self._on_run)
+
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setProperty("class", "Danger")
+        self._cancel_btn.setFixedHeight(36)
+        set_button_icon(self._cancel_btn, "square", color="#E5484D")
+        self._cancel_btn.setEnabled(False)
+        self._cancel_btn.clicked.connect(self._on_cancel)
+
+        self._restart_btn = QPushButton("Nueva sesion")
+        self._restart_btn.setProperty("class", "Primary")
+        self._restart_btn.setFixedHeight(36)
+        self._restart_btn.setMinimumWidth(160)
+        set_button_icon(self._restart_btn, "refresh-cw")
+        self._restart_btn.clicked.connect(self._reset_session)
 
         self._send_btn = SendToToolButton(self.ctx, "membretado")
-        nav.addWidget(self._send_btn)
 
-        restart_btn = QPushButton("Nueva sesión")
-        restart_btn.setProperty("class", "Primary")
-        restart_btn.setMinimumWidth(180)
-        set_button_icon(restart_btn, "refresh-cw")
-        restart_btn.clicked.connect(self._reset_session)
-        nav.addWidget(restart_btn)
-        outer.addLayout(nav)
+        self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
+        self._proc_step.running_changed.connect(self._on_proc_running)
 
-        return page
+    def _on_proc_running(self, running: bool) -> None:
+        if running:
+            self._run_btn.setEnabled(False)
+        self._cancel_btn.setEnabled(running)
+        self._apply_primary_glows()
 
     # ------------------------------------------------------------------ #
     # Hooks de navegación
     # ------------------------------------------------------------------ #
 
     def _on_section_activated(self, idx: int) -> None:
+        if idx == 0 and hasattr(self, "_nav_next_btn"):
+            self._nav_next_btn.setEnabled(bool(self._lh_path))
+        elif hasattr(self, "_nav_next_btn"):
+            self._nav_next_btn.setEnabled(True)
         if idx == 2:
             self._sync_preview_pixmap()
         elif idx == 3:
@@ -694,51 +768,53 @@ class MembretadoWindow(PipelineWindow):
             show_info(self, "Archivo no compatible", "Selecciona un PDF, DOC o DOCX.")
 
     def _load_membrete(self, path: str, *, source_name: str = "") -> None:
-        doc = None
-        try:
-            doc = fitz.open(path)
-            if doc.is_encrypted:
-                raise RuntimeError("El PDF esta protegido o cifrado.")
-            if doc.page_count <= 0:
-                raise RuntimeError("El PDF no tiene paginas.")
-            page_count = int(doc.page_count)
-            page = doc[0]
-            pw = page.rect.width
-            ph = page.rect.height
+        """Inicia carga asíncrona del membrete (thumbnail + preview + márgenes)."""
+        self._lh_loading_path = path  # guard: resultados de cargas anteriores serán ignorados
 
-            # Miniatura
-            mat = fitz.Matrix(0.4, 0.4)
-            pm = page.get_pixmap(matrix=mat, alpha=False)
-            img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
-            data = img.tobytes("raw", "RGBA")
-            qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-            thumb = QPixmap.fromImage(qimg.copy()).scaled(
-                164, 214,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+        # Estado de "cargando" inmediato en la UI
+        self._lh_thumb.setText("Cargando...")
+        self._lh_thumb.setPixmap(QPixmap())
+        self._lh_thumb.setStyleSheet(
+            "background: #16161A; border: 1px dashed #33333B; "
+            "border-radius: 8px; color: #6B6F7A; font-size: 11px;"
+        )
 
-            # Pixmap de mayor resolución para el preview de márgenes
-            mat_prev = fitz.Matrix(1.5, 1.5)
-            pm_prev = page.get_pixmap(matrix=mat_prev, alpha=False)
-            img_prev = Image.frombytes("RGB", (pm_prev.width, pm_prev.height), pm_prev.samples).convert("RGBA")
-            data_prev = img_prev.tobytes("raw", "RGBA")
-            qimg_prev = QImage(data_prev, img_prev.width, img_prev.height, QImage.Format.Format_RGBA8888)
-            self._lh_preview_pixmap = QPixmap.fromImage(qimg_prev.copy())
-            self._lh_page_w_pt = pw
-            self._lh_page_h_pt = ph
-        except Exception as e:
-            show_warning(self, "Error al abrir membrete", str(e))
-            return
-        finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
+        loader = _MembretePageLoader(path, source_name or Path(path).name)
+        thread = _MembretaLoadThread(loader, self)
+        loader.loaded.connect(self._on_membrete_loaded)
+        loader.error.connect(self._on_membrete_load_error)
+        thread.finished.connect(loader.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        self._lh_load_thread = thread  # mantiene referencia mientras carga
+        thread.start()
 
+    def _on_membrete_loaded(
+        self,
+        path: str,
+        source_name: str,
+        qimg_thumb: object,
+        qimg_prev: object,
+        pw: float,
+        ph: float,
+        page_count: int,
+        margins: object,
+    ) -> None:
+        """Slot GUI: recibe QImages del worker y convierte a QPixmap aquí."""
+        if path != self._lh_loading_path:
+            return  # resultado obsoleto de carga anterior
+
+        # Conversión QImage → QPixmap exclusivamente en hilo GUI
+        thumb = QPixmap.fromImage(qimg_thumb).scaled(
+            164, 214,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._lh_preview_pixmap = QPixmap.fromImage(qimg_prev)
+        self._lh_page_w_pt = pw
+        self._lh_page_h_pt = ph
         self._lh_path = path
-        self._lh_source_name = source_name or Path(path).name
+        self._lh_source_name = source_name
+
         self._lh_thumb.setPixmap(thumb)
         self._lh_thumb.setStyleSheet(
             "background: #111114; border: 1px solid #26262C; border-radius: 8px;"
@@ -746,17 +822,32 @@ class MembretadoWindow(PipelineWindow):
         self._lh_name_lbl.setText(self._lh_source_name)
         self._lh_pages_lbl.setText(
             f"{page_count} pagina{'s' if page_count != 1 else ''} · "
-            f"{self._lh_page_w_pt:.0f} x {self._lh_page_h_pt:.0f} pt"
+            f"{pw:.0f} x {ph:.0f} pt"
         )
 
-        # Detección automática de márgenes
-        self._margins = detect_margins(path)
+        self._margins = margins
         self._lh_margins_lbl.setText(
-            f"Márgenes detectados: sup. {self._margins.top_pt:.0f} pt  "
-            f"inf. {self._margins.bottom_pt:.0f} pt"
+            f"Márgenes detectados: sup. {margins.top_pt:.0f} pt  "
+            f"inf. {margins.bottom_pt:.0f} pt"
         )
         self._apply_margins_to_sliders(self._margins)
         self._update_library_actions()
+
+    def _on_membrete_load_error(self, path: str, msg: str) -> None:
+        """Slot GUI: maneja errores de carga del membrete."""
+        if path != self._lh_loading_path:
+            return  # error obsoleto de carga anterior
+        # Limpia estado
+        self._lh_path = None
+        self._lh_preview_pixmap = None
+        self._lh_thumb.setText("Sin membrete")
+        self._lh_thumb.setPixmap(QPixmap())
+        self._lh_thumb.setStyleSheet(
+            "background: #16161A; border: 1px dashed #33333B; "
+            "border-radius: 8px; color: #6B6F7A; font-size: 11px;"
+        )
+        self._update_library_actions()
+        show_warning(self, "Error al abrir membrete", msg)
 
     def _refresh_letterhead_library(self) -> None:
         if not hasattr(self, "_library_list"):
@@ -804,8 +895,8 @@ class MembretadoWindow(PipelineWindow):
             self._remove_library_btn.setEnabled(selected)
         if hasattr(self, "_save_library_btn"):
             self._save_library_btn.setEnabled(bool(self._lh_path))
-        if hasattr(self, "_membrete_next_btn"):
-            self._membrete_next_btn.setEnabled(bool(self._lh_path))
+        if hasattr(self, "_nav_next_btn") and self.stack.currentIndex() == 0:
+            self._nav_next_btn.setEnabled(bool(self._lh_path))
 
     def _on_use_library_membrete(self) -> None:
         entry = self._selected_library_entry()
@@ -885,9 +976,7 @@ class MembretadoWindow(PipelineWindow):
             paths,
             make_run_dir("converted"),
         )
-        thread = QThread(self)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
+        thread = RunnerThread(worker.run, self)
         worker.progress.connect(self._conv_dlg.on_progress)
         worker.finished.connect(self._conv_dlg.on_finished)
         worker.error.connect(self._conv_dlg.on_error)
@@ -1033,15 +1122,14 @@ class MembretadoWindow(PipelineWindow):
         self._proc_step.set_running(True)
         self._proc_step.set_progress(0, "Iniciando…")
 
-        self._worker_thread = QThread(self)
         self._worker = MembreteWorker(jobs, self._lh_path, margins)
-        self._worker.moveToThread(self._worker_thread)
-
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished.connect(self._on_finished)
         self._worker.error.connect(self._on_worker_error)
         self._worker.finished.connect(self._worker_thread.quit)
+        self._worker.error.connect(self._worker_thread.quit)
+        self._worker_thread.finished.connect(self._worker.deleteLater)
         self._worker_thread.finished.connect(self._worker_thread.deleteLater)
 
         self._worker_thread.start()
@@ -1075,12 +1163,9 @@ class MembretadoWindow(PipelineWindow):
     def _on_worker_error(self, msg: str) -> None:
         show_error(self, "Error", msg)
         self._proc_step.set_running(False)
-        if self._worker_thread:
-            self._worker_thread.quit()
-            self._worker_thread.wait(2000)
-            self._worker_thread.deleteLater()
-            self._worker_thread = None
-            self._worker = None
+        # thread.quit + deleteLater happen automatically via signal connections in _on_run
+        self._worker_thread = None
+        self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
         from PyQt6.QtCore import QUrl

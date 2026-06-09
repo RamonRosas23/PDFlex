@@ -378,6 +378,18 @@ class DocLane(QFrame):
     def set_before_mutation_cb(self, cb: Callable[[], None]) -> None:
         self._before_mutation_cb = cb
 
+    def teardown(self) -> None:
+        """Desconecta la señal del worker antes de que Qt destruya este widget.
+
+        Debe llamarse justo antes de deleteLater(). Sin esto, thumb_ready puede
+        dispararse después de que el C++ _PageStrip sea destruido, causando
+        RuntimeError: wrapped C/C++ object of type _PageStrip has been deleted.
+        """
+        try:
+            self._worker.thumb_ready.disconnect(self._on_thumb_ready)
+        except (RuntimeError, TypeError):
+            pass  # ya desconectado o nunca conectado
+
     def _record_before_mutation(self) -> None:
         if self._before_mutation_cb:
             self._before_mutation_cb()
@@ -859,14 +871,22 @@ class DocLane(QFrame):
         rot = f" ↺{ref.rotation_deg}°" if ref.rotation_deg % 360 else ""
         return f"Pág {ref.page_index + 1}{rot}"
 
-    def _on_thumb_ready(self, lane_id: str, page_id: str, pixmap: object) -> None:
+    def _on_thumb_ready(self, lane_id: str, page_id: str, qimage: object) -> None:
         if lane_id != self._lane_id:
             return
-        for i in range(self._list.count()):
-            item = self._list.item(i)
-            if item and item.data(Qt.ItemDataRole.UserRole).page_id == page_id:
-                item.setIcon(QIcon(pixmap))
-                break
+        # Convert QImage → QPixmap in GUI thread (QPixmap cannot be created in worker threads)
+        try:
+            pix = QPixmap.fromImage(qimage)
+            for i in range(self._list.count()):
+                item = self._list.item(i)
+                if item and item.data(Qt.ItemDataRole.UserRole).page_id == page_id:
+                    item.setIcon(QIcon(pix))
+                    break
+        except RuntimeError:
+            # El C++ _PageStrip fue destruido antes de que llegara la miniatura.
+            # Sucede cuando deleteLater() corre antes del teardown() (race condition
+            # entre el hilo del worker y el event loop). Se ignora con seguridad.
+            pass
 
     def _remove_selected(self) -> None:
         self._record_before_mutation()

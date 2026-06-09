@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from ui.common.tool_scaffold import RunnerThread
 from PyQt6.QtWidgets import (
     QFrame, QHBoxLayout, QPushButton, QScrollArea, QSizePolicy,
     QVBoxLayout, QWidget,
@@ -35,9 +36,7 @@ class LaneContainer(QWidget):
 
         self._cache = ThumbnailCache(max_size=300)
         self._worker = ThumbnailWorker(self._cache)
-        self._thumb_thread = QThread(self)
-        self._worker.moveToThread(self._thumb_thread)
-        self._thumb_thread.started.connect(self._worker.run)
+        self._thumb_thread = RunnerThread(self._worker.run, self)
         self._thumb_thread.start()
 
         self._build()
@@ -115,6 +114,7 @@ class LaneContainer(QWidget):
         self._take_snapshot()
         lane = self._lanes.pop(idx)
         self._container_layout.removeWidget(lane)
+        lane.teardown()
         lane.deleteLater()
         self._refresh_siblings()
         self.layout_changed.emit()
@@ -156,6 +156,7 @@ class LaneContainer(QWidget):
         self._take_snapshot()
         for lane in list(self._lanes):
             self._container_layout.removeWidget(lane)
+            lane.teardown()
             lane.deleteLater()
         self._lanes.clear()
         self.layout_changed.emit()
@@ -188,6 +189,7 @@ class LaneContainer(QWidget):
         for lane in list(self._lanes):
             lane.set_before_mutation_cb(None)
             self._container_layout.removeWidget(lane)
+            lane.teardown()
             lane.deleteLater()
         self._lanes.clear()
 

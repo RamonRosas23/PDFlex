@@ -5,8 +5,12 @@ Para cada documento de entrada, crea un nuevo PDF donde cada página es:
   2. El contenido de la página original superpuesto dentro de la zona segura,
      escalado con relación de aspecto conservada y centrado.
 
-La superposición se realiza con fitz.Page.show_pdf_page(), que copia el
-contenido vectorial sin reprocesarlo (calidad perfecta, sin rasterización).
+La superposición utiliza _place_page():
+  - rotation=0: fitz.Page.show_pdf_page() — copia vectorial, calidad perfecta.
+  - rotation≠0: get_pixmap() + insert_image() a _RENDER_DPI — necesario porque
+    show_pdf_page() en PyMuPDF ≥1.24 ignora /Rotate al calcular la posición del
+    contenido, produciendo overflow y transposición de dimensiones en páginas con
+    /Rotate=90/180/270 (p.ej. PDFs escaneados con orientación landscape+rotación).
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -40,6 +44,16 @@ class MembreteJobResult:
 
 
 # ====================================================================== #
+#  Constantes
+# ====================================================================== #
+
+# DPI para rasterizar páginas con /Rotate≠0 vía get_pixmap().
+# 150 DPI produce ~1275×2008 px para A4 portrait — adecuado para impresión
+# de oficina y documentos legales, manteniendo tamaños de archivo razonables.
+_RENDER_DPI: float = 150.0
+
+
+# ====================================================================== #
 #  Motor
 # ====================================================================== #
 
@@ -60,7 +74,7 @@ class MembreteEngine:
             raise RuntimeError(f"No se pudo abrir el membrete: {e}")
 
         lh_page = lh_doc[0]
-        lh_w = lh_page.rect.width
+        lh_w = lh_page.rect.width   # dimensiones de DISPLAY (rotation-aware)
         lh_h = lh_page.rect.height
 
         # Zona segura (donde va el contenido del documento)
@@ -123,12 +137,12 @@ class MembreteEngine:
                 new_page = out.new_page(width=lh_w, height=lh_h)
 
                 # 1. Fondo: copiar membrete completo
-                new_page.show_pdf_page(new_page.rect, lh_doc, 0)
+                _place_page(new_page, lh_doc, 0, new_page.rect)
 
                 # 2. Superponer página del documento en la zona segura
                 src_page = src[page_idx]
                 target = _fit_rect(safe, src_page.rect.width, src_page.rect.height)
-                new_page.show_pdf_page(target, src, page_idx)
+                _place_page(new_page, src, page_idx, target)
 
             out_path = Path(job.output_path)
             out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,7 +178,7 @@ class MembreteEngine:
 
 
 # ====================================================================== #
-#  Utilidades geométricas
+#  Utilidades geométricas y de renderizado
 # ====================================================================== #
 
 def _fit_rect(container: fitz.Rect, src_w: float, src_h: float) -> fitz.Rect:
@@ -180,6 +194,44 @@ def _fit_rect(container: fitz.Rect, src_w: float, src_h: float) -> fitz.Rect:
     x0 = container.x0 + (cw - fw) / 2
     y0 = container.y0 + (ch - fh) / 2
     return fitz.Rect(x0, y0, x0 + fw, y0 + fh)
+
+
+def _place_page(
+    dest_page: fitz.Page,
+    src_doc: fitz.Document,
+    page_idx: int,
+    target: fitz.Rect,
+    render_dpi: float = _RENDER_DPI,
+) -> None:
+    """Coloca src_doc[page_idx] en dest_page dentro de target.
+
+    Para páginas con /Rotate=0 usa show_pdf_page (vectorial, calidad máxima).
+    Para páginas con /Rotate≠0 renderiza a pixmap vía get_pixmap() — que sí
+    aplica /Rotate correctamente — e inserta la imagen con insert_image().
+
+    Razón del desvío para rotation≠0:
+      show_pdf_page() en PyMuPDF calcula el scale usando page.rect
+      (rotation-aware) pero aplica ese scale sobre las coordenadas del
+      MediaBox (pre-rotación). Para /Rotate=90/270 esto produce dimensiones
+      transpuestas con overflow; para /Rotate=180 el contenido queda al revés.
+      get_pixmap() aplica /Rotate correctamente: el pixmap resultante siempre
+      tiene las dimensiones de page.rect (display), independientemente del
+      MediaBox subyacente.
+    """
+    src_page = src_doc[page_idx]
+    if src_page.rotation == 0:
+        dest_page.show_pdf_page(target, src_doc, page_idx)
+        return
+
+    # Páginas rotadas: renderizar con orientación correcta.
+    # El pixmap tiene dimensiones page.rect (display), no del MediaBox.
+    scale = render_dpi / 72.0
+    mat = fitz.Matrix(scale, scale)
+    pm = src_page.get_pixmap(matrix=mat, alpha=False)
+    try:
+        dest_page.insert_image(target, pixmap=pm)
+    finally:
+        del pm  # liberar memoria inmediatamente
 
 
 class _CancelledError(Exception):

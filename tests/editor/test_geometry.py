@@ -6,19 +6,17 @@ from core.editor.geometry import PageGeometry, display_rect_to_insertion, mm_to_
 
 
 @pytest.mark.parametrize("rotation", [0, 90, 180, 270])
-def test_display_to_insertion_roundtrip(make_pdf, rotation):
-    """rect_display → inserción → (rotation_matrix) → rect_display: identidad ≤1e-3 pt."""
+def test_display_to_insertion_is_identity_on_pymupdf_127(make_pdf, rotation):
+    """Contrato empírico PyMuPDF ≥1.27: las APIs de inserción operan en espacio
+    display → la conversión es identidad EN TODA rotación. La garantía real de
+    posición la da la prueba reina (test_export_roundtrip.py); este test fija
+    el contrato del chokepoint."""
     path = make_pdf(rotations=[rotation])
     with fitz.open(path) as doc:
-        page = doc[0]
-        geo = PageGeometry.from_page(0, page)
+        geo = PageGeometry.from_page(0, doc[0])
         rect_display = fitz.Rect(100, 150, 300, 250)
         rect_ins = display_rect_to_insertion(rect_display, geo)
-        # Volver al espacio display con la matriz de rotación capturada
-        back = rect_ins * fitz.Matrix(*geo.rotation_matrix)
-        back.normalize()
-        for got, want in zip(tuple(back), tuple(rect_display)):
-            assert got == pytest.approx(want, abs=1e-3)
+        assert tuple(rect_ins) == pytest.approx(tuple(rect_display), abs=1e-9)
 
 
 def test_rotation_0_is_identity(make_pdf):

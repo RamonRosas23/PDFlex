@@ -54,11 +54,21 @@ class PageGeometry:
 
 
 def display_rect_to_insertion(rect: fitz.Rect, geo: PageGeometry) -> fitz.Rect:
-    """Convierte un rect en espacio display al espacio que esperan insert_*()."""
-    out = fitz.Rect(rect) * fitz.Matrix(*geo.derotation_matrix)
+    """Convierte un rect en espacio display al espacio que esperan insert_*()/draw_*().
+
+    HALLAZGO EMPÍRICO (sonda 2026-06-09, PyMuPDF 1.27.2.3): las APIs de
+    inserción y dibujo de Page interpretan los rects EN ESPACIO DISPLAY
+    (rotación ya aplicada) — la conversión es identidad. La receta antigua
+    "rect * derotation_matrix + rotate=page.rotation" produce posiciones
+    transpuestas en 1.27 (verificado por tests/editor/test_export_roundtrip.py).
+
+    La función se conserva como punto único de control: si una versión futura
+    de PyMuPDF cambia el contrato, la prueba reina falla y el fix vive AQUÍ.
+    """
+    out = fitz.Rect(rect)
     out.normalize()
     return out
 
 
 def display_point_to_insertion(pt: fitz.Point, geo: PageGeometry) -> fitz.Point:
-    return fitz.Point(pt) * fitz.Matrix(*geo.derotation_matrix)
+    return fitz.Point(pt)

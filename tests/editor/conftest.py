@@ -35,3 +35,22 @@ def make_pdf(tmp_path):
         return path
 
     return _make
+
+
+@pytest.fixture(scope="session")
+def probe_png() -> bytes:
+    """PNG 80x80 asimétrico: cuadrante sup-izq ROJO, resto AZUL.
+
+    Permite verificar orientación visual tras el round-trip: si la imagen
+    quedó rotada por error, el rojo aparece en otra esquina.
+    """
+    import io
+    from PIL import Image
+
+    img = Image.new("RGB", (80, 80), (0, 0, 255))
+    for x in range(40):
+        for y in range(40):
+            img.putpixel((x, y), (255, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()

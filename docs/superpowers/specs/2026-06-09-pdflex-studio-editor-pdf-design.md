@@ -128,7 +128,7 @@ El motor (`core/editor/`) queda **100 % libre de Qt** (igual que los engines exi
 | 9 | **Guardado/exportación** | `core/editor/export/` | `Exporter` (overlay vectorial / raster fallback), `Verifier` (reabre y valida), `BackupManager` (respaldo previo), escritura atómica |
 | 10 | **Proyecto editable** | `core/editor/project/` | Formato `.flexproj` (zip: manifest + elements + assets); autosave con timer; recuperación post-crash |
 | 11 | **Validación y reparación** | `core/editor/validation.py` | Al abrir: chequeo fitz, password, resumen del `pdf_analyzer` (rotaciones/tamaños), detección de firmas digitales existentes; reparación delegada a `pdf_repair_engine` |
-| 12 | **Historial** | `core/editor/history/` | Patrón Command sobre `QUndoStack`; coalescencia de arrastres; macro-comandos para aplicación masiva; tope configurable (default 200 pasos) |
+| 12 | **Historial** | `core/editor/history/` | Patrón Command sobre pila propia sin Qt; coalescencia de arrastres; macro-comandos para aplicación masiva; tope configurable (default 200 pasos) |
 
 ## 7. Mapeo de las 18 funciones obligatorias
 
@@ -368,7 +368,7 @@ class ProjectStore:                  # .flexproj
     # zip: manifest.json (schema_version, app_version), document.json (ref+sha256, modo
     # vínculo|embebido), elements.json, layers.json, rules.json, assets/<sha256>.png|jpg
 
-class HistoryStack:                  # fachada sobre QUndoStack
+class HistoryStack:                  # pila undo/redo pura (sin Qt; decisión Task 11 del plan)
     # comandos con merge (arrastre = 1 paso), macros (masivo = 1 paso), tope 200
 ```
 

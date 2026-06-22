@@ -14,6 +14,7 @@ from shell.context import ShellContext
 from shell.tool_registry import get_tool
 from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
+from core.pdf_compress_engine import CompressJob, CompressResult
 from ui.compresor.window import CompresorWindow
 
 
@@ -50,6 +51,44 @@ class CompresorWindowTests(unittest.TestCase):
         self.assertTrue(tool.enabled)
         self.assertEqual(tool.title, "Comprimir PDF")
         self.assertIn(".pdf", tool.input_extensions)
+
+    def test_results_summary_aggregates_savings_and_warnings(self) -> None:
+        window = CompresorWindow(
+            ShellContext(
+                tray=PdfTray(),
+                word_converter=WordToPdfConverter(),
+                open_tool=lambda *_: None,
+            )
+        )
+        try:
+            html = window._results_summary_html([
+                CompressResult(
+                    job=CompressJob("a.pdf", "a_out.pdf"),
+                    success=True,
+                    input_bytes=1000,
+                    output_bytes=600,
+                ),
+                CompressResult(
+                    job=CompressJob("b.pdf", "b_out.pdf"),
+                    success=True,
+                    warning="ya estaba optimizado",
+                    input_bytes=500,
+                    output_bytes=500,
+                ),
+                CompressResult(
+                    job=CompressJob("c.pdf", "c_out.pdf"),
+                    success=False,
+                    error="fallo",
+                ),
+            ])
+
+            self.assertIn("2 PDFs optimizados", html)
+            self.assertIn("Ahorro: 400 B (26.7%)", html)
+            self.assertIn("1 ya estaba optimizado", html)
+            self.assertIn("Errores: 1", html)
+        finally:
+            window.deleteLater()
+            self.app.processEvents()
 
     @staticmethod
     def _make_pdf(path: Path) -> Path:

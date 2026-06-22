@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QRadialGradient
 from PyQt6.QtWidgets import (
     QFrame,
@@ -23,6 +23,7 @@ from core.update_config import APP_VERSION
 from shell.tippy import TippyButton
 from shell.tool_registry import TOOLS, ToolDescriptor
 from shell.tool_usage import ToolUsageStore, rank_tool_ids
+from ui.styles import COLORS
 
 
 ICON_SIZE = 40
@@ -49,6 +50,7 @@ EDITORIAL_ORDER: tuple[str, ...] = (
     "organizador",
     "compresor",
     "marca_agua",
+    "quitar_logos",
     "redactor",
     "protector",
     "formularios",
@@ -75,8 +77,8 @@ BASE_SECTIONS: tuple[ToolSection, ...] = (
     ToolSection(
         id="preparar",
         title="Preparar y proteger",
-        subtitle="Optimiza, sella, redacta, protege, valida y repara",
-        tool_ids=("compresor", "marca_agua", "redactor", "protector", "formularios", "comparador", "reparador"),
+        subtitle="Optimiza, sella, limpia, redacta, protege, valida y repara",
+        tool_ids=("compresor", "marca_agua", "quitar_logos", "redactor", "protector", "formularios", "comparador", "reparador"),
     ),
     ToolSection(
         id="conversion",
@@ -238,16 +240,16 @@ class ToolCard(QFrame):
             comp = _hex_components(self._tool.accent_color)
             self.setStyleSheet(
                 f"QFrame#LauncherCard {{"
-                f"background: #0D0D10;"
-                f"border: 1px solid rgba({comp}, 0.5);"
+                f"background: rgba({comp}, 0.06);"
+                f"border: 1px solid rgba({comp}, 0.45);"
                 f"border-radius: 10px;"
                 f"}}"
             )
         else:
             self.setStyleSheet(
                 "QFrame#LauncherCard {"
-                "background: #101116;"
-                "border: 1px solid #1E1E28;"
+                f"background: {COLORS['surface']};"
+                f"border: 1px solid {COLORS['border']};"
                 "border-radius: 10px;"
                 "}"
             )
@@ -272,6 +274,8 @@ class ToolCard(QFrame):
 
 class LauncherWidget(QWidget):
     """Catalogo compacto, filtrable y ordenado por uso."""
+
+    ready = pyqtSignal()  # emitida cuando todas las tarjetas están renderizadas
 
     def __init__(
         self,
@@ -302,7 +306,7 @@ class LauncherWidget(QWidget):
 
         content = QWidget()
         content.setObjectName("LauncherContent")
-        content.setStyleSheet("QWidget#LauncherContent { background: #0D0E12; }")
+        content.setStyleSheet(f"QWidget#LauncherContent {{ background: {COLORS['bg']}; }}")
         self._content_layout = QVBoxLayout(content)
         self._content_layout.setContentsMargins(40, 34, 40, 28)
         self._content_layout.setSpacing(18)
@@ -310,6 +314,7 @@ class LauncherWidget(QWidget):
         self._build_header()
 
         self._sections_host = QWidget()
+        self._sections_host.setStyleSheet("background: transparent;")
         self._sections_layout = QVBoxLayout(self._sections_host)
         self._sections_layout.setContentsMargins(0, 0, 0, 0)
         self._sections_layout.setSpacing(20)
@@ -319,7 +324,7 @@ class LauncherWidget(QWidget):
         self._scroll.setWidget(content)
         root.addWidget(self._scroll)
 
-        self._render_tools()
+        QTimer.singleShot(0, self._render_tools)
 
     def _build_header(self) -> None:
         top = QHBoxLayout()
@@ -330,7 +335,7 @@ class LauncherWidget(QWidget):
         title_col.setSpacing(3)
         title = QLabel("Herramientas")
         title.setObjectName("LauncherTitle")
-        title.setStyleSheet("font-size: 26px; font-weight: 800; letter-spacing: 0px;")
+        title.setStyleSheet("font-size: 26px; font-weight: 800; letter-spacing: -0.5px;")
         title_col.addWidget(title)
 
         self._status_lbl = QLabel("")
@@ -347,13 +352,13 @@ class LauncherWidget(QWidget):
         self._search.setMinimumWidth(300)
         self._search.setStyleSheet(
             "QLineEdit#LauncherSearch {"
-            "background: #101116;"
-            "border: 1px solid #2A2C36;"
+            f"background: {COLORS['surface']};"
+            f"border: 1px solid {COLORS['border_strong']};"
             "border-radius: 7px;"
             "padding: 0 12px;"
-            "color: #ECEDEE;"
+            f"color: {COLORS['text']};"
             "}"
-            "QLineEdit#LauncherSearch:focus { border-color: #5E6AD2; }"
+            f"QLineEdit#LauncherSearch:focus {{ border-color: {COLORS['accent']}; }}"
         )
         self._search.textChanged.connect(self._render_tools)
         top.addWidget(self._search, 0, Qt.AlignmentFlag.AlignTop)
@@ -386,9 +391,9 @@ class LauncherWidget(QWidget):
             if active:
                 btn.setStyleSheet(
                     "QPushButton {"
-                    "background: #ECEDEE;"
-                    "color: #0D0E12;"
-                    "border: 1px solid #ECEDEE;"
+                    f"background: {COLORS['accent']};"
+                    "color: #FFFFFF;"
+                    f"border: 1px solid {COLORS['accent']};"
                     "border-radius: 7px;"
                     "padding: 0 12px;"
                     "font-size: 12px;"
@@ -398,16 +403,16 @@ class LauncherWidget(QWidget):
             else:
                 btn.setStyleSheet(
                     "QPushButton {"
-                    "background: #101116;"
-                    "color: #9AA0AA;"
-                    "border: 1px solid #292B35;"
+                    f"background: {COLORS['surface']};"
+                    f"color: {COLORS['text_muted']};"
+                    f"border: 1px solid {COLORS['border_strong']};"
                     "border-radius: 7px;"
                     "padding: 0 12px;"
                     "font-size: 12px;"
                     "}"
                     "QPushButton:hover {"
-                    "color: #ECEDEE;"
-                    "border-color: #3A3D49;"
+                    f"color: {COLORS['text']};"
+                    f"border-color: {COLORS['border_strong']};"
                     "}"
                 )
 
@@ -417,46 +422,56 @@ class LauncherWidget(QWidget):
     def _render_tools(self) -> None:
         if not hasattr(self, "_sections_layout"):
             return
-        _clear_layout(self._sections_layout)
+        if getattr(self, "_rendering", False):
+            return
+        self._rendering = True
+        try:
+            _clear_layout(self._sections_layout)
 
-        query = self._search.text().strip().casefold() if hasattr(self, "_search") else ""
-        columns = self._preferred_columns()
-        shown_count = 0
+            query = self._search.text().strip().casefold() if hasattr(self, "_search") else ""
+            columns = self._preferred_columns()
+            shown_count = 0
 
-        if query:
-            tools = [tool for tool in self._ordered_tools() if _matches_query(tool, query)]
-            shown_count = len(tools)
-            self._add_section("Resultados", f"{shown_count} coincidencia{'s' if shown_count != 1 else ''}", tools, columns)
-        else:
-            if self._active_section == "all":
-                quick_tools, label = self._quick_tools()
-                self._add_section(label, "Orden inteligente local", quick_tools, columns, quick=True)
-                for section in self._sections:
-                    tools = self._tools_for_section(section)
-                    shown_count += len(tools)
-                    self._add_section(section.title, section.subtitle, tools, columns)
-            else:
-                section = next((s for s in self._sections if s.id == self._active_section), None)
-                tools = self._tools_for_section(section) if section else []
+            if query:
+                tools = [tool for tool in self._ordered_tools() if _matches_query(tool, query)]
                 shown_count = len(tools)
-                self._add_section(section.title if section else "Herramientas", section.subtitle if section else "", tools, columns)
+                self._add_section("Resultados", f"{shown_count} coincidencia{'s' if shown_count != 1 else ''}", tools, columns)
+            else:
+                if self._active_section == "all":
+                    quick_tools, label = self._quick_tools()
+                    quick_ids = {tool.id for tool in quick_tools}
+                    self._add_section(label, "Orden inteligente local", quick_tools, columns, quick=True)
+                    for section in self._sections:
+                        tools = self._tools_for_section(section, exclude_ids=quick_ids)
+                        shown_count += len(tools)
+                        self._add_section(section.title, section.subtitle, tools, columns)
+                else:
+                    section = next((s for s in self._sections if s.id == self._active_section), None)
+                    tools = self._tools_for_section(section) if section else []
+                    shown_count = len(tools)
+                    self._add_section(section.title if section else "Herramientas", section.subtitle if section else "", tools, columns)
 
-        if shown_count == 0:
-            empty = QLabel("No hay herramientas que coincidan.")
-            empty.setProperty("class", "CardHint")
-            empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            empty.setMinimumHeight(220)
-            self._sections_layout.addWidget(empty)
+            if shown_count == 0:
+                empty = QLabel("No se encontraron herramientas con esa búsqueda.")
+                empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                empty.setMinimumHeight(220)
+                empty.setStyleSheet(
+                    f"color: {COLORS['text_dim']}; font-size: 13px; background: transparent;"
+                )
+                self._sections_layout.addWidget(empty)
 
-        self._sections_layout.addStretch(1)
-        total = sum(1 for tool in TOOLS if tool.enabled)
-        if query:
-            self._status_lbl.setText(f"{shown_count} de {total} herramientas")
-        elif self._active_section == "all":
-            self._status_lbl.setText(f"{total} herramientas disponibles")
-        else:
-            self._status_lbl.setText(f"{shown_count} herramientas en esta seccion")
-        self._current_cols = columns
+            self._sections_layout.addStretch(1)
+            total = sum(1 for tool in TOOLS if tool.enabled)
+            if query:
+                self._status_lbl.setText(f"{shown_count} de {total} herramientas")
+            elif self._active_section == "all":
+                self._status_lbl.setText(f"{total} herramientas disponibles")
+            else:
+                self._status_lbl.setText(f"{shown_count} herramientas en esta seccion")
+            self._current_cols = columns
+        finally:
+            self._rendering = False
+            self.ready.emit()
 
     def _add_section(
         self,
@@ -470,6 +485,7 @@ class LauncherWidget(QWidget):
         if not tools:
             return
         wrapper = QWidget()
+        wrapper.setStyleSheet("background: transparent;")
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(9)
@@ -501,10 +517,20 @@ class LauncherWidget(QWidget):
         label = "Mas usadas" if self._usage_store.has_usage(available_ids) else "Accesos rapidos"
         return [self._tool_map[tool_id] for tool_id in ranked_ids if tool_id in self._tool_map], label
 
-    def _tools_for_section(self, section: ToolSection | None) -> list[ToolDescriptor]:
+    def _tools_for_section(
+        self,
+        section: ToolSection | None,
+        *,
+        exclude_ids: set[str] | None = None,
+    ) -> list[ToolDescriptor]:
         if section is None:
             return []
-        return [self._tool_map[tool_id] for tool_id in section.tool_ids if tool_id in self._tool_map]
+        excluded = exclude_ids or set()
+        return [
+            self._tool_map[tool_id]
+            for tool_id in _section_tool_ids(section, excluded)
+            if tool_id in self._tool_map
+        ]
 
     def _ordered_tools(self) -> list[ToolDescriptor]:
         by_id = self._tool_map
@@ -534,19 +560,20 @@ class LauncherWidget(QWidget):
 
 def _make_section_header(title: str, subtitle: str, count: int) -> QWidget:
     header = QWidget()
+    header.setStyleSheet("background: transparent;")
     layout = QHBoxLayout(header)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(10)
 
     title_lbl = QLabel(title)
-    title_lbl.setStyleSheet("color: #ECEDEE; font-size: 14px; font-weight: 800;")
+    title_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 14px; font-weight: 800; background: transparent;")
     layout.addWidget(title_lbl)
 
     count_lbl = QLabel(str(count))
     count_lbl.setStyleSheet(
-        "color: #8B909B;"
-        "background: #101116;"
-        "border: 1px solid #282A34;"
+        f"color: {COLORS['text_muted']};"
+        f"background: {COLORS['surface']};"
+        f"border: 1px solid {COLORS['border_strong']};"
         "border-radius: 6px;"
         "padding: 1px 7px;"
         "font-size: 11px;"
@@ -556,14 +583,19 @@ def _make_section_header(title: str, subtitle: str, count: int) -> QWidget:
 
     if subtitle:
         sub = QLabel(subtitle)
-        sub.setStyleSheet("color: #686E7A; font-size: 11px;")
+        sub.setStyleSheet("color: #5C6272; font-size: 11px; background: transparent;")
         layout.addWidget(sub)
 
     line = QFrame()
     line.setFrameShape(QFrame.Shape.HLine)
-    line.setStyleSheet("background: #242631; border: none; max-height: 1px;")
+    line.setStyleSheet(f"background: {COLORS['border_strong']}; border: none; max-height: 1px;")
     layout.addWidget(line, 1)
     return header
+
+
+def _section_tool_ids(section: ToolSection, excluded_ids: set[str] | None = None) -> tuple[str, ...]:
+    excluded = excluded_ids or set()
+    return tuple(tool_id for tool_id in section.tool_ids if tool_id not in excluded)
 
 
 def _make_footer() -> QWidget:

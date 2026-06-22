@@ -80,11 +80,11 @@ QMainWindow, QWidget {{
 }}
 
 QToolTip {{
-    background-color: {COLORS['surface_3']};
+    background-color: {COLORS['surface_4']};
     color: {COLORS['text']};
-    border: 1px solid {COLORS['border']};
-    padding: 6px 10px;
-    border-radius: 6px;
+    border: 1px solid {COLORS['border_strong']};
+    padding: 7px 11px;
+    border-radius: 7px;
 }}
 
 /* ============================================================
@@ -121,13 +121,13 @@ QToolTip {{
 }}
 
 #SidebarTagline {{
-    color: {COLORS['text_dim']};
+    color: #6B7082;
     font-size: 11px;
     background: transparent;
 }}
 
 #SidebarSection {{
-    color: {COLORS['text_dim']};
+    color: #686B7A;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 1.4px;
@@ -166,7 +166,7 @@ QPushButton[class="SidebarBtn"][active="true"] {{
 }}
 
 #SidebarFooter {{
-    color: {COLORS['border_strong']};
+    color: #40434E;
     padding: 12px 20px;
     font-size: 11px;
     border-top: 1px solid {COLORS['border']};
@@ -635,7 +635,7 @@ QListWidget#ResultList::item {{
 ============================================================ */
 QScrollBar:vertical {{
     background: transparent;
-    width: 10px;
+    width: 8px;
     margin: 4px 2px 4px 0;
 }}
 
@@ -662,7 +662,7 @@ QScrollBar::sub-page:vertical {{
 
 QScrollBar:horizontal {{
     background: transparent;
-    height: 10px;
+    height: 8px;
     margin: 0 4px 2px 4px;
 }}
 
@@ -806,10 +806,12 @@ QFrame[class="PageContainer"] {{
     color: {COLORS['text_dim']};
     font-size: 10px;
     font-weight: 700;
-    border-radius: 4px;
-    padding: 2px 7px;
-    min-width: 18px;
-    max-height: 16px;
+    border-radius: 5px;
+    padding: 2px 5px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
     border: 1px solid {COLORS['border']};
 }}
 
@@ -818,10 +820,12 @@ QFrame[class="PageContainer"] {{
     color: #FFFFFF;
     font-size: 10px;
     font-weight: 700;
-    border-radius: 4px;
-    padding: 2px 7px;
-    min-width: 18px;
-    max-height: 16px;
+    border-radius: 5px;
+    padding: 2px 5px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
     border: 1px solid {COLORS['accent']};
 }}
 

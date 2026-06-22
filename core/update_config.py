@@ -1,7 +1,7 @@
 """Configuración del sistema de auto-actualización de PDFlex."""
 
 # ── Versión actual de la aplicación ──────────────────────────────────────────
-APP_VERSION = "2.0.3"
+APP_VERSION = "2.0.7"
 
 # ── Servidor de actualizaciones ───────────────────────────────────────────────
 UPDATE_API_BASE = "https://grupocmx.mx"
@@ -16,3 +16,8 @@ UPDATE_RETRY_DELAY_S      = 2        # espera base entre reintentos (se multipli
 
 # ── Comportamiento al inicio ──────────────────────────────────────────────────
 UPDATE_STARTUP_DELAY_MS = 4000       # ms de espera tras arranque antes de comprobar
+UPDATE_STARTUP_RETRY_DELAYS_MS = (
+    15000,    # red/servicios aun inicializando al abrir Windows
+    60000,
+    180000,
+)

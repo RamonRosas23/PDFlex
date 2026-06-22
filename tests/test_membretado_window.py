@@ -22,6 +22,20 @@ class MembretadoWindowTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.app = QApplication.instance() or QApplication([])
 
+    # ------------------------------------------------------------------
+    # Helper: espera a que termine la carga asíncrona del membrete
+    # ------------------------------------------------------------------
+    def _wait_for_membrete_load(self, window: MembretadoWindow, timeout_ms: int = 3000) -> None:
+        """Bombea el event loop hasta que _lh_path quede seteado (carga async terminó)
+        o hasta que se agote el timeout."""
+        import time
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        # Bombear eventos hasta que el slot _on_membrete_loaded haya corrido
+        while window._lh_path is None and time.monotonic() < deadline:
+            self.app.processEvents()
+        # Una pasada extra para señales de seguimiento
+        self.app.processEvents()
+
     def _make_ctx(self) -> ShellContext:
         return ShellContext(
             tray=PdfTray(),
@@ -41,12 +55,13 @@ class MembretadoWindowTests(unittest.TestCase):
                 self.assertEqual(window._library_list.count(), 1)
                 window._library_list.setCurrentRow(0)
                 window._on_use_library_membrete()
+                self._wait_for_membrete_load(window)
 
                 self.assertEqual(window._lh_path, entry.path)
                 self.assertEqual(window._lh_source_name, "Oficial")
                 self.assertGreater(window._lh_page_w_pt, 0)
                 self.assertGreater(window._lh_page_h_pt, 0)
-                self.assertTrue(window._membrete_next_btn.isEnabled())
+                self.assertTrue(window._nav_next_btn.isEnabled())
             finally:
                 window.deleteLater()
                 self.app.processEvents()
@@ -57,11 +72,12 @@ class MembretadoWindowTests(unittest.TestCase):
             pdf = self._make_pdf(Path(tmp) / "membrete.pdf")
             window = MembretadoWindow(self._make_ctx())
             try:
-                self.assertFalse(window._membrete_next_btn.isEnabled())
+                self.assertFalse(window._nav_next_btn.isEnabled())
 
                 window._load_membrete(str(pdf), source_name="Membrete")
+                self._wait_for_membrete_load(window)
 
-                self.assertTrue(window._membrete_next_btn.isEnabled())
+                self.assertTrue(window._nav_next_btn.isEnabled())
             finally:
                 window.deleteLater()
                 self.app.processEvents()
@@ -87,6 +103,7 @@ class MembretadoWindowTests(unittest.TestCase):
             try:
                 window._switch_section(0)
                 window._add_file_paths_smart([str(letterhead), str(document)])
+                self._wait_for_membrete_load(window)
 
                 self.assertEqual(window._lh_path, str(letterhead))
                 self.assertEqual(window._docs_card.paths(), [str(document)])

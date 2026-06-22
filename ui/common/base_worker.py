@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 
 class BaseWorker(QObject):
@@ -37,6 +37,17 @@ class BaseWorker(QObject):
         raise NotImplementedError
 
 
+class _WorkerRunnerThread(QThread):
+    """QThread subclass that calls worker.run() directly — avoids moveToThread+started.connect bug."""
+
+    def __init__(self, worker: "BaseWorker", parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._worker = worker
+
+    def run(self) -> None:
+        self._worker.run()
+
+
 class WorkerThread:
     """Envuelve un BaseWorker en un QThread con manejo correcto del ciclo de vida.
 
@@ -51,23 +62,11 @@ class WorkerThread:
 
     def __init__(self, worker: BaseWorker, parent: Optional[QObject] = None) -> None:
         self.worker = worker
-        self._thread: Optional[QThread] = QThread(parent)
+        self._thread: Optional[QThread] = _WorkerRunnerThread(worker, parent)
         self._started = False
 
-        # Mover el worker al thread antes de iniciar
-        worker.moveToThread(self._thread)
-
-        # Conexiones del ciclo de vida.
-        # DirectConnection para finished/error: el worker emite desde su propio
-        # thread; con conexión directa, quit() se llama en el mismo thread sin
-        # necesitar event loop en el thread principal.
-        self._thread.started.connect(worker.run)
-        worker.finished.connect(
-            self._thread.quit, Qt.ConnectionType.DirectConnection
-        )
-        worker.error.connect(
-            self._thread.quit, Qt.ConnectionType.DirectConnection
-        )
+        # Sin moveToThread ni started.connect — el thread subclass llama worker.run() directamente.
+        # El thread termina naturalmente cuando worker.run() retorna.
         self._thread.finished.connect(worker.deleteLater)
         self._thread.finished.connect(self._thread.deleteLater)
 

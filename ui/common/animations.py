@@ -178,7 +178,10 @@ class AnimationHelper:
         from PyQt6.QtWidgets import QPushButton
         for btn in root.findChildren(QPushButton):
             if btn.property("class") == "Primary":
-                AnimationHelper.apply_glow(btn, accent, blur=18, alpha=75)
+                if btn.isEnabled():
+                    AnimationHelper.apply_glow(btn, accent, blur=18, alpha=75)
+                else:
+                    btn.setGraphicsEffect(None)
 
     # ── Progress bar shimmer ─────────────────────────────────────────────────
 

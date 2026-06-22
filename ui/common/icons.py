@@ -146,6 +146,12 @@ _ICONS = {
         '<path d="M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696a10.75 10.75 0 0 1 4.446-5.143"/>'
         '<path d="m2 2 20 20"/>'
     ),
+    "tool-quitar-logos": (
+        '<rect width="18" height="18" x="3" y="3" rx="2"/>'
+        '<circle cx="9" cy="9" r="2"/>'
+        '<path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>'
+        '<path d="m3 3 18 18"/>'
+    ),
     "tool-protector": (
         '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/>'
         '<path d="M7 11V7a5 5 0 0 1 10 0v4"/>'
@@ -230,6 +236,7 @@ TOOL_ICON_MAP: dict[str, str] = {
     "compresor":         "tool-compresor",
     "marca_agua":        "tool-marca-agua",
     "redactor":          "tool-redactor",
+    "quitar_logos":      "tool-quitar-logos",
     "protector":         "tool-protector",
     "formularios":       "tool-formularios",
     "comparador":        "tool-comparador",

@@ -67,8 +67,14 @@ def main() -> int:
     font.setPointSize(10)
     app.setFont(font)
 
+    from PyQt6.QtCore import QTimer
+    from shell.splash import SplashScreen
+    splash = SplashScreen()
+    splash.start()
+
     win = ShellWindow()
-    win.show()
+    win._launcher.ready.connect(lambda: QTimer.singleShot(0, splash.close))
+    win.showMaximized()
     return app.exec()
 
 

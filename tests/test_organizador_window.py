@@ -17,6 +17,12 @@ from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
 from ui.organizador.window import OrganizadorWindow
 from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailKey, ThumbnailWorker, render_page_thumb
+from core.page_organizer_engine import (
+    MultiOrganizerResult,
+    OrganizerJob,
+    OrganizerResult,
+    PageRef,
+)
 
 
 class OrganizadorWindowTests(unittest.TestCase):
@@ -387,6 +393,69 @@ class OrganizadorWindowV2Tests(unittest.TestCase):
                 self.assertEqual(len(job.lanes[0].pages), 2)
                 self.assertFalse(job.merge_all)
             finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_finished_separate_mode_shows_all_results(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_a = root / "source_a.pdf"
+            source_b = root / "source_b.pdf"
+            out_a = root / "out_a.pdf"
+            out_b = root / "out_b.pdf"
+            for path, label in [
+                (source_a, "Source A"),
+                (source_b, "Source B"),
+                (out_a, "Output A"),
+                (out_b, "Output B"),
+            ]:
+                doc = fitz.open()
+                doc.new_page(width=300, height=200).insert_text((36, 72), label)
+                doc.save(path)
+                doc.close()
+
+            result = MultiOrganizerResult(
+                results=[
+                    OrganizerResult(
+                        job=OrganizerJob(
+                            pages=[PageRef(str(source_a), 0)],
+                            output_path=str(out_a),
+                        ),
+                        output_path=str(out_a),
+                        success=True,
+                        total_pages=1,
+                        source_count=1,
+                    ),
+                    OrganizerResult(
+                        job=OrganizerJob(
+                            pages=[PageRef(str(source_b), 0)],
+                            output_path=str(out_b),
+                        ),
+                        output_path=str(out_b),
+                        success=True,
+                        total_pages=1,
+                        source_count=1,
+                    ),
+                ],
+                success=True,
+            )
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window._on_finished(result)
+                self.app.processEvents()
+
+                self.assertEqual(window._result_viewer.doc_list.count(), 2)
+                self.assertEqual(
+                    window._result_viewer.doc_list.item(0).toolTip(),
+                    str(out_a),
+                )
+                self.assertEqual(
+                    window._result_viewer.doc_list.item(1).toolTip(),
+                    str(out_b),
+                )
+            finally:
+                window._result_viewer.clear_results()
                 window.deleteLater()
                 self.app.processEvents()
 

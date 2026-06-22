@@ -22,7 +22,7 @@ from pathlib import Path
 try:
     from core.update_config import APP_VERSION
 except Exception:
-    APP_VERSION = "2.0.3"
+    APP_VERSION = "2.0.6"
 
 
 APP_NAME = "PDFlex"

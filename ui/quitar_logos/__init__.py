@@ -1,0 +1,1 @@
+"""Quitar logos tool package."""

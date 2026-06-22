@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from shell.launcher import EDITORIAL_ORDER, catalog_sections
+from shell.launcher import EDITORIAL_ORDER, catalog_sections, _section_tool_ids
 from shell.tool_registry import TOOLS
 from shell.tool_usage import ToolUsageStat, rank_tool_ids
 
@@ -38,6 +38,14 @@ class LauncherCatalogTests(unittest.TestCase):
 
         self.assertEqual(ranked[:2], ["ocr", "unir"])
         self.assertEqual(ranked[2:], ["firmador", "foleador"])
+
+    def test_quick_tools_can_be_removed_from_base_sections(self) -> None:
+        section = catalog_sections(TOOLS)[0]
+        visible_ids = _section_tool_ids(section, {"firmador", "unir"})
+
+        self.assertNotIn("firmador", visible_ids)
+        self.assertNotIn("unir", visible_ids)
+        self.assertIn("foleador", visible_ids)
 
 
 if __name__ == "__main__":

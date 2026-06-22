@@ -5,7 +5,7 @@ datas = [('assets', 'assets')]
 binaries = []
 hiddenimports = []
 
-for pkg in ('pymupdf', 'PIL', 'PyQt6', 'docx', 'numpy', 'requests'):
+for pkg in ('pymupdf', 'PIL', 'PyQt6', 'docx', 'numpy', 'cv2', 'requests'):
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 

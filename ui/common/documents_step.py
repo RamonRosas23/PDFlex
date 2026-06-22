@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
 from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent
+from ui.common.tool_scaffold import RunnerThread
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
@@ -23,9 +24,10 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.common.thumb_utils import make_pdf_thumb, ThumbnailLoader, make_placeholder_pixmap
-from ui.common.icons import make_icon_label, set_button_icon
+from ui.common.icons import icon_pixmap, make_icon_label, set_button_icon
 from ui.common.dialogs import show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
+from ui.styles import COLORS
 from core.output_paths import make_run_dir
 
 if TYPE_CHECKING:
@@ -65,6 +67,10 @@ class DocumentsCard(QFrame):
         self._show_thumbnails = show_thumbnails
         self._thumb_w, self._thumb_h = thumb_size
         self._file_filter = file_filter
+        self._accent: str = "#5E6AD2"
+        self._drop_icon_name = "folder-open"
+        self._drop_icon_size = 28
+        self._drop_flash_token = 0
         self._paths: List[str] = []
         self._path_set: set = set()
 
@@ -75,6 +81,7 @@ class DocumentsCard(QFrame):
         self._thumb_workers: dict = {}  # mantiene vivos los workers hasta que terminen
 
         self._build(allow_reorder)
+        self.set_accent(self._accent)
 
         ctx.tray.changed.connect(self._refresh_tray_btn)
         self._refresh_tray_btn()
@@ -90,31 +97,62 @@ class DocumentsCard(QFrame):
 
         # ── Botones de acción ──────────────────────────────────────────
         row = QHBoxLayout()
-        row.setSpacing(10)
+        row.setSpacing(8)
 
         add_btn = QPushButton("Agregar archivos")
         add_btn.setProperty("class", "Primary")
+        add_btn.setFixedHeight(32)
         set_button_icon(add_btn, "plus")
         add_btn.clicked.connect(self._on_browse)
         row.addWidget(add_btn)
 
-        self._menu_btn = QPushButton()
-        self._menu_btn.setProperty("class", "Ghost")
-        set_button_icon(self._menu_btn, "more-horizontal")
-        self._menu_btn.setToolTip("Más acciones: Vaciar, Quitar, Ordenar")
-        self._menu_btn.setFixedWidth(36)
-        self._menu_btn.clicked.connect(self._show_docs_menu)
-        row.addWidget(self._menu_btn)
+        # Separador visual — solo visible cuando la lista tiene items
+        from PyQt6.QtWidgets import QFrame as _QFrame
+        self._sep_actions = _QFrame()
+        self._sep_actions.setFixedSize(1, 18)
+        self._sep_actions.setStyleSheet(f"background: {COLORS['border_strong']}; border: none;")
+        self._sep_actions.setVisible(False)
+        row.addWidget(self._sep_actions, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        self._tray_btn = QPushButton("Cargar desde bandeja")
+        # Quitar seleccionados (visible solo cuando hay items)
+        self._remove_btn = QPushButton("Quitar seleccionados")
+        self._remove_btn.setProperty("class", "Ghost")
+        self._remove_btn.setFixedHeight(32)
+        set_button_icon(self._remove_btn, "x", color=COLORS["danger"])
+        self._remove_btn.setEnabled(False)
+        self._remove_btn.setVisible(False)
+        self._remove_btn.clicked.connect(self.remove_selected)
+        row.addWidget(self._remove_btn)
+
+        # Vaciar todo (visible solo cuando hay items)
+        self._clear_btn = QPushButton("Vaciar")
+        self._clear_btn.setProperty("class", "Ghost")
+        self._clear_btn.setFixedHeight(32)
+        set_button_icon(self._clear_btn, "trash-2", color=COLORS["text_dim"])
+        self._clear_btn.setVisible(False)
+        self._clear_btn.clicked.connect(self.clear)
+        row.addWidget(self._clear_btn)
+
+        # Ordenar (icon-only, visible solo cuando hay items)
+        self._sort_btn = QPushButton()
+        self._sort_btn.setProperty("class", "IconBtn")
+        self._sort_btn.setFixedSize(32, 32)
+        self._sort_btn.setToolTip("Ordenar documentos")
+        set_button_icon(self._sort_btn, "arrow-up-down", color=COLORS["text_dim"])
+        self._sort_btn.setVisible(False)
+        self._sort_btn.clicked.connect(self._show_sort_menu)
+        row.addWidget(self._sort_btn)
+
+        row.addStretch()
+
+        self._tray_btn = QPushButton("Bandeja")
         self._tray_btn.setProperty("class", "Ghost")
+        self._tray_btn.setFixedHeight(32)
         set_button_icon(self._tray_btn, "folder-open")
         self._tray_btn.clicked.connect(self._on_load_from_tray)
         row.addWidget(self._tray_btn)
 
-        row.addStretch()
-
-        self._count_lbl = QLabel("0 documentos")
+        self._count_lbl = QLabel("Sin documentos")
         self._count_lbl.setProperty("class", "CardHint")
         row.addWidget(self._count_lbl)
 
@@ -143,21 +181,24 @@ class DocumentsCard(QFrame):
 
         # Ícono con badge coloreado
         icon_box = QFrame()
-        icon_box.setFixedSize(56, 56)
+        self._icon_box = icon_box
+        icon_box.setFixedSize(60, 60)
         icon_box.setStyleSheet("""
             QFrame {
                 background: rgba(94, 106, 210, 0.14);
                 border: 1px solid rgba(94, 106, 210, 0.35);
-                border-radius: 12px;
+                border-radius: 14px;
             }
         """)
         ib = QVBoxLayout(icon_box)
         ib.setContentsMargins(0, 0, 0, 0)
         ib_lbl = make_icon_label("folder-open", color="#7B8DE8", size=28)
+        self._icon_label = ib_lbl
+        ib_lbl.setFixedSize(38, 38)
         ib.addWidget(ib_lbl, 0, Qt.AlignmentFlag.AlignCenter)
         ez.addWidget(icon_box, 0, Qt.AlignmentFlag.AlignCenter)
 
-        ez.addSpacing(16)
+        ez.addSpacing(18)
 
         drop_title = QLabel("Arrastra archivos aquí")
         drop_title.setObjectName("DropZoneTitle")
@@ -193,6 +234,7 @@ class DocumentsCard(QFrame):
         self._content_stack.addWidget(self.list_widget)  # idx 1
         layout.addWidget(self._content_stack, 1)
         self._content_stack.setCurrentIndex(0)  # empezar en drop zone
+        self._update_count()
 
     # ------------------------------------------------------------------ #
     # Event filter — Delete key
@@ -208,8 +250,8 @@ class DocumentsCard(QFrame):
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
-            self._set_drop_active(True)
             event.acceptProposedAction()
+            self._set_drop_active(True)
             return
         super().dragEnterEvent(event)
 
@@ -219,20 +261,123 @@ class DocumentsCard(QFrame):
 
     def dropEvent(self, event: QDropEvent) -> None:
         self._set_drop_active(False)
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
-        if paths:
-            self.add_paths(paths)
+        if event.mimeData().hasUrls():
             event.acceptProposedAction()
+            self._flash_drop_success()
+            paths = [u.toLocalFile() for u in event.mimeData().urls()]
+            if paths:
+                self.add_paths(paths)
             return
         super().dropEvent(event)
 
     def _set_drop_active(self, active: bool) -> None:
         if not hasattr(self, "_empty_w"):
             return
-        self._empty_w.setObjectName("DropZoneActive" if active else "DropZone")
+        self._drop_flash_token += 1
+        r, g, b = self._parse_accent_rgb()
+        if active:
+            self._empty_w.setObjectName("DropZoneActive")
+            self._empty_w.setStyleSheet(
+                f"QFrame#DropZoneActive {{"
+                f"background: rgba({r}, {g}, {b}, 0.06);"
+                f"border: 2px solid rgba({r}, {g}, {b}, 0.70);"
+                f"border-radius: 10px;"
+                f"}}"
+            )
+            self._start_icon_bounce()
+        else:
+            self._empty_w.setObjectName("DropZone")
+            self._empty_w.setStyleSheet("")
+            self._stop_icon_bounce()
         self._empty_w.style().unpolish(self._empty_w)
         self._empty_w.style().polish(self._empty_w)
         self._empty_w.update()
+
+    def _parse_accent_rgb(self) -> tuple[int, int, int]:
+        h = self._accent.strip().lstrip("#")
+        if len(h) != 6:
+            return (94, 106, 210)
+        try:
+            return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+        except ValueError:
+            return (94, 106, 210)
+
+    def _icon_color(self) -> str:
+        r, g, b = self._parse_accent_rgb()
+        return f"#{r:02X}{g:02X}{b:02X}"
+
+    def _refresh_drop_icon(self, size: Optional[int] = None) -> None:
+        if not hasattr(self, "_icon_label"):
+            return
+        icon_size = size or self._drop_icon_size
+        self._icon_label.setPixmap(
+            icon_pixmap(self._drop_icon_name, self._icon_color(), icon_size)
+        )
+
+    def _refresh_icon_box_style(self) -> None:
+        if not hasattr(self, "_icon_box"):
+            return
+        r, g, b = self._parse_accent_rgb()
+        self._icon_box.setStyleSheet(
+            "QFrame {"
+            f"background: rgba({r}, {g}, {b}, 0.14);"
+            f"border: 1px solid rgba({r}, {g}, {b}, 0.35);"
+            "border-radius: 14px;"
+            "}"
+        )
+
+    def _start_icon_bounce(self) -> None:
+        """Anima solo el pixmap interno para no mover el layout."""
+        if hasattr(self, "_bounce_timer") and self._bounce_timer.isActive():
+            return
+        try:
+            from ui.common.animations import is_reduced_motion
+            if is_reduced_motion():
+                return
+        except Exception:
+            pass
+
+        import math
+        self._bounce_step = 0
+        self._bounce_timer = QTimer(self)
+        self._bounce_timer.setInterval(40)
+
+        def _tick() -> None:
+            phase = (self._bounce_step % 20) / 20.0
+            scale = 1.0 + 0.12 * ((1.0 - math.cos(phase * math.pi * 2)) / 2.0)
+            self._refresh_drop_icon(max(1, round(self._drop_icon_size * scale)))
+            self._bounce_step += 1
+
+        self._bounce_timer.timeout.connect(_tick)
+        self._bounce_timer.start()
+
+    def _stop_icon_bounce(self) -> None:
+        if hasattr(self, "_bounce_timer"):
+            self._bounce_timer.stop()
+            self._bounce_timer.deleteLater()
+            del self._bounce_timer
+        self._refresh_drop_icon(self._drop_icon_size)
+
+    def _flash_drop_success(self) -> None:
+        """Flash sutil de accent al recibir archivos."""
+        if not hasattr(self, "_empty_w"):
+            return
+        self._drop_flash_token += 1
+        token = self._drop_flash_token
+        r, g, b = self._parse_accent_rgb()
+        self._empty_w.setObjectName("DropZone")
+        self._empty_w.setStyleSheet(
+            f"QFrame#DropZone {{"
+            f"background: rgba({r}, {g}, {b}, 0.15);"
+            f"border: 1.5px solid rgba({r}, {g}, {b}, 0.45);"
+            f"border-radius: 10px;"
+            f"}}"
+        )
+        QTimer.singleShot(300, lambda: self._clear_drop_flash(token))
+
+    def _clear_drop_flash(self, token: int) -> None:
+        if token == self._drop_flash_token and hasattr(self, "_empty_w"):
+            self._empty_w.setStyleSheet("")
 
     def _delete_selected(self) -> None:
         self.remove_selected()
@@ -269,39 +414,30 @@ class DocumentsCard(QFrame):
         self.files_changed.emit(self.paths())
 
     def _update_remove_btn(self) -> None:
-        """Actualiza el estado del menú según selección actual."""
-        # El botón de menú siempre está activo; las acciones individuales
-        # se habilitan/deshabilitan al abrir el menú.
-        pass
+        if not hasattr(self, "_remove_btn"):
+            return
+        selected = self.list_widget.selectedItems()
+        n_sel = len(selected)
+        self._remove_btn.setEnabled(n_sel > 0)
+        if n_sel > 1:
+            self._remove_btn.setText(f"Quitar ({n_sel})")
+        else:
+            self._remove_btn.setText("Quitar seleccionados")
 
-    def _show_docs_menu(self) -> None:
-        """Muestra el menú de acciones secundarias de la DocumentsCard."""
+    def _show_sort_menu(self) -> None:
         from PyQt6.QtWidgets import QMenu
         from PyQt6.QtGui import QAction
         menu = QMenu(self)
 
-        has_selection = bool(self.list_widget.selectedItems())
+        act_name = QAction("Por nombre (A → Z)", menu)
+        act_name.triggered.connect(lambda: self._sort_by("name"))
+        menu.addAction(act_name)
 
-        act_remove = QAction("Quitar seleccionados", menu)
-        act_remove.setEnabled(has_selection)
-        act_remove.triggered.connect(self.remove_selected)
-        menu.addAction(act_remove)
+        act_size = QAction("Por tamaño (menor primero)", menu)
+        act_size.triggered.connect(lambda: self._sort_by("size"))
+        menu.addAction(act_size)
 
-        act_clear = QAction("Vaciar lista", menu)
-        act_clear.triggered.connect(self.clear)
-        menu.addAction(act_clear)
-
-        menu.addSeparator()
-
-        act_sort_name = QAction("Ordenar por nombre", menu)
-        act_sort_name.triggered.connect(lambda: self._sort_by("name"))
-        menu.addAction(act_sort_name)
-
-        act_sort_size = QAction("Ordenar por tamaño", menu)
-        act_sort_size.triggered.connect(lambda: self._sort_by("size"))
-        menu.addAction(act_sort_size)
-
-        menu.exec(self._menu_btn.mapToGlobal(self._menu_btn.rect().bottomLeft()))
+        menu.exec(self._sort_btn.mapToGlobal(self._sort_btn.rect().bottomLeft()))
 
     def _sort_by(self, key: str) -> None:
         """Ordena los documentos por nombre o tamaño."""
@@ -329,6 +465,8 @@ class DocumentsCard(QFrame):
                 self._schedule_thumb(p, item)
             else:
                 self.list_widget.addItem(item)
+        self._update_count()
+        self._update_remove_btn()
         self.files_changed.emit(list(paths))
 
     # ------------------------------------------------------------------ #
@@ -343,6 +481,12 @@ class DocumentsCard(QFrame):
             if p:
                 result.append(p)
         return result
+
+    def set_accent(self, accent: str) -> None:
+        """Inyecta el accent de la herramienta para feedback visual."""
+        self._accent = accent or "#5E6AD2"
+        self._refresh_icon_box_style()
+        self._refresh_drop_icon(self._drop_icon_size)
 
     def add_paths(self, raw_paths: List[str]) -> None:
         """Agrega paths, convirtiendo Word si es necesario."""
@@ -455,6 +599,11 @@ class DocumentsCard(QFrame):
 
     def _update_count(self) -> None:
         n = self.list_widget.count()
+        has_items = n > 0
+        for attr in ("_sep_actions", "_remove_btn", "_clear_btn", "_sort_btn"):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setVisible(has_items)
         if n == 0:
             self._count_lbl.setText("Sin documentos")
         else:
@@ -501,11 +650,8 @@ class DocumentsCard(QFrame):
 
     def _schedule_thumb(self, pdf_path: str, item: "QListWidgetItem") -> None:
         """Lanza generación de thumbnail en hilo secundario."""
-        from PyQt6.QtCore import QThread
         loader = ThumbnailLoader(pdf_path, self._thumb_w)
-        thread = QThread(self)
-        loader.moveToThread(thread)
-        thread.started.connect(loader.run)
+        thread = RunnerThread(loader.run, self)
         loader.ready.connect(lambda path, pix, _item=item: self._apply_thumb(_item, pix))
         loader.ready.connect(thread.quit)
         thread.finished.connect(loader.deleteLater)
@@ -556,10 +702,8 @@ class DocumentsCard(QFrame):
             paths,
             make_run_dir("converted"),
         )
-        self._conv_thread = QThread(self.window())
+        self._conv_thread = RunnerThread(worker.run, self.window())
         self._conv_worker = worker
-        worker.moveToThread(self._conv_thread)
-        self._conv_thread.started.connect(worker.run)
         worker.progress.connect(self._conv_dlg.on_progress)
         worker.finished.connect(self._on_word_done)
         worker.finished.connect(self._conv_dlg.on_finished)

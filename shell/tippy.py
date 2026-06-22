@@ -6,13 +6,14 @@ Uso:
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QTextBrowser,
 )
 
 from ui.common.icons import set_button_icon
+from ui.styles import COLORS
 
 
 class TippyPopover(QFrame):
@@ -23,9 +24,9 @@ class TippyPopover(QFrame):
         self.setObjectName("TippyPopover")
         from ui.common.icons import app_qicon
         self.setWindowIcon(app_qicon())
-        self.setMinimumWidth(360)
-        self.setMaximumWidth(480)
-        self.setMaximumHeight(500)
+        self.setMinimumWidth(340)
+        self.setMaximumWidth(440)
+        self.setMaximumHeight(420)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 14, 16, 16)
@@ -35,9 +36,23 @@ class TippyPopover(QFrame):
         header_row = QHBoxLayout()
         title_lbl = QLabel(title)
         title_lbl.setObjectName("TippyTitle")
+        title_lbl.setWordWrap(True)
         close_btn = QPushButton()
         close_btn.setProperty("class", "IconBtn")
-        close_btn.setFixedSize(22, 22)
+        close_btn.setFixedSize(28, 28)
+        close_btn.setStyleSheet(
+            "QPushButton {"
+            f"background: {COLORS['surface_2']};"
+            f"border: 1px solid {COLORS['border']};"
+            "border-radius: 6px;"
+            "padding: 0;"
+            "min-width: 28px;"
+            "max-width: 28px;"
+            "min-height: 28px;"
+            "max-height: 28px;"
+            "}"
+            f"QPushButton:hover {{ border-color: {COLORS['border_strong']}; }}"
+        )
         set_button_icon(close_btn, "x", size=14, icon_only=True)
         close_btn.clicked.connect(self.close)
         header_row.addWidget(title_lbl, 1)
@@ -59,6 +74,8 @@ class TippyPopover(QFrame):
         # Convierte texto simple a HTML básico preservando saltos de línea
         html = self._to_html(body)
         browser.setHtml(html)
+        browser.setMinimumHeight(160)
+        browser.setMaximumHeight(320)
         layout.addWidget(browser, 1)
 
     @staticmethod
@@ -77,9 +94,9 @@ class TippyPopover(QFrame):
                 html_lines.append(line if line else "<br>")
         return (
             "<style>"
-            "body { color: #ECEDEE; background: transparent; font-size: 12px; }"
-            "code { background: #1C1C21; padding: 1px 4px; border-radius: 3px; }"
-            "b { color: #ECEDEE; }"
+            f"body {{ color: {COLORS['text']}; background: transparent; font-size: 12px; }}"
+            f"code {{ background: {COLORS['surface_3']}; padding: 1px 4px; border-radius: 3px; }}"
+            f"b {{ color: {COLORS['text']}; }}"
             "</style>"
             + "<br>".join(html_lines)
         )
@@ -107,7 +124,19 @@ class TippyButton(QPushButton):
             return
         self._popup = TippyPopover(self._title, self._body, self.window())
         from ui.common.popup_utils import smart_popup_pos
-        pos = smart_popup_pos(self, popup_w=480, popup_h=500, prefer="below-right")
+        self._popup.ensurePolished()
+        hint = self._popup.sizeHint()
+        size = QSize(
+            min(440, max(340, hint.width())),
+            min(420, max(220, hint.height())),
+        )
+        self._popup.resize(size)
+        pos = smart_popup_pos(
+            self,
+            popup_w=self._popup.width(),
+            popup_h=self._popup.height(),
+            prefer="below-right",
+        )
         self._popup.move(pos)
         self._popup.show()
         self._popup.raise_()

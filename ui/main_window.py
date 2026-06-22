@@ -15,6 +15,7 @@ from typing import List, Optional
 
 from PIL import Image
 from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QObject, QUrl
+from ui.common.tool_scaffold import RunnerThread
 from PyQt6.QtGui import (
     QPixmap, QDragEnterEvent, QDropEvent, QDesktopServices, QColor, QFont,
 )
@@ -399,11 +400,23 @@ class MainWindow(QMainWindow):
         self.next_page_btn.clicked.connect(
             lambda: self.preview.set_page(self.preview.current_page() + 1)
         )
-        self.page_label = QLabel("— / —")
-        self.page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.page_label.setStyleSheet("color: #9094A0;")
+        self.page_spin = QSpinBox()
+        self.page_spin.setRange(1, 1)
+        self.page_spin.setEnabled(False)
+        self.page_spin.setFixedWidth(54)
+        self.page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self.page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.page_spin.setStyleSheet(
+            "QSpinBox { background: #1A1A21; color: #F0F1F3; "
+            "border: 1px solid #1E1E28; border-radius: 4px; "
+            "padding: 1px 4px; font-size: 12px; }"
+        )
+        self.page_spin.editingFinished.connect(self._on_page_jump)
+        self.page_total_lbl = QLabel("/ —")
+        self.page_total_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
         page_nav.addWidget(self.prev_page_btn)
-        page_nav.addWidget(self.page_label, 1)
+        page_nav.addWidget(self.page_spin, 1)
+        page_nav.addWidget(self.page_total_lbl)
         page_nav.addWidget(self.next_page_btn)
         nvl.addLayout(page_nav)
 
@@ -779,15 +792,27 @@ class MainWindow(QMainWindow):
     # Preview
     # ================================================================== #
     def _on_preview_page_changed(self, cur: int, total: int) -> None:
-        self.page_label.setText(f"{cur + 1} / {total}" if total > 0 else "— / —")
+        self._sync_page_spin(cur, total)
+
+    def _sync_page_spin(self, cur: int, total: int) -> None:
+        self.page_spin.blockSignals(True)
+        self.page_spin.setRange(1, max(1, total))
+        self.page_spin.setValue(cur + 1 if total > 0 else 1)
+        self.page_spin.blockSignals(False)
+        self.page_spin.setEnabled(total > 1)
+        self.page_total_lbl.setText(f"/ {total}" if total > 0 else "/ —")
+
+    def _on_page_jump(self) -> None:
+        n = self.preview.page_count()
+        if n <= 0:
+            return
+        target = max(0, min(self.page_spin.value() - 1, n - 1))
+        if target != self.preview.current_page():
+            self.preview.set_page(target)
 
     def _update_page_label(self) -> None:
-        if self.preview.page_count() == 0:
-            self.page_label.setText("— / —")
-        else:
-            self.page_label.setText(
-                f"{self.preview.current_page() + 1} / {self.preview.page_count()}"
-            )
+        n = self.preview.page_count()
+        self._sync_page_spin(self.preview.current_page(), n)
 
     def _update_placement_info(self) -> None:
         self._update_page_label()
@@ -933,11 +958,8 @@ class MainWindow(QMainWindow):
         self.progress.setValue(0)
         self.progress_label.setText("Iniciando…")
 
-        self._worker_thread = QThread(self)
         self._worker = SignWorker(jobs, variation)
-        self._worker.moveToThread(self._worker_thread)
-
-        self._worker_thread.started.connect(self._worker.run)
+        self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.doc_started.connect(self._on_doc_started)
         self._worker.doc_finished.connect(self._on_doc_finished)

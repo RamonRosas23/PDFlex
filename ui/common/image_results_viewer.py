@@ -15,7 +15,13 @@ from PIL import Image, ImageDraw
 
 from ui.common.file_dialogs import get_save_file_name
 from ui.common.icons import icon, set_button_icon
-from ui.common.result_ui import ElidedLabel, configure_result_list
+from ui.common.result_ui import (
+    ElidedLabel,
+    ResultsStatBar,
+    configure_result_list,
+    format_file_size,
+    make_result_list_item,
+)
 from ui.common.save_utils import save_files_as_batch, save_grouped_files_as_batch
 
 
@@ -69,6 +75,9 @@ class ImageResultsViewer(QWidget):
         title_lbl = QLabel(self._list_title)
         title_lbl.setProperty("class", "CardTitle")
         lv.addWidget(title_lbl)
+
+        self._stat_bar = ResultsStatBar()
+        lv.addWidget(self._stat_bar)
 
         self.file_list = QListWidget()
         configure_result_list(self.file_list)
@@ -172,17 +181,32 @@ class ImageResultsViewer(QWidget):
         self.file_list.clear()
         for r in self._results:
             out = getattr(r, "output_path", "") or ""
-            name = Path(out).name if out else "(error)"
-            item = QListWidgetItem(name)
-            item.setToolTip(out or name)
-            if not getattr(r, "success", False):
-                item.setForeground(QBrush(QColor("#E5484D")))
-                item.setIcon(icon("warning", "#E5484D", 16))
+            item = make_result_list_item(
+                out,
+                success=getattr(r, "success", False),
+                error=getattr(r, "error", "") or "",
+            )
             self.file_list.addItem(item)
         if self._results:
             self.file_list.setCurrentRow(0)
+            self._refresh_stat_bar(self._results)
         else:
+            self._stat_bar.setVisible(False)
             self.clear_results()
+
+    def _refresh_stat_bar(self, results: list) -> None:
+        from ui.styles import COLORS as _C
+        from PyQt6.QtCore import QTimer
+        ok = sum(1 for r in results if getattr(r, "success", False))
+        errors = len(results) - ok
+        stats: list[dict] = [
+            {"value": len(results), "label": "archivos", "color": _C["text"]},
+            {"value": ok, "label": "correctos", "color": _C["success"]},
+        ]
+        if errors > 0:
+            stats.append({"value": errors, "label": "errores", "color": _C["danger"]})
+        self._stat_bar.set_stats(stats)
+        QTimer.singleShot(30, self._stat_bar.animate)
 
     # ------------------------------------------------------------------ #
     # Public API — grouped results (PDF-to-Images multi-doc)
@@ -231,12 +255,12 @@ class ImageResultsViewer(QWidget):
             # ── Result items ─────────────────────────────────────────────
             for r in group_results:
                 out = getattr(r, "output_path", "") or ""
-                name = "   " + Path(out).name if out else "   (error)"
-                item = QListWidgetItem(name)
-                item.setToolTip(out or name.strip())
-                if not getattr(r, "success", False):
-                    item.setForeground(QBrush(QColor("#E5484D")))
-                    item.setIcon(icon("warning", "#E5484D", 16))
+                item = make_result_list_item(
+                    out,
+                    success=getattr(r, "success", False),
+                    error=getattr(r, "error", "") or "",
+                    prefix="   ",
+                )
                 self.file_list.addItem(item)
                 self._row_map.append(len(self._flat_results))
                 self._flat_results.append(r)
@@ -347,20 +371,14 @@ class ImageResultsViewer(QWidget):
             self.compare_widget.setVisible(False)
             self.preview_lbl.setVisible(True)
             self._set_scaled_pixmap(self.preview_lbl, pix)
-        try:
-            size_kb = path.stat().st_size / 1024
-            size_str = f"{size_kb / 1024:.1f} MB" if size_kb >= 1024 else f"{size_kb:.0f} KB"
-            meta = f"{pix.width()} x {pix.height()} px  ·  {size_str}"
-            extra = getattr(r, "meta_text", "")
-            if extra:
-                meta += f"  ·  {extra}"
-            self.meta_lbl.setText(meta)
-        except OSError:
-            meta = f"{pix.width()} x {pix.height()} px"
-            extra = getattr(r, "meta_text", "")
-            if extra:
-                meta += f"  ·  {extra}"
-            self.meta_lbl.setText(meta)
+        meta_parts = [f"{pix.width()} x {pix.height()} px"]
+        size = format_file_size(path)
+        if size:
+            meta_parts.append(size)
+        extra = getattr(r, "meta_text", "")
+        if extra:
+            meta_parts.append(extra)
+        self.meta_lbl.setText("  ·  ".join(meta_parts))
 
     def _clear_preview_area(self) -> None:
         self.preview_lbl.clear()

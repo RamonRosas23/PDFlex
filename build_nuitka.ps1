@@ -14,7 +14,9 @@ param(
     [switch]$SkipVenv,
     [switch]$SkipBuild,
     [switch]$SkipSetupBootstrapper,
-    [switch]$SkipSign
+    [switch]$SkipSign,
+    [string]$EnterpriseServicesMode = "",
+    [string]$EnterpriseServicesSource = ""
 )
 
 Set-StrictMode -Version Latest
@@ -53,6 +55,24 @@ function Ok([string]$msg)   { Write-Host "    ✓ $msg" -ForegroundColor Green  
 function Warn([string]$msg) { Write-Host "    ⚠ $msg" -ForegroundColor Yellow }
 function Err([string]$msg)  { Write-Host "    ✗ $msg" -ForegroundColor Red; throw $msg }
 
+function Resolve-EnterpriseServicesMode([string]$RequestedMode) {
+    $raw = if ($RequestedMode) {
+        $RequestedMode
+    } elseif ($env:PDFLEX_ENTERPRISE_SERVICES_MODE) {
+        $env:PDFLEX_ENTERPRISE_SERVICES_MODE
+    } else {
+        "Off"
+    }
+
+    switch ($raw.Trim().ToLowerInvariant()) {
+        "off"      { return "Off" }
+        "required" { return "Required" }
+        default    { Err "EnterpriseServicesMode invalido: '$raw'. Usa Off o Required." }
+    }
+}
+
+$EffectiveEnterpriseServicesMode = Resolve-EnterpriseServicesMode $EnterpriseServicesMode
+
 # ── 0. Validaciones previas ───────────────────────────────────────────────────
 Step "0/8" "Validando entorno"
 
@@ -69,6 +89,7 @@ Ok "Directorio del proyecto: $ProjectDir"
 
 if ($ISSCPaths) { Ok "Inno Setup: $ISSCPaths" }
 else            { Err "Inno Setup no encontrado. Se requiere para generar el instalador." }
+Ok "Enterprise Services: $EffectiveEnterpriseServicesMode"
 
 # ── 1. Limpiar builds anteriores ─────────────────────────────────────────────
 Step "1/8" "Limpiando builds anteriores"
@@ -116,7 +137,7 @@ $SSLFlags = @(
 # ── 3. Instalar dependencias ──────────────────────────────────────────────────
 if ($SkipBuild) {
     Step "3/8" "Omitiendo dependencias (--SkipBuild)"
-} elseif (-not $SkipVenv) {
+} else {
     Step "3/8" "Instalando dependencias del proyecto"
 
     & $VenvPython -m pip install --upgrade pip @SSLFlags --quiet
@@ -145,6 +166,12 @@ if ($SkipBuild) {
 
     $nuitkaVer = & $VenvPython -m nuitka --version 2>&1 | Select-Object -First 1
     Ok "Nuitka: $nuitkaVer"
+
+    & $VenvPython -c "import cv2, fitz, numpy, PIL; print(cv2.__version__)" 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Err "El entorno de build no puede importar OpenCV/PyMuPDF/Numpy/Pillow."
+    }
+    Ok "Motor visual OpenCV: OK"
 }
 
 # ── 4. Verificar assets críticos ─────────────────────────────────────────────
@@ -198,6 +225,7 @@ if (-not $SkipBuild) {
         "--include-module=charset_normalizer",
         "--include-module=idna",
         "--include-module=urllib3",
+        "--include-package=cv2",
         "--nofollow-import-to=win32com.gen_py",  # evitar miles de stubs COM
 
         # ── Excluir módulos innecesarios ──────────────────────────────────
@@ -308,6 +336,10 @@ if (-not (Test-Path $setupBuilder)) {
 $setupArgs = @{}
 if ($SkipSetupBootstrapper) { Warn "-SkipSetupBootstrapper esta obsoleto; se generara el instalador directo." }
 if ($SkipSign)              { $setupArgs["SkipSign"] = $true }
+$setupArgs["EnterpriseServicesMode"] = $EffectiveEnterpriseServicesMode
+if ($EnterpriseServicesSource) {
+    $setupArgs["EnterpriseServicesSource"] = $EnterpriseServicesSource
+}
 
 & $setupBuilder @setupArgs
 if ($LASTEXITCODE -ne 0) { Err "build_setup.ps1 terminó con error $LASTEXITCODE." }

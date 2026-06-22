@@ -14,10 +14,12 @@ from typing import List
 from PyQt6.QtCore import QObject, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout,
-    QPushButton, QLabel, QScrollArea,
+    QPushButton, QLabel, QScrollArea, QSizePolicy,
 )
 
 from ui.common.icons import set_button_icon
+from ui.common.result_ui import ElidedLabel
+from ui.styles import COLORS
 
 
 # ====================================================================== #
@@ -91,7 +93,7 @@ class TrayPopup(QFrame):
         super().__init__(parent, Qt.WindowType.Popup)
         self._tray = tray
         self.setObjectName("TrayPopup")
-        self.setMinimumWidth(340)
+        self.setFixedWidth(360)
         self.setMaximumHeight(420)
         self._build()
         tray.changed.connect(self._refresh)
@@ -120,8 +122,15 @@ class TrayPopup(QFrame):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(
+            "QScrollArea {"
+            f"background: {COLORS['surface']};"
+            "border: none;"
+            "}"
+        )
 
         self._container = QWidget()
+        self._container.setStyleSheet(f"background: {COLORS['surface']};")
         self._list_layout = QVBoxLayout(self._container)
         self._list_layout.setSpacing(4)
         self._list_layout.setContentsMargins(0, 0, 0, 0)
@@ -147,23 +156,43 @@ class TrayPopup(QFrame):
         for ti in items:
             row = QFrame()
             row.setProperty("class", "TrayItemRow")
+            row.setMinimumWidth(0)
             rl = QHBoxLayout(row)
             rl.setContentsMargins(10, 6, 10, 6)
             rl.setSpacing(8)
 
-            info = QVBoxLayout()
+            info_host = QWidget()
+            info_host.setMinimumWidth(0)
+            info_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            info = QVBoxLayout(info_host)
+            info.setContentsMargins(0, 0, 0, 0)
             info.setSpacing(1)
-            lbl = QLabel(ti.label)
+            lbl = ElidedLabel(ti.label)
+            lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 13px; background: transparent;")
             lbl.setToolTip(ti.path)
-            source = QLabel(f"de {ti.source_tool}")
+            source = ElidedLabel(f"de {ti.source_tool}")
             source.setProperty("class", "CardHint")
+            source.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;")
             info.addWidget(lbl)
             info.addWidget(source)
-            rl.addLayout(info, 1)
+            rl.addWidget(info_host, 1)
 
             remove_btn = QPushButton()
             remove_btn.setProperty("class", "IconBtn")
-            remove_btn.setFixedSize(24, 24)
+            remove_btn.setFixedSize(30, 30)
+            remove_btn.setStyleSheet(
+                "QPushButton {"
+                f"background: {COLORS['surface_2']};"
+                f"border: 1px solid {COLORS['border']};"
+                "border-radius: 6px;"
+                "padding: 0;"
+                "min-width: 30px;"
+                "max-width: 30px;"
+                "min-height: 30px;"
+                "max-height: 30px;"
+                "}"
+                f"QPushButton:hover {{ border-color: {COLORS['border_strong']}; }}"
+            )
             set_button_icon(remove_btn, "x", size=14, icon_only=True)
             remove_btn.setToolTip("Quitar de la bandeja")
             remove_btn.clicked.connect(lambda _, p=ti.path: self._tray.remove(p))

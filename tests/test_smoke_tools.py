@@ -11,6 +11,7 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
 from shell.context import ShellContext
@@ -58,6 +59,7 @@ TOOLS = [
     ("pdf_to_word",     "ui.pdf_to_word.window",     "PdfToWordWindow"),
     ("protector",       "ui.protector.window",       "ProtectorWindow"),
     ("quitar_fondo",    "ui.quitar_fondo.window",    "QuitarFondoWindow"),
+    ("quitar_logos",    "ui.quitar_logos.window",    "QuitarLogosWindow"),
     ("redactor",        "ui.redactor.window",        "RedactorWindow"),
     ("reparador",       "ui.reparador.window",       "ReparadorWindow"),
     ("separador",       "ui.separador.window",       "SeparadorWindow"),
@@ -78,3 +80,23 @@ def test_tool_instancia_sin_errores(app, ctx, tool_id, module_path, class_name):
     assert window is not None
     window.deleteLater()
     app.processEvents()
+
+
+def test_word_list_card_uses_compact_detail_rows(app, tmp_path):
+    from ui.word_a_pdf.window import WordListCard
+
+    docx = tmp_path / "contrato_con_nombre_muy_largo_para_validar_lista.docx"
+    docx.write_bytes(b"x" * 2048)
+
+    card = WordListCard()
+    try:
+        card.add_paths([str(docx)])
+        item = card.list_widget.item(0)
+
+        assert item.data(Qt.ItemDataRole.UserRole) == str(docx)
+        assert "contrato_con_nombre_muy_largo" in item.text()
+        assert "DOCX" in item.text()
+        assert "2.0 KB" in item.text()
+    finally:
+        card.deleteLater()
+        app.processEvents()

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from shell.context import ShellContext
+from ui.styles import COLORS
 from shell.tray import PdfTray, TrayPopup
 from shell.word_to_pdf import WordToPdfConverter
 from shell.launcher import LauncherWidget
@@ -30,7 +31,10 @@ from ui.common.output_settings import (
     set_add_tool_suffix_enabled,
 )
 from ui.common.icons import set_button_icon
-from core.update_config import UPDATE_STARTUP_DELAY_MS
+from core.update_config import (
+    UPDATE_STARTUP_DELAY_MS,
+    UPDATE_STARTUP_RETRY_DELAYS_MS,
+)
 
 
 class ShellWindow(QMainWindow):
@@ -41,7 +45,6 @@ class ShellWindow(QMainWindow):
         from ui.common.icons import app_qicon
         self.setWindowIcon(app_qicon())
         self.setMinimumSize(1320, 820)
-        self.showMaximized()
         self.setAcceptDrops(True)
 
         # Infraestructura compartida
@@ -60,11 +63,13 @@ class ShellWindow(QMainWindow):
         self._update_check_thread = None   # referencia para evitar GC prematuro
         self._update_check_worker = None
         self._manual_update_check = False
+        self._startup_update_check_attempt = 0
+        self._startup_update_check_done = False
 
         self._build_ui()
 
         # Comprobación de actualización diferida (no bloquea el arranque)
-        QTimer.singleShot(UPDATE_STARTUP_DELAY_MS, self._start_update_check)
+        self._schedule_startup_update_check(UPDATE_STARTUP_DELAY_MS)
 
     # ------------------------------------------------------------------ #
     # UI
@@ -174,12 +179,12 @@ class ShellWindow(QMainWindow):
     def _build_loading_widget(self) -> QWidget:
         """Widget placeholder mostrado mientras se construye una herramienta."""
         w = QWidget()
-        w.setStyleSheet("background: #0D0D12;")
+        w.setStyleSheet(f"background: {COLORS['bg']};")
         layout = QVBoxLayout(w)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        lbl = QLabel("Cargando herramienta…")
+        lbl = QLabel("Abriendo herramienta…")
         lbl.setStyleSheet(
-            "color: #555568; font-size: 14px; background: transparent;"
+            "color: #4A4D5E; font-size: 13px; letter-spacing: 0.2px; background: transparent;"
         )
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
@@ -285,7 +290,31 @@ class ShellWindow(QMainWindow):
     # Auto-update
     # ------------------------------------------------------------------ #
 
-    def _start_update_check(self, manual: bool = False) -> None:
+    def _schedule_startup_update_check(self, delay_ms: int) -> None:
+        """Agenda un intento automático de actualización al arrancar."""
+        if self._startup_update_check_done:
+            return
+        from core.updater import log_update_event
+        log_update_event(
+            "Scheduling startup update check "
+            f"attempt={self._startup_update_check_attempt + 1} delay_ms={delay_ms}"
+        )
+        QTimer.singleShot(delay_ms, self._run_startup_update_check)
+
+    def _run_startup_update_check(self) -> None:
+        """Ejecuta/reintenta el análisis automático de actualización."""
+        if self._startup_update_check_done:
+            return
+        if (
+            self._update_check_thread is not None
+            and self._update_check_thread.isRunning()
+        ):
+            self._schedule_startup_update_check(10_000)
+            return
+        self._startup_update_check_attempt += 1
+        self._start_update_check(manual=False, startup=True)
+
+    def _start_update_check(self, manual: bool = False, startup: bool = False) -> bool:
         """Lanza la comprobación de actualizaciones en segundo plano."""
         from core.updater import UpdateCheckWorker, UpdateCheckThread
 
@@ -299,35 +328,81 @@ class ShellWindow(QMainWindow):
                     "Actualizaciones",
                     "Ya hay una comprobación de actualizaciones en curso.",
                 )
-            return
+            return False
 
         self._manual_update_check = manual
         self._update_check_worker = UpdateCheckWorker()
         self._update_check_thread = UpdateCheckThread(
             self._update_check_worker, self
         )
-        self._update_check_worker.update_available.connect(self._on_update_found)
-        self._update_check_worker.up_to_date.connect(self._on_update_up_to_date)
-        self._update_check_worker.check_error.connect(self._on_update_check_error)
+        self._update_check_worker.update_available.connect(
+            lambda info, startup=startup: self._on_update_found(info, startup)
+        )
+        self._update_check_worker.up_to_date.connect(
+            lambda version, manual=manual, startup=startup: (
+                self._on_update_up_to_date(version, manual, startup)
+            )
+        )
+        self._update_check_worker.check_error.connect(
+            lambda message, manual=manual, startup=startup: (
+                self._on_update_check_error(message, manual, startup)
+            )
+        )
         self._update_check_thread.finished.connect(self._update_check_thread.deleteLater)
         self._update_check_thread.finished.connect(self._on_update_check_finished)
         self._update_check_thread.start()
+        return True
 
-    def _on_update_found(self, info: object) -> None:
+    def _on_update_found(self, info: object, startup: bool = False) -> None:
         """Muestra el diálogo de actualización cuando hay una versión nueva."""
+        self._startup_update_check_done = True
+        from core.updater import log_update_event
         from ui.updater_dialog import UpdaterDialog
+        log_update_event("Update available signal received; showing update dialog.")
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
         UpdaterDialog.show_update(info, self)  # type: ignore[arg-type]
 
-    def _on_update_up_to_date(self, version: str) -> None:
-        if self._manual_update_check:
+    def _on_update_up_to_date(
+        self,
+        version: str,
+        manual: bool = False,
+        startup: bool = False,
+    ) -> None:
+        self._startup_update_check_done = True
+        if manual:
             QMessageBox.information(
                 self,
                 "Actualizaciones",
                 f"PDFlex ya está actualizado.\n\nVersión instalada: {version}",
             )
 
-    def _on_update_check_error(self, message: str) -> None:
-        if self._manual_update_check:
+    def _on_update_check_error(
+        self,
+        message: str,
+        manual: bool = False,
+        startup: bool = False,
+    ) -> None:
+        if startup:
+            from core.updater import log_update_event
+            retry_idx = self._startup_update_check_attempt - 1
+            if retry_idx < len(UPDATE_STARTUP_RETRY_DELAYS_MS):
+                delay_ms = UPDATE_STARTUP_RETRY_DELAYS_MS[retry_idx]
+                log_update_event(
+                    "Startup update check failed; retry scheduled "
+                    f"attempt={self._startup_update_check_attempt} "
+                    f"next_delay_ms={delay_ms} error={message}"
+                )
+                self._schedule_startup_update_check(delay_ms)
+            else:
+                self._startup_update_check_done = True
+                log_update_event(
+                    "Startup update check failed; no retries left "
+                    f"attempt={self._startup_update_check_attempt} error={message}"
+                )
+        if manual:
             from core.updater import update_log_path
             QMessageBox.warning(
                 self,

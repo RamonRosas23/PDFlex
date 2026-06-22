@@ -55,6 +55,11 @@ def _make_redactor():
     return RedactorWindow
 
 
+def _make_quitar_logos():
+    from ui.quitar_logos.window import QuitarLogosWindow
+    return QuitarLogosWindow
+
+
 def _make_protector():
     from ui.protector.window import ProtectorWindow
     return ProtectorWindow
@@ -236,6 +241,27 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_redactor()(ctx),
         icon_letter="R",
         icon_name="tool-redactor",
+    ),
+    ToolDescriptor(
+        id="quitar_logos",
+        title="Quitar logos",
+        tagline="Detecta y elimina imágenes repetidas de PDFs",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Localiza logos iguales a imágenes PNG, JPG o WebP de referencia "
+            "y genera copias del PDF sin esas apariciones.\n\n"
+            "**Características:**\n"
+            "- Detección híbrida de imágenes embebidas y contenido escaneado\n"
+            "- Comparación perceptual resistente a escalado y recompresión\n"
+            "- Vista previa con coincidencias y nivel de confianza\n"
+            "- Sensibilidad, tamaños, páginas, rotaciones y margen ajustables\n"
+            "- Conserva el texto que atraviesa el área eliminada"
+        ),
+        accent_color="#14B8A6",
+        enabled=True,
+        window_factory=lambda ctx: _make_quitar_logos()(ctx),
+        icon_letter="L",
+        icon_name="tool-quitar-logos",
     ),
     ToolDescriptor(
         id="protector",

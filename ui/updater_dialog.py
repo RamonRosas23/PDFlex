@@ -68,14 +68,22 @@ class UpdaterDialog(QDialog):
     def show_update(cls, info: UpdateInfo, parent=None) -> None:
         """Muestra el diálogo para una actualización. Previene duplicados."""
         if cls._active is not None and cls._active.isVisible():
-            cls._active.raise_()
-            cls._active.activateWindow()
+            cls._bring_to_front(cls._active)
             return
         dlg = cls(info, parent)
         cls._active = dlg
         if is_update_forced(info):
             dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
         dlg.show()
+        cls._bring_to_front(dlg)
+        QTimer.singleShot(0, lambda d=dlg: cls._bring_to_front(d))
+
+    @staticmethod
+    def _bring_to_front(dlg: "UpdaterDialog") -> None:
+        if dlg.isMinimized():
+            dlg.showNormal()
+        dlg.raise_()
+        dlg.activateWindow()
 
     # ── Constructor ───────────────────────────────────────────────────────────
 

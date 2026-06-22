@@ -8,10 +8,11 @@ from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
-    QProgressBar, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ui.common.icons import icon_pixmap, set_button_icon
+from ui.common.result_ui import ElidedLabel
 from ui.styles import COLORS
 
 
@@ -46,12 +47,13 @@ class _FileRow(QFrame):
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
 
-        self._name_lbl = QLabel(filename)
+        self._name_lbl = ElidedLabel(filename)
         self._name_lbl.setStyleSheet(
             f"color: {COLORS['text']}; font-size: 13px; font-weight: 500; "
             "background: transparent;"
         )
         self._name_lbl.setMinimumWidth(0)
+        self._name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         text_col.addWidget(self._name_lbl)
 
         self._meta_lbl = QLabel(f"Archivo {index} de {total}")
@@ -64,6 +66,7 @@ class _FileRow(QFrame):
         self._state_lbl = QLabel("Pendiente")
         self._state_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._state_lbl.setFixedWidth(84)
+        self._state_lbl.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         root.addWidget(self._state_lbl)
 
         self._apply_state_style()
@@ -314,8 +317,8 @@ class WordConvertDialog(QDialog):
 
         bottom = QHBoxLayout()
         bottom.setSpacing(12)
-        self._msg_lbl = QLabel("Esperando a Microsoft Word...")
-        self._msg_lbl.setWordWrap(True)
+        self._msg_lbl = ElidedLabel("Esperando a Microsoft Word...")
+        self._msg_lbl.setMinimumWidth(0)
         self._msg_lbl.setStyleSheet(
             f"color: {COLORS['text_dim']}; font-size: 11px; background: transparent;"
         )

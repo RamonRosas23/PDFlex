@@ -28,6 +28,7 @@ def smart_popup_pos(
         or QApplication.primaryScreen()
     )
     avail = screen.availableGeometry() if screen else None
+    gap = 8
 
     # Esquina inferior derecha e izquierda del anchor
     anchor_br = anchor.mapToGlobal(anchor.rect().bottomRight())
@@ -37,10 +38,10 @@ def smart_popup_pos(
     if prefer == "below-right":
         # Alinear borde derecho del popup con borde derecho del anchor
         x = anchor_br.x() - popup_w
-        y = anchor_br.y()
+        y = anchor_br.y() + gap
     else:
         x = anchor_bl.x()
-        y = anchor_bl.y()
+        y = anchor_bl.y() + gap
 
     if avail:
         # Desbordamiento por la derecha
@@ -51,7 +52,7 @@ def smart_popup_pos(
             x = avail.left() + 4
         # Desbordamiento por abajo → mostrar encima
         if y + popup_h > avail.bottom():
-            y = anchor_tl.y() - popup_h
+            y = anchor_tl.y() - popup_h - gap
         # Desbordamiento por arriba
         if y < avail.top():
             y = avail.top() + 4

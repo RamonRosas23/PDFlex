@@ -308,6 +308,7 @@ class FoleadorWindow(PipelineWindow):
         zoom_card = make_card("Navegación y zoom")
         zl = card_layout(zoom_card)
         page_nav = QHBoxLayout()
+        page_nav.setSpacing(4)
         self._prev_pg = QPushButton()
         self._prev_pg.setProperty("class", "IconBtn")
         set_button_icon(self._prev_pg, "chevron-left", size=15, icon_only=True)
@@ -316,11 +317,23 @@ class FoleadorWindow(PipelineWindow):
         self._next_pg.setProperty("class", "IconBtn")
         set_button_icon(self._next_pg, "chevron-right", size=15, icon_only=True)
         self._next_pg.clicked.connect(lambda: self._pos_preview.set_page(self._pos_preview.current_page()+1))
-        self._pg_lbl = QLabel("— / —")
-        self._pg_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._pg_lbl.setStyleSheet("color: #9094A0;")
+        self._pg_spin = QSpinBox()
+        self._pg_spin.setRange(1, 1)
+        self._pg_spin.setEnabled(False)
+        self._pg_spin.setFixedWidth(54)
+        self._pg_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._pg_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._pg_spin.setStyleSheet(
+            "QSpinBox { background: #1A1A21; color: #F0F1F3; "
+            "border: 1px solid #1E1E28; border-radius: 4px; "
+            "padding: 1px 4px; font-size: 12px; }"
+        )
+        self._pg_spin.editingFinished.connect(self._on_pg_jump)
+        self._pg_total_lbl = QLabel("/ —")
+        self._pg_total_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
         page_nav.addWidget(self._prev_pg)
-        page_nav.addWidget(self._pg_lbl, 1)
+        page_nav.addWidget(self._pg_spin, 1)
+        page_nav.addWidget(self._pg_total_lbl)
         page_nav.addWidget(self._next_pg)
         zl.addLayout(page_nav)
 
@@ -364,9 +377,7 @@ class FoleadorWindow(PipelineWindow):
         self._pos_preview = PdfPreviewView()
         self._pos_preview.setObjectName("PdfPreview")
         self._pos_preview.placementChanged.connect(self._on_pos_placement_changed)
-        self._pos_preview.pageChanged.connect(
-            lambda c, t: self._pg_lbl.setText(f"{c+1} / {t}" if t > 0 else "— / —")
-        )
+        self._pos_preview.pageChanged.connect(self._on_pos_page_changed)
         # Diferir el sync costoso de fontsize al momento en que el usuario
         # suelta el ratón — evita lag durante el arrastre.
         self._pos_preview.drag_started.connect(self._on_drag_started)
@@ -606,8 +617,13 @@ class FoleadorWindow(PipelineWindow):
             self._pos_preview.clear_page()
         if hasattr(self, "_pos_info"):
             self._pos_info.setText("Sin posición definida")
-        if hasattr(self, "_pg_lbl"):
-            self._pg_lbl.setText("— / —")
+        if hasattr(self, "_pg_spin"):
+            self._pg_spin.blockSignals(True)
+            self._pg_spin.setRange(1, 1)
+            self._pg_spin.setValue(1)
+            self._pg_spin.blockSignals(False)
+            self._pg_spin.setEnabled(False)
+            self._pg_total_lbl.setText("/ —")
 
     def _refresh_position_step(self) -> None:
         """Actualiza la lista de referencia y carga el PDF sólo si cambió.
@@ -662,6 +678,22 @@ class FoleadorWindow(PipelineWindow):
         self._pos_ref_path = p
         self._pos_preview.load_pdf(p)
         self._update_placeholder()
+
+    def _on_pos_page_changed(self, cur: int, total: int) -> None:
+        self._pg_spin.blockSignals(True)
+        self._pg_spin.setRange(1, max(1, total))
+        self._pg_spin.setValue(cur + 1 if total > 0 else 1)
+        self._pg_spin.blockSignals(False)
+        self._pg_spin.setEnabled(total > 1)
+        self._pg_total_lbl.setText(f"/ {total}" if total > 0 else "/ —")
+
+    def _on_pg_jump(self) -> None:
+        n = self._pos_preview.page_count()
+        if n <= 0:
+            return
+        target = max(0, min(self._pg_spin.value() - 1, n - 1))
+        if target != self._pos_preview.current_page():
+            self._pos_preview.set_page(target)
 
     def _on_drag_started(self) -> None:
         self._pos_dragging = True

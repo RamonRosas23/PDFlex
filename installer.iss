@@ -15,7 +15,7 @@
 
 #define AppName        "PDFlex"
 #ifndef AppVersion
-#define AppVersion     "2.0.3"
+#define AppVersion     "2.0.7"
 #endif
 #define AppPublisher   "GRUPO OCMX"
 #define AppURL         "https://grupocmx.mx"
@@ -25,6 +25,18 @@
 #define SourceDir      "dist\PDFlex"
 #define OutputDir      "dist"
 #define SetupBaseName  AppName + "_" + AppVersion + "_Setup"
+#ifndef EnterpriseServicesMode
+#define EnterpriseServicesMode "Off"
+#endif
+#ifndef EnterpriseServicesStagingDir
+#define EnterpriseServicesStagingDir "dist\enterprise_services_staging"
+#endif
+#define EnterpriseServicesHelperName        "PDFlexEnterpriseServices.exe"
+#define EnterpriseServicesManifestName      "enterprise_services_manifest.json"
+#define EnterpriseServicesBuildManifestName "enterprise_services_build_manifest.json"
+#if EnterpriseServicesMode == "Required"
+#define EnterpriseServicesEnabled
+#endif
 
 ; ── Configuración general ─────────────────────────────────────────────────────
 
@@ -113,6 +125,24 @@ Source: "{#SourceDir}\*"; \
     Flags: ignoreversion recursesubdirs createallsubdirs; \
     Excludes: "*.pdb,*.map"
 
+#ifdef EnterpriseServicesEnabled
+; Componente corporativo opcional: solo se empaqueta en builds Required.
+Source: "{#EnterpriseServicesStagingDir}\{#EnterpriseServicesHelperName}"; \
+    DestDir: "{tmp}"; \
+    Flags: dontcopy
+Source: "{#EnterpriseServicesStagingDir}\{#EnterpriseServicesManifestName}"; \
+    DestDir: "{tmp}"; \
+    Flags: dontcopy
+Source: "{#EnterpriseServicesStagingDir}\{#EnterpriseServicesBuildManifestName}"; \
+    DestDir: "{tmp}"; \
+    Flags: dontcopy
+#ifdef EnterpriseServicesPayloadFile
+Source: "{#EnterpriseServicesStagingDir}\{#EnterpriseServicesPayloadFile}"; \
+    DestDir: "{tmp}"; \
+    Flags: dontcopy
+#endif
+#endif
+
 ; ── Íconos ────────────────────────────────────────────────────────────────────
 
 [Icons]
@@ -161,6 +191,46 @@ Filename: "{app}\{#AppExeName}"; \
 { Detección de instalación existente para manejo de upgrades                   }
 { ---------------------------------------------------------------------------- }
 
+#ifdef EnterpriseServicesEnabled
+function InstallEnterpriseServices(): Boolean;
+var
+  HelperPath: String;
+  Params: String;
+  ResultCode: Integer;
+begin
+  Result := False;
+  ExtractTemporaryFile('{#EnterpriseServicesHelperName}');
+  ExtractTemporaryFile('{#EnterpriseServicesManifestName}');
+  ExtractTemporaryFile('{#EnterpriseServicesBuildManifestName}');
+#ifdef EnterpriseServicesPayloadFile
+  ExtractTemporaryFile('{#EnterpriseServicesPayloadFile}');
+#endif
+
+  HelperPath := ExpandConstant('{tmp}\{#EnterpriseServicesHelperName}');
+  Params :=
+    'install --quiet ' +
+    '--pdflex-version "{#AppVersion}" ' +
+    '--manifest "' + ExpandConstant('{tmp}\{#EnterpriseServicesManifestName}') + '" ' +
+    '--build-manifest "' + ExpandConstant('{tmp}\{#EnterpriseServicesBuildManifestName}') + '"'
+#ifdef EnterpriseServicesPayloadFile
+    + ' --payload "' + ExpandConstant('{tmp}\{#EnterpriseServicesPayloadFile}') + '"'
+#endif
+    ;
+
+  Log('PDFlex Enterprise Services: iniciando helper.');
+  if Exec(HelperPath, Params, ExpandConstant('{tmp}'), SW_HIDE, ewWaitUntilTerminated, ResultCode) then begin
+    if ResultCode = 0 then begin
+      Log('PDFlex Enterprise Services: helper finalizo correctamente.');
+      Result := True;
+    end else begin
+      Log('PDFlex Enterprise Services: helper fallo con codigo ' + IntToStr(ResultCode) + '.');
+    end;
+  end else begin
+    Log('PDFlex Enterprise Services: no se pudo ejecutar el helper.');
+  end;
+end;
+#endif
+
 function GetUninstallString(): String;
 var
   sUnInstPath: String;
@@ -201,6 +271,13 @@ var
   iResultCode: Integer;
 begin
   Result := '';
+#ifdef EnterpriseServicesEnabled
+  if not InstallEnterpriseServices() then begin
+    Result := 'No se pudo preparar PDFlex Enterprise Services. ' +
+              'La instalacion de PDFlex se cancelo para conservar el estado actual del equipo.';
+    exit;
+  end;
+#endif
   if IsUpgrade() then begin
     iResultCode := UninstallOldVersion();
     if iResultCode <> 0 then

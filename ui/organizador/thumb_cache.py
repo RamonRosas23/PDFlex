@@ -9,7 +9,7 @@ from typing import Optional
 import fitz
 from PIL import Image
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage
 
 
 @dataclass(frozen=True)
@@ -24,20 +24,20 @@ class ThumbnailCache:
     """Thread-safe LRU cache for page thumbnails."""
 
     def __init__(self, max_size: int = 200) -> None:
-        self._cache: OrderedDict[ThumbnailKey, QPixmap] = OrderedDict()
+        self._cache: OrderedDict[ThumbnailKey, QImage] = OrderedDict()
         self._max_size = max_size
         self._lock = threading.Lock()
 
-    def get(self, key: ThumbnailKey) -> Optional[QPixmap]:
+    def get(self, key: ThumbnailKey) -> Optional[QImage]:
         with self._lock:
             if key not in self._cache:
                 return None
             self._cache.move_to_end(key)
             return self._cache[key]
 
-    def put(self, key: ThumbnailKey, pixmap: QPixmap) -> None:
+    def put(self, key: ThumbnailKey, image: QImage) -> None:
         with self._lock:
-            self._cache[key] = pixmap
+            self._cache[key] = image
             self._cache.move_to_end(key)
             while len(self._cache) > self._max_size:
                 self._cache.popitem(last=False)
@@ -54,8 +54,11 @@ def render_page_thumb(
     page_index: int,
     rotation_deg: int = 0,
     target_w: int = 116,
-) -> Optional[QPixmap]:
-    """Render one PDF page to a QPixmap. Returns None on any error."""
+) -> Optional[QImage]:
+    """Render one PDF page to a QImage. Returns None on any error.
+
+    QImage is thread-safe; callers in the GUI thread must convert to QPixmap.
+    """
     try:
         doc = fitz.open(source_path)
         try:
@@ -69,7 +72,7 @@ def render_page_thumb(
             img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
             data = img.tobytes("raw", "RGBA")
             qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-            return QPixmap.fromImage(qimg.copy())
+            return qimg.copy()  # .copy() owns its data after buffer goes out of scope
         finally:
             doc.close()
     except Exception:
@@ -99,7 +102,7 @@ class _ThumbRequest:
 class ThumbnailWorker(QObject):
     """Background worker that renders thumbnails and emits them via signal."""
 
-    thumb_ready = pyqtSignal(str, str, object)  # lane_id, page_id, QPixmap
+    thumb_ready = pyqtSignal(str, str, object)  # lane_id, page_id, QImage (convert to QPixmap in GUI thread)
 
     def __init__(self, cache: ThumbnailCache, parent=None) -> None:
         super().__init__(parent)
@@ -147,7 +150,7 @@ class ThumbnailWorker(QObject):
                 QThread.msleep(20)
                 continue
             key = ThumbnailKey(req.source_path, req.page_index, req.rotation_deg, req.width)
-            pixmap = render_page_thumb(req.source_path, req.page_index, req.rotation_deg, req.width)
-            if pixmap is not None:
-                self._cache.put(key, pixmap)
-                self.thumb_ready.emit(req.lane_id, req.page_id, pixmap)
+            qimage = render_page_thumb(req.source_path, req.page_index, req.rotation_deg, req.width)
+            if qimage is not None:
+                self._cache.put(key, qimage)
+                self.thumb_ready.emit(req.lane_id, req.page_id, qimage)

@@ -1,0 +1,6 @@
+{
+  "componentName": "PDFlex Enterprise Services",
+  "version": "1.0.0",
+  "payloadZip": "enterprise_services_payload.zip",
+  "payloadSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+}

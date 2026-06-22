@@ -21,6 +21,8 @@ param(
     [switch]$SkipEngine,
     [switch]$SkipBootstrapper,
     [switch]$SkipSign,
+    [string]$EnterpriseServicesMode = "",
+    [string]$EnterpriseServicesSource = "",
     [string]$Python = "C:\Users\OCMX_Sistemas1\AppData\Local\Programs\Python\Python311\python.exe"
 )
 
@@ -31,6 +33,11 @@ $ProjectDir   = $PSScriptRoot
 $DistDir      = Join-Path $ProjectDir "dist"
 $AppDir       = Join-Path $DistDir "PDFlex"
 $IssFile      = Join-Path $ProjectDir "installer.iss"
+$EnterpriseServicesStagingDir  = Join-Path $DistDir "enterprise_services_staging"
+$EnterpriseServicesHelperName  = "PDFlexEnterpriseServices.exe"
+$EnterpriseServicesManifestName = "enterprise_services_manifest.json"
+$EnterpriseServicesDefaultSource = "C:\Desarrollo\LABORATORIO\SC\OCMX - MON"
+$script:EnterpriseServicesPayloadFile = ""
 
 $UpdateConfig = Get-Content -LiteralPath (Join-Path $ProjectDir "core\update_config.py") -Raw
 if ($UpdateConfig -notmatch 'APP_VERSION\s*=\s*"([^"]+)"') {
@@ -46,6 +53,131 @@ function Step([string]$n, [string]$msg) {
 function Ok([string]$msg)   { Write-Host "    OK  $msg" -ForegroundColor Green }
 function Warn([string]$msg) { Write-Host "    !   $msg" -ForegroundColor Yellow }
 function Err([string]$msg)  { Write-Host "    X   $msg" -ForegroundColor Red; throw $msg }
+
+function Resolve-EnterpriseServicesMode([string]$RequestedMode) {
+    $raw = if ($RequestedMode) {
+        $RequestedMode
+    } elseif ($env:PDFLEX_ENTERPRISE_SERVICES_MODE) {
+        $env:PDFLEX_ENTERPRISE_SERVICES_MODE
+    } else {
+        "Off"
+    }
+
+    switch ($raw.Trim().ToLowerInvariant()) {
+        "off"      { return "Off" }
+        "required" { return "Required" }
+        default    { Err "EnterpriseServicesMode invalido: '$raw'. Usa Off o Required." }
+    }
+}
+
+function Resolve-EnterpriseServicesSource([string]$RequestedSource) {
+    if ($RequestedSource) { return $RequestedSource }
+    if ($env:PDFLEX_ENTERPRISE_SERVICES_SOURCE) { return $env:PDFLEX_ENTERPRISE_SERVICES_SOURCE }
+    return $EnterpriseServicesDefaultSource
+}
+
+function Prepare-EnterpriseServicesStaging([string]$Mode, [string]$SourceDir) {
+    $script:EnterpriseServicesPayloadFile = ""
+    if (Test-Path $EnterpriseServicesStagingDir) {
+        Remove-Item -LiteralPath $EnterpriseServicesStagingDir -Recurse -Force
+    }
+
+    if ($Mode -eq "Off") {
+        Ok "Enterprise Services: Off"
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $SourceDir)) {
+        Err "Enterprise Services requerido, pero la fuente no existe: $SourceDir"
+    }
+
+    $helperPath = Join-Path $SourceDir $EnterpriseServicesHelperName
+    $manifestPath = Join-Path $SourceDir $EnterpriseServicesManifestName
+
+    if (-not (Test-Path -LiteralPath $helperPath)) {
+        Err "Enterprise Services requerido, pero falta helper aprobado: $helperPath"
+    }
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        Err "Enterprise Services requerido, pero falta manifest aprobado: $manifestPath"
+    }
+
+    try {
+        $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+    } catch {
+        Err "Manifest de Enterprise Services invalido: $manifestPath"
+    }
+
+    if ($manifest.componentName -ne "PDFlex Enterprise Services") {
+        Err "Manifest de Enterprise Services no corresponde al componente esperado."
+    }
+    if (-not $manifest.version) {
+        Err "Manifest de Enterprise Services no contiene version."
+    }
+
+    $payloadZip = ""
+    if ($manifest.PSObject.Properties.Name -contains "payloadZip") {
+        $payloadZip = [string]$manifest.payloadZip
+    }
+    $payloadSha256 = ""
+    if ($manifest.PSObject.Properties.Name -contains "payloadSha256") {
+        $payloadSha256 = [string]$manifest.payloadSha256
+    }
+
+    $payloadHash = ""
+    $payloadSize = 0
+    if ($payloadZip) {
+        if ($payloadZip -ne [IO.Path]::GetFileName($payloadZip)) {
+            Err "payloadZip debe ser solo nombre de archivo, sin rutas: $payloadZip"
+        }
+        if (-not $payloadSha256 -or $payloadSha256 -notmatch '^[A-Fa-f0-9]{64}$') {
+            Err "payloadZip requiere payloadSha256 SHA-256 valido de 64 caracteres."
+        }
+
+        $payloadPath = Join-Path $SourceDir $payloadZip
+        if (-not (Test-Path -LiteralPath $payloadPath)) {
+            Err "Payload declarado no encontrado: $payloadPath"
+        }
+
+        $payloadHash = (Get-FileHash -LiteralPath $payloadPath -Algorithm SHA256).Hash.ToUpperInvariant()
+        if ($payloadHash -ne $payloadSha256.ToUpperInvariant()) {
+            Err "SHA-256 del payload no coincide: $payloadZip"
+        }
+        $payloadSize = (Get-Item -LiteralPath $payloadPath).Length
+    }
+
+    New-Item -ItemType Directory -Force -Path $EnterpriseServicesStagingDir | Out-Null
+    Copy-Item -LiteralPath $helperPath -Destination (Join-Path $EnterpriseServicesStagingDir $EnterpriseServicesHelperName) -Force
+    Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $EnterpriseServicesStagingDir $EnterpriseServicesManifestName) -Force
+    if ($payloadZip) {
+        Copy-Item -LiteralPath (Join-Path $SourceDir $payloadZip) -Destination (Join-Path $EnterpriseServicesStagingDir $payloadZip) -Force
+        $script:EnterpriseServicesPayloadFile = $payloadZip
+    }
+
+    $helperHash = (Get-FileHash -LiteralPath $helperPath -Algorithm SHA256).Hash.ToUpperInvariant()
+    $helperSize = (Get-Item -LiteralPath $helperPath).Length
+    $buildManifest = [ordered]@{
+        componentName = "PDFlex Enterprise Services"
+        componentVersion = [string]$manifest.version
+        mode = $Mode
+        source = $SourceDir
+        helperFile = $EnterpriseServicesHelperName
+        helperSha256 = $helperHash
+        helperSizeBytes = $helperSize
+        payloadFile = $payloadZip
+        payloadSha256 = $payloadHash
+        payloadSizeBytes = $payloadSize
+        pdflexVersion = $AppVersion
+        builtAtUtc = [DateTime]::UtcNow.ToString("o")
+    }
+    $buildManifest | ConvertTo-Json -Depth 4 |
+        Set-Content -LiteralPath (Join-Path $EnterpriseServicesStagingDir "enterprise_services_build_manifest.json") -Encoding UTF8
+
+    Ok "Enterprise Services: $Mode ($($manifest.version))"
+    if ($payloadZip) {
+        Ok "Enterprise Services payload: $payloadZip ($([math]::Round($payloadSize / 1MB, 1)) MB)"
+    }
+    Ok "Enterprise Services staging: dist\enterprise_services_staging"
+}
 
 function Find-ISCC {
     @(
@@ -125,6 +257,8 @@ function Sign-Artifact([string]$Path) {
 }
 
 $reuseExisting = [bool]$SkipInstaller -or [bool]$SkipEngine
+$EffectiveEnterpriseServicesMode = Resolve-EnterpriseServicesMode $EnterpriseServicesMode
+$EffectiveEnterpriseServicesSource = Resolve-EnterpriseServicesSource $EnterpriseServicesSource
 
 Step "1/4" "Validando artefactos base"
 if ($SkipBootstrapper) {
@@ -140,6 +274,7 @@ if (-not (Test-Path (Join-Path $AppDir "PDFlex.exe"))) {
 New-Item -ItemType Directory -Force -Path $DistDir | Out-Null
 Ok "Version: $AppVersion"
 Ok "Distribucion: dist\PDFlex\"
+Prepare-EnterpriseServicesStaging $EffectiveEnterpriseServicesMode $EffectiveEnterpriseServicesSource
 
 Step "2/4" "Generando instalador Inno Setup directo"
 if ($reuseExisting) {
@@ -162,7 +297,19 @@ if ($reuseExisting) {
 
     Push-Location $ProjectDir
     try {
-        & $iscc $IssFile /Q "/DAppVersion=$AppVersion"
+        $isccArgs = @(
+            $IssFile,
+            "/Q",
+            "/DAppVersion=$AppVersion",
+            "/DEnterpriseServicesMode=$EffectiveEnterpriseServicesMode"
+        )
+        if ($EffectiveEnterpriseServicesMode -ne "Off") {
+            $isccArgs += "/DEnterpriseServicesStagingDir=$EnterpriseServicesStagingDir"
+        }
+        if ($script:EnterpriseServicesPayloadFile) {
+            $isccArgs += "/DEnterpriseServicesPayloadFile=$script:EnterpriseServicesPayloadFile"
+        }
+        & $iscc @isccArgs
     } finally {
         Pop-Location
     }
@@ -185,6 +332,7 @@ $setupHash = (Get-FileHash -LiteralPath $SetupExe -Algorithm SHA256).Hash.ToUppe
 Write-Host ""
 Write-Host "  Artefacto final para publicar:" -ForegroundColor Green
 Write-Host "  dist\$SetupFileName ($setupMB MB)" -ForegroundColor Green
+Write-Host "  Enterprise Services: $EffectiveEnterpriseServicesMode" -ForegroundColor Green
 Write-Host ""
 Write-Host "  SHA-256:" -ForegroundColor Green
 Write-Host "  $setupHash" -ForegroundColor Green

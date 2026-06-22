@@ -867,11 +867,21 @@ class FirmadorWindow(PipelineWindow):
         self._sb_prev_pg.clicked.connect(
             lambda: self.preview.set_page(self.preview.current_page() - 1)
         )
-        self._sb_page_lbl = QLabel("— / —")
-        self._sb_page_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sb_page_lbl.setStyleSheet(
-            "color: #9094A0; font-size: 12px; min-width: 44px;"
+        self._sb_page_spin = QSpinBox()
+        self._sb_page_spin.setRange(1, 1)
+        self._sb_page_spin.setEnabled(False)
+        self._sb_page_spin.setFixedWidth(50)
+        self._sb_page_spin.setFixedHeight(24)
+        self._sb_page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._sb_page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._sb_page_spin.setStyleSheet(
+            "QSpinBox { background: #1A1A21; color: #F0F1F3; "
+            "border: 1px solid #1E1E28; border-radius: 4px; "
+            "padding: 1px 4px; font-size: 12px; }"
         )
+        self._sb_page_spin.editingFinished.connect(self._on_sb_page_jump)
+        self._sb_page_total_lbl = QLabel("/ —")
+        self._sb_page_total_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
         self._sb_next_pg = QPushButton()
         self._sb_next_pg.setProperty("class", "IconBtn")
         self._sb_next_pg.setFixedSize(26, 26)
@@ -880,7 +890,8 @@ class FirmadorWindow(PipelineWindow):
             lambda: self.preview.set_page(self.preview.current_page() + 1)
         )
         layout.addWidget(self._sb_prev_pg)
-        layout.addWidget(self._sb_page_lbl)
+        layout.addWidget(self._sb_page_spin)
+        layout.addWidget(self._sb_page_total_lbl)
         layout.addWidget(self._sb_next_pg)
 
         sep1 = QFrame()
@@ -2741,9 +2752,22 @@ class FirmadorWindow(PipelineWindow):
     def _update_status_bar(self) -> None:
         n = self.preview.page_count()
         cur = self.preview.current_page()
-        self._sb_page_lbl.setText(f"{cur + 1} / {n}" if n > 0 else "— / —")
+        self._sb_page_spin.blockSignals(True)
+        self._sb_page_spin.setRange(1, max(1, n))
+        self._sb_page_spin.setValue(cur + 1 if n > 0 else 1)
+        self._sb_page_spin.blockSignals(False)
+        self._sb_page_spin.setEnabled(n > 1)
+        self._sb_page_total_lbl.setText(f"/ {n}" if n > 0 else "/ —")
         self._sb_prev_pg.setEnabled(cur > 0)
         self._sb_next_pg.setEnabled(n > 1 and cur < n - 1)
+
+    def _on_sb_page_jump(self) -> None:
+        n = self.preview.page_count()
+        if n <= 0:
+            return
+        target = max(0, min(self._sb_page_spin.value() - 1, n - 1))
+        if target != self.preview.current_page():
+            self.preview.set_page(target)
 
         if not self._active_uid:
             hint = "Sin firma — agrega una con «+ Agregar PNG»" if not self._sigs else "Sin firma seleccionada"

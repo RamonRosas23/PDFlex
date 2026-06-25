@@ -29,8 +29,9 @@ from core.splitter_engine import SplitterJob, SplitterEngine, SplitterJobResult
 from core.output_paths import make_run_dir
 from core.output_naming import output_filename_for_source
 from shell.context import ShellContext
-from shell.word_to_pdf import WordConvertWorker
+from shell.transfer import ToolTransfer
 from ui.common.cards import make_card, card_layout, make_page_header
+from ui.common.document_workspace import DocumentWorkspace
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.pdf_viewer import GenericPdfViewer
@@ -44,7 +45,6 @@ from ui.common.dialogs import (
     show_success,
     show_warning,
 )
-from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
 
 
@@ -108,8 +108,6 @@ class SeparadorWindow(PipelineWindow):
         self.last_result: Optional[SplitterJobResult] = None
         self._worker_thread: Optional[QThread] = None
         self._worker: Optional[SplitterWorker] = None
-        self._conv_thread: Optional[QThread] = None
-        self._conv_dlg = None
         self._thumb_threads: list = []
 
         self._ranges_layout: Optional[QVBoxLayout] = None  # set during _build
@@ -146,29 +144,18 @@ class SeparadorWindow(PipelineWindow):
             "También puedes arrastrar el archivo sobre esta ventana.",
         ))
 
-        # Card de carga
-        load_card = make_card("Seleccionar archivo")
-        ll = card_layout(load_card)
-
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(10)
-        open_btn = QPushButton("Seleccionar PDF o Word")
-        open_btn.setProperty("class", "Primary")
-        open_btn.clicked.connect(self._on_open_file)
-
-        tray_btn = QPushButton("Cargar desde bandeja")
-        tray_btn.setProperty("class", "Ghost")
-        tray_btn.clicked.connect(self._on_load_from_tray)
-        self.ctx.tray.changed.connect(
-            lambda: tray_btn.setVisible(self.ctx.tray.count() > 0)
+        self._document_workspace = DocumentWorkspace(
+            self.ctx,
+            single_file=True,
+            show_thumbnails=False,
+            file_filter=(
+                "PDF y Word (*.pdf *.doc *.docx);;"
+                "PDF (*.pdf);;"
+                "Word (*.doc *.docx)"
+            ),
         )
-        tray_btn.setVisible(self.ctx.tray.count() > 0)
-
-        btn_row.addWidget(open_btn)
-        btn_row.addWidget(tray_btn)
-        btn_row.addStretch()
-        ll.addLayout(btn_row)
-        outer.addWidget(load_card)
+        self._document_workspace.files_changed.connect(self._on_workspace_files_changed)
+        outer.addWidget(self._document_workspace)
 
         # Card de info del documento
         info_card = make_card("Documento cargado")
@@ -447,6 +434,10 @@ class SeparadorWindow(PipelineWindow):
             self._add_file_paths(paths)
         self._switch_section(0)
 
+    def set_transfer(self, transfer: ToolTransfer) -> None:
+        self._document_workspace.set_transfer(transfer)
+        self._switch_section(0)
+
     def handle_drop(self, paths: List[str]) -> None:
         if paths:
             self._add_file_paths(paths)
@@ -456,41 +447,27 @@ class SeparadorWindow(PipelineWindow):
     # Carga de documento
     # ------------------------------------------------------------------ #
 
-    def _on_open_file(self) -> None:
-        path, _ = get_open_file_name(
-            self, "Seleccionar PDF o Word", "",
-            "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)",
-        )
-        if path:
-            self._add_file_paths([path])
-
-    def _on_load_from_tray(self) -> None:
-        paths = [
-            p for p in self.ctx.tray.paths()
-            if Path(p).suffix.lower() in self.SUPPORTED_EXTS
-        ]
-        if paths:
-            self._add_file_paths(paths[:1])  # solo el primero
-        else:
-            show_info(
-                self,
-                "Sin documentos compatibles",
-                "La bandeja no contiene archivos PDF o Word para separar.",
-            )
-
     def _add_file_paths(self, paths: List[str]) -> None:
-        pdfs = [p for p in paths if Path(p).suffix.lower() == ".pdf"]
-        words = [p for p in paths if Path(p).suffix.lower() in (".doc", ".docx")]
-        if pdfs:
-            self._load_pdf(pdfs[0])
-        elif words:
-            self._handle_word_files(words[:1])
+        compatible = [
+            path for path in paths
+            if Path(path).suffix.lower() in self.SUPPORTED_EXTS
+        ]
+        if compatible:
+            self._document_workspace.set_paths(compatible[:1])
         elif paths:
             show_info(
                 self,
                 "Archivo no compatible",
                 "Selecciona un archivo PDF, DOC o DOCX.",
             )
+
+    def _on_workspace_files_changed(self, paths: List[str]) -> None:
+        if not paths:
+            if self._pdf_path:
+                self._clear_loaded_document()
+            return
+        if paths[0] != self._pdf_path:
+            self._load_pdf(paths[0])
 
     def _load_pdf(self, path: str) -> None:
         try:
@@ -560,7 +537,7 @@ class SeparadorWindow(PipelineWindow):
                 danger=True,
             ):
                 return
-        self._clear_loaded_document()
+        self._document_workspace.clear()
 
     def _clear_loaded_document(self) -> None:
         self._results_viewer.clear_results()
@@ -582,53 +559,6 @@ class SeparadorWindow(PipelineWindow):
         self._proc_step.reset()
         self._rebuild_ranges_ui()
         self._sync_run_enabled()
-
-    # ------------------------------------------------------------------ #
-    # Word → PDF
-    # ------------------------------------------------------------------ #
-
-    def _handle_word_files(self, paths: List[str]) -> None:
-        if self._conv_thread is not None:
-            return
-        if not self.ctx.word_converter.is_available():
-            show_info(
-                self, "Microsoft Office requerido",
-                "Para convertir archivos Word a PDF se necesita "
-                "Microsoft Office instalado.\n\nEl archivo .doc/.docx ha sido omitido.",
-            )
-            return
-
-        from ui.common.word_convert_dialog import WordConvertDialog
-
-        self._conv_dlg = WordConvertDialog(self, paths)
-
-        worker = WordConvertWorker(
-            self.ctx.word_converter,
-            paths,
-            make_run_dir("converted"),
-        )
-        thread = RunnerThread(worker.run, self)
-        worker.progress.connect(self._conv_dlg.on_progress)
-        worker.finished.connect(self._conv_dlg.on_finished)
-        worker.error.connect(self._conv_dlg.on_error)
-        worker.finished.connect(thread.quit)
-        worker.error.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        worker.error.connect(worker.deleteLater)
-        thread.finished.connect(thread.deleteLater)
-        worker.finished.connect(self._on_word_convert_done)
-        worker.error.connect(self._on_word_convert_error)
-        self._conv_thread = thread
-        thread.start()
-        self._conv_dlg.exec()
-
-    def _on_word_convert_done(self, paths: List[str]) -> None:
-        self._conv_thread = None
-        if paths:
-            self._load_pdf(paths[0])
-
-    def _on_word_convert_error(self, msg: str) -> None:
-        self._conv_thread = None
 
     # ------------------------------------------------------------------ #
     # Editor de rangos
@@ -978,7 +908,7 @@ class SeparadorWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _reset_session(self) -> None:
-        self._clear_loaded_document()
+        self._document_workspace.clear()
         self._switch_section(0)
 
     # ------------------------------------------------------------------ #

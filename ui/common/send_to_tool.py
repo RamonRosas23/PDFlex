@@ -11,10 +11,11 @@ from typing import TYPE_CHECKING, List
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QApplication, QFrame, QHBoxLayout, QLabel,
+    QApplication, QButtonGroup, QFrame, QHBoxLayout, QLabel,
     QPushButton, QVBoxLayout, QWidget,
 )
 
+from shell.transfer import ToolTransfer
 from ui.common.icons import icon, set_button_icon
 from ui.styles import COLORS
 
@@ -135,6 +136,9 @@ class SendToToolPanel(QWidget):
         self._ctx = ctx
         self._current_id = current_id
         self._output_paths = output_paths
+        self._mode_buttons: dict[str, QPushButton] = {}
+        self._tray_buttons: dict[str, QPushButton] = {}
+        self._option_groups: list[QButtonGroup] = []
         self.setStyleSheet(
             f"background: {COLORS['surface_2']}; "
             f"border: 1px solid {COLORS['border_strong']};"
@@ -169,6 +173,8 @@ class SendToToolPanel(QWidget):
         main.setContentsMargins(16, 14, 16, 16)
         main.setSpacing(10)
 
+        self._add_transfer_options(main)
+
         if not all_tools:
             lbl = QLabel("No hay herramientas compatibles")
             lbl.setStyleSheet(
@@ -193,6 +199,116 @@ class SendToToolPanel(QWidget):
             heading = "TODAS LAS HERRAMIENTAS" if not priority_tools else "OTRAS HERRAMIENTAS"
             self._add_section(main, heading, other_tools)
 
+    def _add_transfer_options(self, layout: QVBoxLayout) -> None:
+        count = len(self._output_paths)
+        count_lbl = QLabel(f"{count} archivo" + ("s" if count != 1 else ""))
+        count_lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 11px; "
+            "background: transparent; border: none;"
+        )
+        layout.addWidget(count_lbl)
+
+        self._add_option_row(
+            layout,
+            "DESTINO",
+            [
+                ("replace", "Reemplazar"),
+                ("append", "Agregar"),
+            ],
+            self._mode_buttons,
+            default="replace",
+        )
+        self._add_option_row(
+            layout,
+            "BANDEJA",
+            [
+                ("keep", "Mantener"),
+                ("replace_with_sent", "Solo enviados"),
+                ("clear", "Limpiar"),
+            ],
+            self._tray_buttons,
+            default="keep",
+        )
+
+        sep = QFrame()
+        sep.setFixedHeight(1)
+        sep.setStyleSheet(
+            f"background: {COLORS['border']}; border: none; border-radius: 0;"
+        )
+        layout.addWidget(sep)
+
+    def _add_option_row(
+        self,
+        layout: QVBoxLayout,
+        title: str,
+        options: list[tuple[str, str]],
+        target: dict[str, QPushButton],
+        *,
+        default: str,
+    ) -> None:
+        lbl = QLabel(title)
+        lbl.setStyleSheet(
+            f"color: {COLORS['text_dim']}; font-size: 9px; font-weight: 700; "
+            "letter-spacing: 1.0px; background: transparent; border: none;"
+        )
+        layout.addWidget(lbl)
+
+        group = QButtonGroup(self)
+        group.setExclusive(True)
+        self._option_groups.append(group)
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.setContentsMargins(0, 0, 0, 0)
+
+        for value, text in options:
+            btn = QPushButton(text)
+            btn.setCheckable(True)
+            btn.setFixedHeight(28)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                "QPushButton {"
+                f"background: {COLORS['surface_3']};"
+                f"color: {COLORS['text_muted']};"
+                f"border: 1px solid {COLORS['border']};"
+                "border-radius: 6px;"
+                "padding: 0 10px;"
+                "font-size: 11px;"
+                "font-weight: 600;"
+                "}"
+                "QPushButton:checked {"
+                f"background: {COLORS['accent']};"
+                f"color: {COLORS['bg']};"
+                f"border-color: {COLORS['accent']};"
+                "}"
+                "QPushButton:hover {"
+                f"border-color: {COLORS['border_strong']};"
+                "}"
+            )
+            btn.setChecked(value == default)
+            target[value] = btn
+            group.addButton(btn)
+            row.addWidget(btn)
+
+        row.addStretch()
+        layout.addLayout(row)
+
+    def _selected_mode(self) -> str:
+        return self._selected_value(self._mode_buttons, "replace")
+
+    def _selected_tray_policy(self) -> str:
+        return self._selected_value(self._tray_buttons, "keep")
+
+    def _selected_value(self, buttons: dict[str, QPushButton], default: str) -> str:
+        for value, button in buttons.items():
+            if button.isChecked():
+                return value
+        return default
+
+    def _current_tool_title(self) -> str:
+        from shell.tool_registry import get_tool
+        tool = get_tool(self._current_id)
+        return getattr(tool, "title", None) or self._current_id
+
     def _add_section(self, layout: QVBoxLayout, title: str, tools: list) -> None:
         lbl = QLabel(title)
         lbl.setStyleSheet(
@@ -216,7 +332,15 @@ class SendToToolPanel(QWidget):
 
     def _send_to(self, tool) -> None:
         self.close()
-        self._ctx.open_tool(tool.id, list(self._output_paths))
+        transfer = ToolTransfer(
+            paths=list(self._output_paths),
+            source_tool_id=self._current_id,
+            source_tool_title=self._current_tool_title(),
+            mode=self._selected_mode(),
+            tray_policy=self._selected_tray_policy(),
+            kind="output",
+        )
+        self._ctx.open_tool(tool.id, transfer)
 
 
 # ── Botón de entrada ──────────────────────────────────────────────────────────

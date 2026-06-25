@@ -17,6 +17,7 @@ from shell.context import ShellContext
 from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_page_header
 from ui.common.dialogs import show_error, show_info, show_success, show_warning
+from ui.common.file_workspace import FileWorkspace
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import icon, make_icon_label, set_button_icon
 from ui.common.pdf_viewer import GenericPdfViewer
@@ -298,7 +299,12 @@ class WordAPdfWindow(PipelineWindow):
             "Carga uno o varios documentos .doc o .docx para convertirlos a PDF.",
         ))
 
-        self._word_card = WordListCard()
+        self._word_card = FileWorkspace(
+            self.ctx,
+            WordListCard(),
+            WORD_EXTS,
+            tray_title="Bandeja Word",
+        )
         outer.addWidget(self._word_card, 1)
 
         return page

@@ -20,7 +20,7 @@ from shell.context import ShellContext
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
-from ui.common.documents_step import DocumentsCard
+from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.send_to_tool import SendToToolButton

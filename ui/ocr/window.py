@@ -32,7 +32,7 @@ from core.ocr_engine import (
 from core.output_paths import make_run_dir, sanitize_filename
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
-from ui.common.documents_step import DocumentsCard
+from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.save_utils import save_files_as_batch
 from ui.common.result_ui import ElidedLabel, configure_result_list, format_file_size

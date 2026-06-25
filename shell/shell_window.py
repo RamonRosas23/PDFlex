@@ -10,6 +10,7 @@ Estructura:
             [1…] PipelineWindow de cada herramienta (lazy)
 """
 from __future__ import annotations
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from PyQt6.QtCore import Qt, QPoint, QTimer
@@ -20,6 +21,7 @@ from PyQt6.QtWidgets import (
 )
 
 from shell.context import ShellContext
+from shell.transfer import ToolTransfer
 from ui.styles import COLORS
 from shell.tray import PdfTray, TrayPopup
 from shell.word_to_pdf import WordToPdfConverter
@@ -59,6 +61,7 @@ class ShellWindow(QMainWindow):
 
         self._tool_widgets: Dict[str, QWidget] = {}   # lazy instances
         self._pending_tool_id: Optional[str] = None  # guard para re-entry en apertura
+        self._active_tool_id: Optional[str] = None
 
         self._update_check_thread = None   # referencia para evitar GC prematuro
         self._update_check_worker = None
@@ -194,7 +197,11 @@ class ShellWindow(QMainWindow):
     # Navegación
     # ------------------------------------------------------------------ #
 
-    def _open_tool(self, tool_id: str, inputs: Optional[List[str]] = None) -> None:
+    def _open_tool(
+        self,
+        tool_id: str,
+        inputs: Optional[List[str] | ToolTransfer] = None,
+    ) -> None:
         tool = get_tool(tool_id)
         if tool is None or not tool.enabled:
             return
@@ -219,7 +226,7 @@ class ShellWindow(QMainWindow):
         self,
         tool_id: str,
         tool: object,
-        inputs: Optional[List[str]],
+        inputs: Optional[List[str] | ToolTransfer],
     ) -> None:
         """Construye e instancia la herramienta (ejecutado tras 1 frame de diferimiento)."""
         if self._pending_tool_id != tool_id:
@@ -240,17 +247,85 @@ class ShellWindow(QMainWindow):
         self,
         tool_id: str,
         tool: object,
-        inputs: Optional[List[str]],
+        inputs: Optional[List[str] | ToolTransfer],
     ) -> None:
         """Muestra el widget de herramienta ya instanciado."""
         widget = self._tool_widgets[tool_id]
         if inputs:
-            widget.set_inputs(inputs)
+            self._deliver_tool_inputs(widget, inputs)
         self._main_stack.setCurrentWidget(widget)
         self._set_topbar_tool(tool)
 
+    def _deliver_tool_inputs(
+        self,
+        widget: QWidget,
+        inputs: List[str] | ToolTransfer,
+    ) -> None:
+        """Entrega entradas legacy o transferencias enriquecidas a una herramienta."""
+        if isinstance(inputs, ToolTransfer):
+            self._apply_transfer_tray_policy(inputs)
+            if not inputs.paths:
+                return
+            set_transfer = getattr(widget, "set_transfer", None)
+            if callable(set_transfer):
+                set_transfer(inputs)
+                return
+            if inputs.mode == "replace":
+                self._clear_widget_inputs(widget)
+            set_inputs = getattr(widget, "set_inputs", None)
+            if callable(set_inputs):
+                set_inputs(list(inputs.paths))
+            return
+
+        set_inputs = getattr(widget, "set_inputs", None)
+        if callable(set_inputs):
+            set_inputs(list(inputs))
+
+    def _clear_widget_inputs(self, widget: QWidget) -> bool:
+        """Limpia inputs conocidos antes de una transferencia `replace`."""
+        clear_inputs = getattr(widget, "clear_inputs", None)
+        if callable(clear_inputs):
+            clear_inputs()
+            return True
+
+        for attr in ("_docs_card", "_img_card", "_word_card"):
+            card = getattr(widget, attr, None)
+            clear = getattr(card, "clear", None)
+            if callable(clear):
+                clear()
+                return True
+        return False
+
+    def _apply_transfer_tray_policy(self, transfer: ToolTransfer) -> None:
+        """Aplica la politica de bandeja asociada a una transferencia."""
+        if transfer.tray_policy == "keep":
+            self._tray.mark_sent(transfer.paths)
+            return
+
+        if transfer.tray_policy == "replace_with_sent":
+            source_title = (
+                transfer.source_tool_title
+                or transfer.source_tool_id
+                or "Transferencia"
+            )
+            self._tray.replace_with(
+                transfer.paths,
+                source_title,
+                kind=transfer.kind,
+                source_tool_id=transfer.source_tool_id,
+                source_tool_title=transfer.source_tool_title or source_title,
+                batch_id=transfer.batch_id,
+                parent_ids=transfer.parent_ids,
+                status="sent",
+            )
+            return
+
+        if transfer.tray_policy == "clear":
+            self._tray.clear()
+
     def _set_topbar_tool(self, tool: object) -> None:
         """Actualiza topbar con nombre y color de la herramienta activa."""
+        self._active_tool_id = tool.id
         self._tool_name_lbl.setText(tool.title)
         self._tool_name_lbl.setStyleSheet(f"color: {tool.accent_color};")
         self._tool_name_lbl.setVisible(True)
@@ -259,6 +334,7 @@ class ShellWindow(QMainWindow):
     def _go_home(self) -> None:
         self._launcher.refresh_usage()
         self._main_stack.setCurrentIndex(0)
+        self._active_tool_id = None
         self._tool_name_lbl.setStyleSheet("")
         self._tool_name_lbl.setVisible(False)
         self._home_btn.setVisible(False)
@@ -270,6 +346,7 @@ class ShellWindow(QMainWindow):
     def _on_tray_changed(self) -> None:
         n = self._tray.count()
         self._tray_btn.setText(f"Bandeja ({n})")
+        self._tray_btn.setToolTip(self._tray_tooltip())
         self._tray_btn.setProperty("has_items", "true" if n > 0 else "false")
         self._tray_btn.style().unpolish(self._tray_btn)
         self._tray_btn.style().polish(self._tray_btn)
@@ -279,12 +356,48 @@ class ShellWindow(QMainWindow):
             self._tray_popup.close()
             self._tray_popup = None
             return
-        self._tray_popup = TrayPopup(self._tray, self)
+        active_tool = get_tool(self._active_tool_id) if self._active_tool_id else None
+        active_title = active_tool.title if active_tool else ""
+        active_extensions = active_tool.input_extensions if active_tool else ()
+        self._tray_popup = TrayPopup(
+            self._tray,
+            self,
+            active_tool_title=active_title,
+            active_extensions=active_extensions,
+        )
+        self._tray_popup.use_in_active_tool_requested.connect(self._use_selected_tray_items)
         from ui.common.popup_utils import smart_popup_pos
-        pos = smart_popup_pos(self._tray_btn, popup_w=360, popup_h=440, prefer="below-right")
+        pos = smart_popup_pos(self._tray_btn, popup_w=420, popup_h=560, prefer="below-right")
         self._tray_popup.move(pos)
         self._tray_popup.show()
         self._tray_popup.raise_()
+
+    def _tray_tooltip(self) -> str:
+        counts = self._tray.source_counts()
+        if not counts:
+            return "Bandeja vacía"
+        lines = [f"Bandeja: {self._tray.count()} archivo" + ("s" if self._tray.count() != 1 else "")]
+        lines.extend(f"{source}: {count}" for source, count in counts.items())
+        return "\n".join(lines)
+
+    def _use_selected_tray_items(self, paths: List[str]) -> None:
+        if not self._active_tool_id:
+            return
+        tool = get_tool(self._active_tool_id)
+        widget = self._tool_widgets.get(self._active_tool_id)
+        if tool is None or widget is None:
+            return
+        compatible = [
+            path for path in paths
+            if Path(path).suffix.lower() in tool.input_extensions
+        ]
+        if not compatible:
+            return
+        self._deliver_tool_inputs(widget, compatible)
+        self._tray.mark_in_work(compatible)
+        if self._tray_popup:
+            self._tray_popup.close()
+            self._tray_popup = None
 
     # ------------------------------------------------------------------ #
     # Auto-update

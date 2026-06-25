@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import (
     QComboBox, QCheckBox, QGridLayout, QLineEdit, QFrame, QScrollArea,
 )
 
-from ui.common.documents_step import DocumentsCard
+from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
 
 from core.pdf_to_images_engine import (

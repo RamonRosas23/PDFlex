@@ -35,6 +35,7 @@ from ui.common.process_step import ProcessStep
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.dialogs import show_error, show_warning
+from ui.common.file_workspace import FileWorkspace
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
 from ui.common.result_ui import format_file_size
@@ -689,7 +690,12 @@ class ImgsAPdfWindow(PipelineWindow):
             "Puedes reordenar arrastrando filas o eliminar con Supr.",
         ))
 
-        self._img_card = ImageListCard()
+        self._img_card = FileWorkspace(
+            self.ctx,
+            ImageListCard(),
+            IMAGE_EXTS,
+            tray_title="Bandeja de imágenes",
+        )
         self._img_card.files_changed.connect(self._on_files_changed)
         outer.addWidget(self._img_card, 1)
 

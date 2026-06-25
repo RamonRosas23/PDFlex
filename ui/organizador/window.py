@@ -27,11 +27,13 @@ from core.page_organizer_engine import (
     PageOrganizerEngine,
 )
 from shell.context import ShellContext
+from shell.transfer import ToolTransfer
 from ui.common.cards import make_page_header
 from ui.common.dialogs import show_error, show_warning
 from ui.common.icons import set_button_icon
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
+from ui.common.tray_input_panel import TrayInputPanel
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.organizador.lane_container import LaneContainer
 
@@ -101,9 +103,18 @@ class OrganizadorWindow(PipelineWindow):
             "Arrastra paginas entre filas para moverlas (Ctrl = copiar).",
         ))
 
+        body = QHBoxLayout()
+        body.setSpacing(12)
+
+        self._tray_panel = TrayInputPanel(self.ctx, {".pdf"})
+        self._tray_panel.add_requested.connect(self._add_tray_paths)
+        self._tray_panel.replace_requested.connect(self._replace_with_tray_paths)
+        body.addWidget(self._tray_panel)
+
         self._lane_container = LaneContainer()
         self._lane_container.layout_changed.connect(self._on_layout_changed)
-        outer.addWidget(self._lane_container, 1)
+        body.addWidget(self._lane_container, 1)
+        outer.addLayout(body, 1)
 
         self._summary_lbl = QLabel("Sin paginas cargadas.")
         self._summary_lbl.setProperty("class", "CardHint")
@@ -218,11 +229,25 @@ class OrganizadorWindow(PipelineWindow):
         self._lane_container.add_paths(paths)
         self._switch_section(0)
 
+    def set_transfer(self, transfer: ToolTransfer) -> None:
+        if transfer.mode == "replace":
+            self._lane_container.clear()
+        self._lane_container.add_paths(transfer.paths)
+        self.ctx.tray.mark_in_work(transfer.paths)
+        self._switch_section(0)
+
     def handle_drop(self, paths: List[str]) -> None:
         self._lane_container.add_paths(paths)
         self._switch_section(0)
 
     # ── Slots ──────────────────────────────────────────────────────────────
+
+    def _add_tray_paths(self, paths: List[str]) -> None:
+        self._lane_container.add_paths(paths)
+
+    def _replace_with_tray_paths(self, paths: List[str]) -> None:
+        self._lane_container.clear()
+        self._lane_container.add_paths(paths)
 
     def _on_layout_changed(self) -> None:
         total = self._lane_container.total_pages()

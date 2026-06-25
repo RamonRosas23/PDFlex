@@ -37,7 +37,7 @@ from core.redaction_engine import (
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.dialogs import show_error, show_success, show_warning
-from ui.common.documents_step import DocumentsCard
+from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.icons import set_button_icon
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
@@ -144,6 +144,10 @@ class RedactionCanvas(QWidget):
 
     def close_doc(self) -> None:
         self._render_guard += 1  # Descarta cualquier render pendiente
+        thread = self._render_thread
+        if thread is not None and thread.isRunning():
+            thread.wait(2000)
+        self._render_thread = None
         if self._doc is not None:
             try:
                 self._doc.close()
@@ -258,8 +262,13 @@ class RedactionCanvas(QWidget):
         worker.ready.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._cleanup_render_thread(t))
         self._render_thread = thread
         thread.start()
+
+    def _cleanup_render_thread(self, thread: QThread) -> None:
+        if self._render_thread is thread:
+            self._render_thread = None
 
     def _on_render_ready(self, qimage, guard: int) -> None:
         """Slot en GUI thread: convierte QImage→QPixmap; descarta renders obsoletos."""

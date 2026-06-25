@@ -52,6 +52,28 @@ class SeparadorWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_tray_selection_loads_the_single_work_document(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "desde_bandeja.pdf", pages=2)
+            ctx = ShellContext(
+                tray=PdfTray(),
+                word_converter=WordToPdfConverter(),
+                open_tool=lambda *_: None,
+            )
+            ctx.tray.add_items([str(pdf_path)], "Compresor")
+            window = SeparadorWindow(ctx)
+            try:
+                window._document_workspace._tray_list.item(0).setSelected(True)
+                window._document_workspace._add_selected_to_work()
+                self.app.processEvents()
+
+                self.assertEqual(window._document_workspace.paths(), [str(pdf_path)])
+                self.assertEqual(window._pdf_path, str(pdf_path))
+                self.assertEqual(ctx.tray.items[0].status, "in_work")
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     @staticmethod
     def _make_pdf(path: Path, pages: int = 1) -> Path:
         doc = fitz.open()

@@ -22,7 +22,7 @@ from core.pdf_compare_engine import (
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.dialogs import show_error, show_success, show_warning
-from ui.common.documents_step import DocumentsCard
+from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.icons import set_button_icon
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer

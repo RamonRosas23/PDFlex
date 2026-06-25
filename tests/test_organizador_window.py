@@ -62,6 +62,28 @@ class OrganizadorWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_tray_selection_adds_pdf_to_a_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = Path(tmp) / "from_tray.pdf"
+            doc = fitz.open()
+            doc.new_page().insert_text((36, 72), "From tray")
+            doc.save(pdf_path)
+            doc.close()
+
+            ctx = self._make_ctx()
+            ctx.tray.add_items([str(pdf_path)], "Unir")
+            window = OrganizadorWindow(ctx)
+            try:
+                window._tray_panel.list_widget.item(0).setSelected(True)
+                window._tray_panel._add_btn.click()
+
+                self.assertEqual(window._lane_container.total_lanes(), 1)
+                self.assertEqual(window._lane_container.total_pages(), 1)
+                self.assertEqual(ctx.tray.items[0].status, "in_work")
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
 
 class ThumbnailCacheTests(unittest.TestCase):
     @classmethod
@@ -277,6 +299,21 @@ class LaneContainerTests(unittest.TestCase):
             lane = container.add_lane_from_pdf(str(pdf))
             self.assertEqual(lane.count(), 2)
             container.deleteLater()
+
+    def test_delete_later_stops_thumbnail_worker_before_temp_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "release.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            container = LaneContainer()
+            container.add_lane_from_pdf(str(pdf))
+            container.deleteLater()
+
+            self.assertFalse(container._thumb_thread.isRunning())
+            pdf.unlink()
 
     def test_cross_lane_move_removes_from_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

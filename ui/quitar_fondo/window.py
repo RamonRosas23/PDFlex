@@ -20,6 +20,7 @@ from core.output_paths import make_run_dir
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.dialogs import show_error, show_success, show_warning
+from ui.common.file_workspace import FileWorkspace
 from ui.common.image_results_viewer import ImageResultsViewer
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.process_step import ProcessStep
@@ -98,7 +99,12 @@ class QuitarFondoWindow(PipelineWindow):
             "Carga imágenes con fondo blanco o uniforme. La salida será PNG con transparencia.",
         ))
 
-        self._img_card = ImageListCard()
+        self._img_card = FileWorkspace(
+            self.ctx,
+            ImageListCard(),
+            IMAGE_EXTS,
+            tray_title="Bandeja de imágenes",
+        )
         self._img_card.files_changed.connect(self._on_files_changed)
         outer.addWidget(self._img_card, 1)
 

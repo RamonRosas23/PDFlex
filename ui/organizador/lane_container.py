@@ -37,6 +37,7 @@ class LaneContainer(QWidget):
         self._cache = ThumbnailCache(max_size=300)
         self._worker = ThumbnailWorker(self._cache)
         self._thumb_thread = RunnerThread(self._worker.run, self)
+        self._worker_stopped = False
         self._thumb_thread.start()
 
         self._build()
@@ -294,6 +295,14 @@ class LaneContainer(QWidget):
         self.add_paths(files)
 
     def _stop_worker(self) -> None:
+        if self._worker_stopped:
+            return
+        self._worker_stopped = True
         self._worker.stop()
-        self._thumb_thread.quit()
-        self._thumb_thread.wait(2000)
+        if self._thumb_thread.isRunning():
+            self._thumb_thread.wait(2000)
+
+    def deleteLater(self) -> None:
+        """Detiene miniaturas antes de diferir la destrucción del widget."""
+        self._stop_worker()
+        super().deleteLater()

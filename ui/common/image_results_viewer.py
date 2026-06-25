@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QImage, QPixmap
+from PyQt6.QtCore import Qt, QSize, QEvent, QTimer, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QClipboard, QCursor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QListWidget, QListWidgetItem, QFrame,
+    QListWidget, QListWidgetItem, QFrame, QApplication, QMenu, QToolTip,
 )
 from PIL import Image, ImageDraw
 
@@ -142,6 +142,7 @@ class ImageResultsViewer(QWidget):
         self.preview_lbl.setStyleSheet(
             "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
         )
+        self._enable_preview_copy(self.preview_lbl)
         rv.addWidget(self.preview_lbl, 1)
 
         self.compare_widget = QWidget()
@@ -150,6 +151,8 @@ class ImageResultsViewer(QWidget):
         compare_layout.setSpacing(12)
         self.before_preview_lbl = self._make_compare_panel("Antes")
         self.after_preview_lbl = self._make_compare_panel("Después")
+        self._enable_preview_copy(self.before_preview_lbl)
+        self._enable_preview_copy(self.after_preview_lbl)
         compare_layout.addWidget(self.before_preview_lbl, 1)
         compare_layout.addWidget(self.after_preview_lbl, 1)
         rv.addWidget(self.compare_widget, 1)
@@ -166,6 +169,10 @@ class ImageResultsViewer(QWidget):
             "color: #9094A0;"
         )
         return label
+
+    def _enable_preview_copy(self, label: QLabel) -> None:
+        label.setToolTip("Clic derecho para copiar la imagen")
+        label.installEventFilter(self)
 
     # ------------------------------------------------------------------ #
     # Public API — flat results (backward compat)
@@ -297,6 +304,21 @@ class ImageResultsViewer(QWidget):
         """Associate one source directory per result for Save As defaults."""
         self._source_dirs = list(dirs)
 
+    def eventFilter(self, obj, event) -> bool:
+        preview_labels = tuple(
+            label
+            for label in (
+                getattr(self, "preview_lbl", None),
+                getattr(self, "before_preview_lbl", None),
+                getattr(self, "after_preview_lbl", None),
+            )
+            if label is not None
+        )
+        if obj in preview_labels and event.type() == QEvent.Type.ContextMenu:
+            self._show_preview_context_menu(obj, event.globalPos())
+            return True
+        return super().eventFilter(obj, event)
+
     # ------------------------------------------------------------------ #
     # Internal helpers
     # ------------------------------------------------------------------ #
@@ -312,6 +334,96 @@ class ImageResultsViewer(QWidget):
             if idx is not None and 0 <= idx < len(self._flat_results):
                 return self._flat_results[idx]
         return None
+
+    def _selected_result(self):
+        row = self.file_list.currentRow()
+        return self._result_at_row(row) if row >= 0 else None
+
+    def _preview_image_path(self, label: QLabel) -> str:
+        result = self._selected_result()
+        if result is None:
+            return ""
+
+        if label is self.before_preview_lbl:
+            if self.compare_widget.isHidden():
+                return ""
+            return self._source_image_path(result)
+
+        out = getattr(result, "output_path", "") or ""
+        if not getattr(result, "success", False) or not out:
+            return ""
+
+        if label is self.after_preview_lbl:
+            return out if not self.compare_widget.isHidden() else ""
+        if label is self.preview_lbl:
+            return out if not self.preview_lbl.isHidden() else ""
+        return ""
+
+    def _copy_preview_image(self, label: QLabel) -> bool:
+        path = self._preview_image_path(label)
+        if not path or not Path(path).exists():
+            return False
+        if self._copy_image_to_clipboard(path):
+            self._show_copy_feedback(label, "Imagen copiada al portapapeles")
+            return True
+
+        # Otro proceso puede tener OpenClipboard ocupado de forma transitoria.
+        # Reintentar evita fallar por ese instante sin bloquear la interfaz.
+        self._retry_copy_preview_image(label, path, attempt=0)
+        return False
+
+    def _show_preview_context_menu(self, label: QLabel, global_pos) -> None:
+        current_menu = getattr(self, "_preview_context_menu", None)
+        if current_menu is not None:
+            current_menu.close()
+
+        path = self._preview_image_path(label)
+        menu = QMenu(self)
+        copy_action = menu.addAction("Copiar imagen")
+        copy_action.setEnabled(bool(path and Path(path).exists()))
+        copy_action.triggered.connect(lambda _checked=False, target=label: self._copy_preview_image(target))
+        menu.aboutToHide.connect(
+            lambda current=menu: self._discard_preview_context_menu(current)
+        )
+        self._preview_context_menu = menu
+        menu.popup(global_pos if global_pos is not None else QCursor.pos())
+
+    def _discard_preview_context_menu(self, menu: QMenu) -> None:
+        if getattr(self, "_preview_context_menu", None) is menu:
+            self._preview_context_menu = None
+        menu.deleteLater()
+
+    def _retry_copy_preview_image(self, label: QLabel, path: str, attempt: int) -> None:
+        if self._copy_image_to_clipboard(path):
+            self._show_copy_feedback(label, "Imagen copiada al portapapeles")
+            return
+        if attempt >= 2:
+            self._show_copy_feedback(label, "No se pudo copiar la imagen")
+            return
+        delays_ms = (60, 140, 280)
+        QTimer.singleShot(
+            delays_ms[attempt],
+            lambda: self._retry_copy_preview_image(label, path, attempt + 1),
+        )
+
+    @staticmethod
+    def _show_copy_feedback(label: QLabel, text: str) -> None:
+        QToolTip.showText(QCursor.pos(), text, label, label.rect(), 1800)
+
+    @staticmethod
+    def _copy_image_to_clipboard(path: str | Path) -> bool:
+        image_path = Path(path)
+        qimg = _qimage_for_clipboard(image_path)
+        if qimg.isNull():
+            return False
+        clipboard = QApplication.clipboard()
+        clipboard.setImage(qimg, QClipboard.Mode.Clipboard)
+        copied = clipboard.image(QClipboard.Mode.Clipboard)
+        return (
+            not copied.isNull()
+            and copied.size() == qimg.size()
+            and copied.pixelColor(0, 0) == qimg.pixelColor(0, 0)
+        )
 
     # ------------------------------------------------------------------ #
     # Slots
@@ -537,3 +649,17 @@ def _transparent_png_on_checkerboard(path: Path, square: int = 18) -> QPixmap:
         return QPixmap.fromImage(qimg.copy())
     except Exception:
         return QPixmap()
+
+
+def _qimage_for_clipboard(path: Path) -> QImage:
+    qimg = QImage(str(path))
+    if not qimg.isNull():
+        return qimg
+    try:
+        with Image.open(path) as img:
+            rgba = img.convert("RGBA")
+        data = rgba.tobytes("raw", "RGBA")
+        qimg = QImage(data, rgba.width, rgba.height, QImage.Format.Format_RGBA8888)
+        return qimg.copy()
+    except Exception:
+        return QImage()

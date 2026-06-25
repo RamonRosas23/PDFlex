@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -127,6 +128,84 @@ def test_document_workspace_removes_selected_items_from_tray(tmp_path):
 
         assert tray.paths() == [second]
         assert workspace._tray_list.count() == 1
+    finally:
+        workspace.deleteLater()
+        _app().processEvents()
+
+
+def test_document_workspace_sends_work_items_back_to_tray(tmp_path):
+    _app()
+
+    from shell.tray import PdfTray
+    from ui.common.document_workspace import DocumentWorkspace
+
+    tray = PdfTray()
+    pdf = _touch_pdf(tmp_path / "work.pdf")
+    workspace = DocumentWorkspace(_ctx(tray), show_thumbnails=False)
+    try:
+        workspace.add_paths([pdf])
+        workspace.list_widget.item(0).setSelected(True)
+
+        assert workspace._work_card.send_selected_to_tray()
+        assert tray.paths() == [pdf]
+        assert tray.items[0].status == "in_work"
+        assert tray.items[0].kind == "manual"
+    finally:
+        workspace.deleteLater()
+        _app().processEvents()
+
+
+def test_documents_card_pastes_files_from_windows_clipboard(tmp_path):
+    app = _app()
+
+    from shell.tray import PdfTray
+    from ui.common.clipboard_utils import copy_files_to_clipboard
+    from ui.common.documents_step import DocumentsCard
+
+    pdf = _touch_pdf(tmp_path / "pasted.pdf")
+    card = DocumentsCard(_ctx(PdfTray()), show_thumbnails=False)
+    try:
+        app.clipboard().clear()
+        assert copy_files_to_clipboard([pdf])
+
+        assert card.paste_from_clipboard()
+        assert [Path(path).resolve() for path in card.paths()] == [Path(pdf).resolve()]
+    finally:
+        card.deleteLater()
+        app.processEvents()
+
+
+def test_documents_card_copies_selected_files_to_clipboard(tmp_path):
+    app = _app()
+
+    from shell.tray import PdfTray
+    from ui.common.documents_step import DocumentsCard
+
+    pdf = _touch_pdf(tmp_path / "copy_me.pdf")
+    card = DocumentsCard(_ctx(PdfTray()), show_thumbnails=False)
+    try:
+        card.add_paths([pdf])
+        card.list_widget.item(0).setSelected(True)
+
+        assert card.copy_selected_to_clipboard()
+        mime = app.clipboard().mimeData()
+        assert mime.hasUrls()
+        assert Path(mime.urls()[0].toLocalFile()).resolve() == Path(pdf).resolve()
+    finally:
+        card.deleteLater()
+        app.processEvents()
+
+
+def test_document_workspace_uses_preview_panel(tmp_path):
+    _app()
+
+    from shell.tray import PdfTray
+    from ui.common.document_workspace import DocumentWorkspace
+
+    workspace = DocumentWorkspace(_ctx(PdfTray()), show_thumbnails=False)
+    try:
+        assert hasattr(workspace._work_card, "_preview_canvas")
+        assert workspace._work_card._preview_name_lbl.text() == "Selecciona un documento"
     finally:
         workspace.deleteLater()
         _app().processEvents()

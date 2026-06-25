@@ -15,15 +15,16 @@ from typing import List
 import fitz
 from PIL import Image
 from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QIcon
+from PyQt6.QtGui import QCursor, QKeySequence, QPixmap, QImage, QIcon, QShortcut
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
-    QScrollArea, QSpinBox,
+    QMenu, QScrollArea, QSpinBox, QToolTip,
 )
 
 from ui.styles import COLORS as _COLORS
 
+from ui.common.clipboard_utils import copy_files_to_clipboard
 from ui.common.save_utils import save_files_as_batch
 from ui.common.result_ui import (
     ElidedLabel,
@@ -108,6 +109,9 @@ class GenericPdfViewer(QWidget):
         self.doc_list = QListWidget()
         configure_result_list(self.doc_list)
         self.doc_list.itemSelectionChanged.connect(self._on_doc_selected)
+        self.doc_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.doc_list.customContextMenuRequested.connect(self._show_doc_context_menu)
+        QShortcut(QKeySequence.StandardKey.Copy, self.doc_list, activated=self._on_copy_file)
         lv.addWidget(self.doc_list, 1)
 
         layout.addWidget(left)
@@ -133,6 +137,13 @@ class GenericPdfViewer(QWidget):
         self.open_file_btn.clicked.connect(self._on_open_file)
         self.open_file_btn.setEnabled(False)
         title_row.addWidget(self.open_file_btn)
+
+        self.copy_file_btn = QPushButton("Copiar PDF")
+        self.copy_file_btn.setProperty("class", "Ghost")
+        set_button_icon(self.copy_file_btn, "copy")
+        self.copy_file_btn.clicked.connect(self._on_copy_file)
+        self.copy_file_btn.setEnabled(False)
+        title_row.addWidget(self.copy_file_btn)
 
         self.fullview_btn = QPushButton("Vista completa")
         self.fullview_btn.setProperty("class", "Ghost")
@@ -423,6 +434,7 @@ class GenericPdfViewer(QWidget):
         self._set_zoom_enabled(False)
         self.open_btn.setEnabled(False)
         self.open_file_btn.setEnabled(False)
+        self.copy_file_btn.setEnabled(False)
         self.save_as_btn.setEnabled(False)
         self.save_all_btn.setEnabled(False)
         self._update_page_status()
@@ -434,6 +446,7 @@ class GenericPdfViewer(QWidget):
         self.fit_page_btn.setEnabled(enabled)
         self.open_btn.setEnabled(enabled)
         self.open_file_btn.setEnabled(enabled)
+        self.copy_file_btn.setEnabled(enabled)
         self.fullview_btn.setEnabled(enabled)
         self.save_as_btn.setEnabled(enabled)
         self.save_all_btn.setEnabled(self._has_saveable_results())
@@ -732,6 +745,51 @@ class GenericPdfViewer(QWidget):
         self.page_list.setCurrentRow(
             min(self._current_doc.page_count - 1, self._current_page + 1)
         )
+
+    def _current_output_path(self) -> str:
+        if self._current_result is None:
+            return ""
+        out = getattr(self._current_result, "output_path", "") or ""
+        return out if out and Path(out).exists() else ""
+
+    def _on_copy_file(self) -> bool:
+        out = self._current_output_path()
+        if not out:
+            QToolTip.showText(QCursor.pos(), "No hay PDF para copiar", self, self.rect(), 1800)
+            return False
+        ok = copy_files_to_clipboard([out])
+        QToolTip.showText(
+            QCursor.pos(),
+            "PDF copiado" if ok else "No se pudo copiar el PDF",
+            self,
+            self.rect(),
+            1800,
+        )
+        return ok
+
+    def _show_doc_context_menu(self, pos) -> None:
+        item = self.doc_list.itemAt(pos)
+        if item is not None:
+            self.doc_list.setCurrentItem(item)
+        out = self._current_output_path()
+        menu = QMenu(self)
+        copy_action = menu.addAction("Copiar PDF")
+        copy_action.setEnabled(bool(out))
+        open_action = menu.addAction("Abrir PDF")
+        open_action.setEnabled(bool(out))
+        folder_action = menu.addAction("Abrir carpeta")
+        folder_action.setEnabled(bool(out))
+        save_action = menu.addAction("Guardar como")
+        save_action.setEnabled(bool(out))
+        chosen = menu.exec(self.doc_list.viewport().mapToGlobal(pos))
+        if chosen == copy_action:
+            self._on_copy_file()
+        elif chosen == open_action:
+            self._on_open_file()
+        elif chosen == folder_action:
+            self._on_open_in_explorer()
+        elif chosen == save_action:
+            self._on_save_as()
 
     def _on_open_file(self) -> None:
         if self._current_result:

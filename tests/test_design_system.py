@@ -1,4 +1,5 @@
 """Smoke tests para el design system premium de PDFlex."""
+from pathlib import Path
 
 
 def _luminance(hex_color: str) -> float:
@@ -278,6 +279,36 @@ def test_pdf_viewer_page_status_and_navigation(tmp_path):
         app.processEvents()
 
 
+def test_pdf_viewer_copies_current_pdf_as_file(tmp_path):
+    import sys
+    from types import SimpleNamespace
+    import fitz
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.pdf_viewer import GenericPdfViewer
+
+    pdf = tmp_path / "copiable.pdf"
+    doc = fitz.open()
+    doc.new_page(width=220, height=160).insert_text((36, 72), "Copiar")
+    doc.save(pdf)
+    doc.close()
+
+    viewer = GenericPdfViewer("PDFs")
+    try:
+        app.clipboard().clear()
+        viewer.set_results([SimpleNamespace(output_path=str(pdf), success=True, error="")])
+        app.processEvents()
+
+        assert viewer._on_copy_file()
+        mime = app.clipboard().mimeData()
+        assert mime.hasUrls()
+        assert Path(mime.urls()[0].toLocalFile()).resolve() == pdf.resolve()
+    finally:
+        viewer.clear_results()
+        viewer.deleteLater()
+        app.processEvents()
+
+
 def test_image_viewer_result_rows_include_status_and_size(tmp_path):
     """ImageResultsViewer usa filas enriquecidas para salidas generadas."""
     import sys
@@ -327,7 +358,34 @@ def test_image_viewer_copies_full_image_to_clipboard(tmp_path):
         assert copied.width() == 31
         assert copied.height() == 17
         assert app.clipboard().mimeData().hasImage()
+        assert app.clipboard().mimeData().hasFormat("image/png")
         assert not app.clipboard().mimeData().hasUrls()
+    finally:
+        viewer.deleteLater()
+        app.processEvents()
+
+
+def test_image_viewer_copies_selected_file_to_clipboard(tmp_path):
+    import sys
+    from types import SimpleNamespace
+    from PIL import Image
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.image_results_viewer import ImageResultsViewer
+
+    png = tmp_path / "archivo.png"
+    Image.new("RGBA", (12, 12), (255, 0, 0, 120)).save(png)
+
+    viewer = ImageResultsViewer("Imágenes")
+    try:
+        app.clipboard().clear()
+        viewer.set_results([SimpleNamespace(output_path=str(png), success=True, error="")])
+        app.processEvents()
+
+        assert viewer._copy_selected_file()
+        mime = app.clipboard().mimeData()
+        assert mime.hasUrls()
+        assert Path(mime.urls()[0].toLocalFile()).resolve() == png.resolve()
     finally:
         viewer.deleteLater()
         app.processEvents()

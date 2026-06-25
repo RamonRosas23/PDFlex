@@ -6,12 +6,14 @@ from typing import List, Optional, TYPE_CHECKING
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QBoxLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -52,6 +54,7 @@ class DocumentWorkspace(QFrame):
             single_file=single_file,
             allow_reorder=allow_reorder,
             show_thumbnails=show_thumbnails,
+            show_preview=True,
             thumb_size=thumb_size,
             file_filter=file_filter,
         )
@@ -59,6 +62,7 @@ class DocumentWorkspace(QFrame):
         self._ctx.tray.changed.connect(self._hide_legacy_tray_button)
         self._refresh_tray()
         self._hide_legacy_tray_button()
+        self._sync_preview_visibility()
 
     def _build(
         self,
@@ -66,14 +70,17 @@ class DocumentWorkspace(QFrame):
         single_file: bool,
         allow_reorder: bool,
         show_thumbnails: bool,
+        show_preview: bool,
         thumb_size: tuple[int, int],
         file_filter: str,
     ) -> None:
-        root = QHBoxLayout(self)
+        root = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(12)
+        self._root_layout = root
 
         tray_panel = self._build_tray_panel()
+        self._tray_panel = tray_panel
         root.addWidget(tray_panel)
 
         self._work_card = DocumentsCard(
@@ -81,6 +88,7 @@ class DocumentWorkspace(QFrame):
             single_file=single_file,
             allow_reorder=allow_reorder,
             show_thumbnails=show_thumbnails,
+            show_preview=show_preview,
             thumb_size=thumb_size,
             file_filter=file_filter,
         )
@@ -93,6 +101,35 @@ class DocumentWorkspace(QFrame):
         self._sort_btn = self._work_card._sort_btn
         self._empty_w = self._work_card._empty_w
         self._count_lbl = self._work_card._count_lbl
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_preview_visibility()
+
+    def _sync_preview_visibility(self) -> None:
+        if not hasattr(self, "_work_card"):
+            return
+        visible_width = min(self.width(), self.window().width())
+        compact = visible_width < 900
+        direction = (
+            QBoxLayout.Direction.TopToBottom
+            if compact
+            else QBoxLayout.Direction.LeftToRight
+        )
+        if self._root_layout.direction() != direction:
+            self._root_layout.setDirection(direction)
+
+        if compact:
+            self._tray_panel.setMinimumWidth(0)
+            self._tray_panel.setMaximumWidth(16777215)
+            self._tray_panel.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Preferred,
+            )
+        else:
+            self._tray_panel.setFixedWidth(320)
+
+        self._work_card.set_preview_visible(visible_width >= 1450)
 
     def _build_tray_panel(self) -> QFrame:
         panel = QFrame()

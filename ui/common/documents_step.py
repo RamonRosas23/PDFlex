@@ -15,18 +15,28 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent
+from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent, QUrl
 from ui.common.tool_scaffold import RunnerThread
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QIcon, QKeyEvent, QPixmap
+from PyQt6.QtGui import (
+    QDesktopServices,
+    QDragEnterEvent,
+    QDropEvent,
+    QIcon,
+    QKeyEvent,
+    QKeySequence,
+    QPixmap,
+)
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QListWidget, QListWidgetItem, QStackedWidget,
+    QListWidget, QListWidgetItem, QStackedWidget, QMenu, QToolTip,
 )
 
 from ui.common.thumb_utils import make_pdf_thumb, ThumbnailLoader, make_placeholder_pixmap
+from ui.common.clipboard_utils import clipboard_file_paths, copy_files_to_clipboard
 from ui.common.icons import icon_pixmap, make_icon_label, set_button_icon
 from ui.common.dialogs import show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
+from ui.common.result_ui import ElidedLabel, format_file_size
 from ui.styles import COLORS
 from core.output_paths import make_run_dir
 
@@ -50,6 +60,7 @@ class DocumentsCard(QFrame):
         single_file: bool = False,
         allow_reorder: bool = False,
         show_thumbnails: bool = True,
+        show_preview: bool = False,
         thumb_size: tuple[int, int] = (64, 82),
         file_filter: str = (
             "PDF y Word (*.pdf *.doc *.docx);;"
@@ -65,6 +76,7 @@ class DocumentsCard(QFrame):
         self._ctx = ctx
         self._single_file = single_file
         self._show_thumbnails = show_thumbnails
+        self._show_preview = show_preview
         self._thumb_w, self._thumb_h = thumb_size
         self._file_filter = file_filter
         self._accent: str = "#5E6AD2"
@@ -99,12 +111,12 @@ class DocumentsCard(QFrame):
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        add_btn = QPushButton("Agregar archivos")
-        add_btn.setProperty("class", "Primary")
-        add_btn.setFixedHeight(32)
-        set_button_icon(add_btn, "plus")
-        add_btn.clicked.connect(self._on_browse)
-        row.addWidget(add_btn)
+        self._add_btn = QPushButton("Agregar archivos")
+        self._add_btn.setProperty("class", "Primary")
+        self._add_btn.setFixedHeight(32)
+        set_button_icon(self._add_btn, "plus")
+        self._add_btn.clicked.connect(self._on_browse)
+        row.addWidget(self._add_btn)
 
         # Separador visual — solo visible cuando la lista tiene items
         from PyQt6.QtWidgets import QFrame as _QFrame
@@ -115,7 +127,7 @@ class DocumentsCard(QFrame):
         row.addWidget(self._sep_actions, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Quitar seleccionados (visible solo cuando hay items)
-        self._remove_btn = QPushButton("Quitar seleccionados")
+        self._remove_btn = QPushButton("Quitar")
         self._remove_btn.setProperty("class", "Ghost")
         self._remove_btn.setFixedHeight(32)
         set_button_icon(self._remove_btn, "x", color=COLORS["danger"])
@@ -124,10 +136,31 @@ class DocumentsCard(QFrame):
         self._remove_btn.clicked.connect(self.remove_selected)
         row.addWidget(self._remove_btn)
 
+        self._send_to_tray_btn = QPushButton("A bandeja")
+        self._send_to_tray_btn.setProperty("class", "Ghost")
+        self._send_to_tray_btn.setFixedHeight(32)
+        self._send_to_tray_btn.setToolTip("Agregar seleccionados a la bandeja")
+        set_button_icon(self._send_to_tray_btn, "arrow-left")
+        self._send_to_tray_btn.setEnabled(False)
+        self._send_to_tray_btn.setVisible(False)
+        self._send_to_tray_btn.clicked.connect(self.send_selected_to_tray)
+        row.addWidget(self._send_to_tray_btn)
+
+        self._copy_btn = QPushButton("Copiar")
+        self._copy_btn.setProperty("class", "Ghost")
+        self._copy_btn.setFixedHeight(32)
+        self._copy_btn.setToolTip("Copiar archivos seleccionados")
+        set_button_icon(self._copy_btn, "copy")
+        self._copy_btn.setEnabled(False)
+        self._copy_btn.setVisible(False)
+        self._copy_btn.clicked.connect(self.copy_selected_to_clipboard)
+        row.addWidget(self._copy_btn)
+
         # Vaciar todo (visible solo cuando hay items)
         self._clear_btn = QPushButton("Vaciar")
         self._clear_btn.setProperty("class", "Ghost")
         self._clear_btn.setFixedHeight(32)
+        self._clear_btn.setToolTip("Vaciar documentos")
         set_button_icon(self._clear_btn, "trash-2", color=COLORS["text_dim"])
         self._clear_btn.setVisible(False)
         self._clear_btn.clicked.connect(self.clear)
@@ -220,6 +253,9 @@ class DocumentsCard(QFrame):
         self.list_widget.setMinimumHeight(260)
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list_widget.itemSelectionChanged.connect(self._update_remove_btn)
+        self.list_widget.itemSelectionChanged.connect(self._refresh_preview)
+        self.list_widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.list_widget.customContextMenuRequested.connect(self._show_list_context_menu)
         self.list_widget.installEventFilter(self)
 
         if allow_reorder:
@@ -232,9 +268,57 @@ class DocumentsCard(QFrame):
             self.list_widget.setSpacing(3)
 
         self._content_stack.addWidget(self.list_widget)  # idx 1
-        layout.addWidget(self._content_stack, 1)
+
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(12)
+        body.addWidget(self._content_stack, 1)
+        if self._show_preview:
+            body.addWidget(self._build_preview_panel())
+        layout.addLayout(body, 1)
         self._content_stack.setCurrentIndex(0)  # empezar en drop zone
         self._update_count()
+
+    def _build_preview_panel(self) -> QFrame:
+        panel = QFrame()
+        self._preview_panel = panel
+        panel.setObjectName("DocumentPreviewPanel")
+        panel.setFixedWidth(260)
+        panel.setStyleSheet(
+            "QFrame#DocumentPreviewPanel {"
+            f"background: {COLORS['surface_2']};"
+            f"border: 1px solid {COLORS['border']};"
+            "border-radius: 8px;"
+            "}"
+        )
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        title = QLabel("Vista previa")
+        title.setProperty("class", "CardTitle")
+        layout.addWidget(title)
+
+        self._preview_name_lbl = ElidedLabel("Selecciona un documento")
+        self._preview_name_lbl.setProperty("class", "CardHint")
+        layout.addWidget(self._preview_name_lbl)
+
+        self._preview_canvas = QLabel("Sin documento")
+        self._preview_canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview_canvas.setMinimumHeight(250)
+        self._preview_canvas.setStyleSheet(
+            "background: #0F0F13;"
+            f"border: 1px solid {COLORS['border']};"
+            "border-radius: 6px;"
+            f"color: {COLORS['text_muted']};"
+        )
+        layout.addWidget(self._preview_canvas, 1)
+
+        self._preview_meta_lbl = QLabel("")
+        self._preview_meta_lbl.setProperty("class", "CardHint")
+        self._preview_meta_lbl.setWordWrap(True)
+        layout.addWidget(self._preview_meta_lbl)
+        return panel
 
     # ------------------------------------------------------------------ #
     # Event filter — Delete key
@@ -243,10 +327,27 @@ class DocumentsCard(QFrame):
     def eventFilter(self, obj, event) -> bool:
         if obj is self.list_widget and event.type() == QEvent.Type.KeyPress:
             if isinstance(event, QKeyEvent):
+                if event.matches(QKeySequence.StandardKey.Paste):
+                    self.paste_from_clipboard()
+                    return True
+                if event.matches(QKeySequence.StandardKey.Copy):
+                    self.copy_selected_to_clipboard()
+                    return True
                 if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
                     self._delete_selected()
                     return True
         return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self.paste_from_clipboard()
+            event.accept()
+            return
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy_selected_to_clipboard()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -419,10 +520,41 @@ class DocumentsCard(QFrame):
         selected = self.list_widget.selectedItems()
         n_sel = len(selected)
         self._remove_btn.setEnabled(n_sel > 0)
+        self._send_to_tray_btn.setEnabled(n_sel > 0)
+        self._copy_btn.setEnabled(n_sel > 0)
         if n_sel > 1:
             self._remove_btn.setText(f"Quitar ({n_sel})")
         else:
-            self._remove_btn.setText("Quitar seleccionados")
+            self._remove_btn.setText("Quitar")
+        self._sync_action_density()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._sync_action_density()
+        if self._show_preview:
+            self._refresh_preview()
+
+    def _sync_action_density(self) -> None:
+        if not hasattr(self, "_count_lbl"):
+            return
+        compact = self.width() < 680
+        self._count_lbl.setVisible(not compact)
+        self._add_btn.setText("Agregar" if compact else "Agregar archivos")
+        compact_buttons = (
+            (self._remove_btn, "Quitar"),
+            (self._send_to_tray_btn, "A bandeja"),
+            (self._copy_btn, "Copiar"),
+            (self._clear_btn, "Vaciar"),
+        )
+        for button, text in compact_buttons:
+            if compact:
+                button.setText("")
+                button.setFixedWidth(34)
+            else:
+                button.setMinimumWidth(0)
+                button.setMaximumWidth(16777215)
+                if button is not self._remove_btn:
+                    button.setText(text)
 
     def _show_sort_menu(self) -> None:
         from PyQt6.QtWidgets import QMenu
@@ -438,6 +570,107 @@ class DocumentsCard(QFrame):
         menu.addAction(act_size)
 
         menu.exec(self._sort_btn.mapToGlobal(self._sort_btn.rect().bottomLeft()))
+
+    def _show_list_context_menu(self, pos) -> None:
+        clicked = self.list_widget.itemAt(pos)
+        if clicked is not None and not clicked.isSelected():
+            self.list_widget.clearSelection()
+            self.list_widget.setCurrentItem(clicked)
+            clicked.setSelected(True)
+
+        selected = self.selected_paths()
+        current = self.list_widget.currentItem()
+        current_path = current.data(Qt.ItemDataRole.UserRole) if current else ""
+        has_clipboard_docs = bool(clipboard_file_paths(suffixes=(".pdf", ".doc", ".docx")))
+
+        menu = QMenu(self)
+        add_tray = menu.addAction("Agregar a bandeja")
+        add_tray.setEnabled(bool(selected))
+        copy_files = menu.addAction("Copiar archivo" + ("s" if len(selected) != 1 else ""))
+        copy_files.setEnabled(bool(selected))
+        paste_files = menu.addAction("Pegar documentos")
+        paste_files.setEnabled(has_clipboard_docs)
+        menu.addSeparator()
+        open_file = menu.addAction("Abrir documento")
+        open_file.setEnabled(bool(current_path and Path(current_path).exists()))
+        open_folder = menu.addAction("Abrir carpeta")
+        open_folder.setEnabled(bool(current_path and Path(current_path).exists()))
+        menu.addSeparator()
+        remove = menu.addAction("Quitar seleccionados")
+        remove.setEnabled(bool(selected))
+
+        chosen = menu.exec(self.list_widget.viewport().mapToGlobal(pos))
+        if chosen == add_tray:
+            self.send_selected_to_tray()
+        elif chosen == copy_files:
+            self.copy_selected_to_clipboard()
+        elif chosen == paste_files:
+            self.paste_from_clipboard()
+        elif chosen == open_file:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(current_path))
+        elif chosen == open_folder:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(current_path).parent)))
+        elif chosen == remove:
+            self.remove_selected()
+
+    def _show_feedback(self, text: str) -> None:
+        QToolTip.showText(
+            self.mapToGlobal(self.rect().center()),
+            text,
+            self,
+            self.rect(),
+            1800,
+        )
+
+    def _refresh_preview(self) -> None:
+        if not self._show_preview or not hasattr(self, "_preview_canvas"):
+            return
+        path = ""
+        current = self.list_widget.currentItem()
+        if current is not None:
+            path = current.data(Qt.ItemDataRole.UserRole) or ""
+        if not path and self.list_widget.selectedItems():
+            path = self.list_widget.selectedItems()[0].data(Qt.ItemDataRole.UserRole) or ""
+        if not path:
+            self._preview_name_lbl.setText("Selecciona un documento")
+            self._preview_canvas.clear()
+            self._preview_canvas.setText("Sin documento")
+            self._preview_meta_lbl.setText("")
+            return
+
+        pdf_path = Path(path)
+        self._preview_name_lbl.setText(pdf_path.name)
+        qimg = make_pdf_thumb(str(pdf_path), width=230)
+        if qimg is None:
+            self._preview_canvas.clear()
+            self._preview_canvas.setText("No se pudo previsualizar")
+        else:
+            pix = QPixmap.fromImage(qimg)
+            self._preview_canvas.setText("")
+            self._preview_canvas.setPixmap(
+                pix.scaled(
+                    max(180, self._preview_canvas.width() - 16),
+                    max(220, self._preview_canvas.height() - 16),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            )
+
+        meta = []
+        page_count = _pdf_page_count(path)
+        if page_count:
+            meta.append(f"{page_count} pagina" + ("s" if page_count != 1 else ""))
+        size = format_file_size(path)
+        if size:
+            meta.append(size)
+        self._preview_meta_lbl.setText(" · ".join(meta))
+
+    def set_preview_visible(self, visible: bool) -> None:
+        if not self._show_preview or not hasattr(self, "_preview_panel"):
+            return
+        self._preview_panel.setVisible(visible)
+        if visible:
+            self._refresh_preview()
 
     def _sort_by(self, key: str) -> None:
         """Ordena los documentos por nombre o tamaño."""
@@ -481,6 +714,61 @@ class DocumentsCard(QFrame):
             if p:
                 result.append(p)
         return result
+
+    def selected_paths(self) -> List[str]:
+        rows = sorted({self.list_widget.row(item) for item in self.list_widget.selectedItems()})
+        result: List[str] = []
+        for row in rows:
+            item = self.list_widget.item(row)
+            path = item.data(Qt.ItemDataRole.UserRole) if item else None
+            if path:
+                result.append(path)
+        return result
+
+    def copy_selected_to_clipboard(self) -> bool:
+        paths = self.selected_paths()
+        if not paths:
+            current = self.list_widget.currentItem()
+            path = current.data(Qt.ItemDataRole.UserRole) if current else None
+            paths = [path] if path else []
+        ok = copy_files_to_clipboard(paths)
+        if ok:
+            count = len(paths)
+            self._show_feedback(
+                f"{count} archivo" + ("s" if count != 1 else "") + " copiado"
+            )
+        else:
+            self._show_feedback("No hay archivos para copiar")
+        return ok
+
+    def paste_from_clipboard(self) -> bool:
+        paths = clipboard_file_paths(suffixes=(".pdf", ".doc", ".docx"))
+        if not paths:
+            self._show_feedback("No hay documentos compatibles en el portapapeles")
+            return False
+        before = self.count()
+        self.add_paths(paths)
+        changed = self.count() != before
+        self._show_feedback(
+            "Documentos agregados" if changed else "Los documentos ya estaban agregados"
+        )
+        return changed
+
+    def send_selected_to_tray(self) -> bool:
+        paths = self.selected_paths()
+        if not paths:
+            return False
+        self._ctx.tray.add_items(
+            paths,
+            "Documentos",
+            kind="manual",
+            source_tool_id="manual",
+            source_tool_title="Carga manual",
+            status="in_work",
+        )
+        self._ctx.tray.mark_in_work(paths)
+        self._show_feedback("Agregado a bandeja")
+        return True
 
     def set_accent(self, accent: str) -> None:
         """Inyecta el accent de la herramienta para feedback visual."""
@@ -593,6 +881,8 @@ class DocumentsCard(QFrame):
                 changed = True
 
         if changed:
+            if self.list_widget.currentRow() < 0 and self.list_widget.count() > 0:
+                self.list_widget.setCurrentRow(0)
             self._update_count()
             self._update_remove_btn()
             self.files_changed.emit(self.paths())
@@ -600,7 +890,14 @@ class DocumentsCard(QFrame):
     def _update_count(self) -> None:
         n = self.list_widget.count()
         has_items = n > 0
-        for attr in ("_sep_actions", "_remove_btn", "_clear_btn", "_sort_btn"):
+        for attr in (
+            "_sep_actions",
+            "_remove_btn",
+            "_send_to_tray_btn",
+            "_copy_btn",
+            "_clear_btn",
+            "_sort_btn",
+        ):
             w = getattr(self, attr, None)
             if w is not None:
                 w.setVisible(has_items)
@@ -623,6 +920,7 @@ class DocumentsCard(QFrame):
         # Alternar entre drop zone vacía y lista con archivos
         if hasattr(self, "_content_stack"):
             self._content_stack.setCurrentIndex(0 if n == 0 else 1)
+        self._refresh_preview()
 
     def _on_browse(self) -> None:
         title = "Seleccionar archivo" if self._single_file else "Seleccionar archivos"
@@ -729,3 +1027,16 @@ class DocumentsCard(QFrame):
     def _on_word_error(self, msg: str) -> None:
         self._conv_thread = None
         self._conv_worker = None
+
+
+def _pdf_page_count(path: str) -> int:
+    try:
+        import fitz
+
+        doc = fitz.open(path)
+        try:
+            return int(doc.page_count)
+        finally:
+            doc.close()
+    except Exception:
+        return 0

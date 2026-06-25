@@ -5,8 +5,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QSize, QEvent, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QClipboard, QCursor, QImage, QPixmap
+from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QMimeData, Qt, QSize, QEvent, QTimer, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QClipboard, QCursor, QImage, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFrame, QApplication, QMenu, QToolTip,
@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
 from PIL import Image, ImageDraw
 
 from ui.common.file_dialogs import get_save_file_name
+from ui.common.clipboard_utils import copy_files_to_clipboard
 from ui.common.icons import icon, set_button_icon
 from ui.common.result_ui import (
     ElidedLabel,
@@ -82,6 +83,7 @@ class ImageResultsViewer(QWidget):
         self.file_list = QListWidget()
         configure_result_list(self.file_list)
         self.file_list.itemSelectionChanged.connect(self._on_file_selected)
+        QShortcut(QKeySequence.StandardKey.Copy, self.file_list, activated=self._copy_selected_file)
         lv.addWidget(self.file_list, 1)
 
         layout.addWidget(left)
@@ -108,6 +110,13 @@ class ImageResultsViewer(QWidget):
         self.open_file_btn.setEnabled(False)
         self.open_file_btn.clicked.connect(self._on_open_file)
         actions.addWidget(self.open_file_btn)
+
+        self.copy_file_btn = QPushButton("Copiar archivo")
+        self.copy_file_btn.setProperty("class", "Ghost")
+        set_button_icon(self.copy_file_btn, "copy")
+        self.copy_file_btn.setEnabled(False)
+        self.copy_file_btn.clicked.connect(self._copy_selected_file)
+        actions.addWidget(self.copy_file_btn)
 
         self.open_btn = QPushButton("Abrir carpeta")
         self.open_btn.setProperty("class", "Ghost")
@@ -296,6 +305,7 @@ class ImageResultsViewer(QWidget):
         self.meta_lbl.setText("")
         self.title_lbl.setText("Selecciona un archivo")
         self.open_file_btn.setEnabled(False)
+        self.copy_file_btn.setEnabled(False)
         self.open_btn.setEnabled(False)
         self.save_as_btn.setEnabled(False)
         self.save_all_btn.setEnabled(False)
@@ -416,11 +426,18 @@ class ImageResultsViewer(QWidget):
         qimg = _qimage_for_clipboard(image_path)
         if qimg.isNull():
             return False
+        png_bytes = _qimage_png_bytes(qimg)
+        mime = QMimeData()
+        mime.setImageData(qimg)
+        if png_bytes:
+            mime.setData("image/png", QByteArray(png_bytes))
         clipboard = QApplication.clipboard()
-        clipboard.setImage(qimg, QClipboard.Mode.Clipboard)
+        clipboard.setMimeData(mime, QClipboard.Mode.Clipboard)
+        copied_mime = clipboard.mimeData(QClipboard.Mode.Clipboard)
         copied = clipboard.image(QClipboard.Mode.Clipboard)
         return (
-            not copied.isNull()
+            copied_mime.hasImage()
+            and not copied.isNull()
             and copied.size() == qimg.size()
             and copied.pixelColor(0, 0) == qimg.pixelColor(0, 0)
         )
@@ -442,6 +459,7 @@ class ImageResultsViewer(QWidget):
             self.compare_widget.setVisible(False)
             self.preview_lbl.setVisible(True)
             self.open_file_btn.setEnabled(False)
+            self.copy_file_btn.setEnabled(False)
             self.open_btn.setEnabled(False)
             self.save_as_btn.setEnabled(False)
             self.save_all_btn.setEnabled(self._has_saveable_results())
@@ -455,6 +473,7 @@ class ImageResultsViewer(QWidget):
             self.compare_widget.setVisible(False)
             self.preview_lbl.setVisible(True)
             self.open_file_btn.setEnabled(False)
+            self.copy_file_btn.setEnabled(False)
             self.open_btn.setEnabled(False)
             self.save_as_btn.setEnabled(False)
             self.save_all_btn.setEnabled(self._has_saveable_results())
@@ -463,6 +482,7 @@ class ImageResultsViewer(QWidget):
         path = Path(out)
         self.title_lbl.setText(path.name)
         self.open_file_btn.setEnabled(True)
+        self.copy_file_btn.setEnabled(True)
         self.open_btn.setEnabled(True)
         self.save_as_btn.setEnabled(True)
         self.save_all_btn.setEnabled(self._has_saveable_results())
@@ -610,6 +630,23 @@ class ImageResultsViewer(QWidget):
             start_dir=start_dir,
         )
 
+    def _copy_selected_file(self) -> bool:
+        row = self.file_list.currentRow()
+        result = self._result_at_row(row)
+        out = getattr(result, "output_path", "") if result is not None else ""
+        if not out or not Path(out).exists():
+            QToolTip.showText(QCursor.pos(), "No hay archivo para copiar", self, self.rect(), 1800)
+            return False
+        ok = copy_files_to_clipboard([out])
+        QToolTip.showText(
+            QCursor.pos(),
+            "Archivo copiado" if ok else "No se pudo copiar el archivo",
+            self,
+            self.rect(),
+            1800,
+        )
+        return ok
+
     def _on_open_file(self) -> None:
         row = self.file_list.currentRow()
         r = self._result_at_row(row)
@@ -663,3 +700,18 @@ def _qimage_for_clipboard(path: Path) -> QImage:
         return qimg.copy()
     except Exception:
         return QImage()
+
+
+def _qimage_png_bytes(qimg: QImage) -> bytes:
+    if qimg.isNull():
+        return b""
+    data = QByteArray()
+    buffer = QBuffer(data)
+    if not buffer.open(QIODevice.OpenModeFlag.WriteOnly):
+        return b""
+    try:
+        if not qimg.save(buffer, "PNG"):
+            return b""
+        return bytes(data)
+    finally:
+        buffer.close()

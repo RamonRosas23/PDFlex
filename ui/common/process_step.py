@@ -24,7 +24,7 @@ from pathlib import Path
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QLineEdit, QProgressBar,
+    QLineEdit, QProgressBar, QSizePolicy,
 )
 
 from ui.common.cards import make_card, card_layout
@@ -124,6 +124,8 @@ class ProcessStep(QWidget):
         )
         self._summary_lbl.setWordWrap(True)
         self._summary_lbl.setTextFormat(Qt.TextFormat.RichText)
+        self._summary_lbl.setMinimumWidth(0)
+        self._summary_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         card_layout(self._sum_card).addWidget(self._summary_lbl)
         layout.addWidget(self._sum_card)
 
@@ -169,7 +171,6 @@ class ProcessStep(QWidget):
 
     def set_summary_html(self, html: str) -> None:
         self._summary_lbl.setText(html)
-        self._summary_lbl.adjustSize()
         self._summary_lbl.updateGeometry()
         card_layout(self._sum_card).invalidate()
         self._sum_card.updateGeometry()

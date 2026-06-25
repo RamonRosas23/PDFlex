@@ -302,3 +302,63 @@ def test_image_viewer_result_rows_include_status_and_size(tmp_path):
     finally:
         viewer.deleteLater()
         app.processEvents()
+
+
+def test_image_viewer_copies_full_image_to_clipboard(tmp_path):
+    """Clic derecho en la previsualizacion copia la imagen real al clipboard."""
+    import sys
+    from types import SimpleNamespace
+    from PIL import Image
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.image_results_viewer import ImageResultsViewer
+
+    png = tmp_path / "copiar.png"
+    Image.new("RGBA", (31, 17), (20, 120, 180, 160)).save(png)
+
+    viewer = ImageResultsViewer("Imágenes")
+    try:
+        viewer.set_results([SimpleNamespace(output_path=str(png), success=True, error="")])
+        app.processEvents()
+
+        assert viewer._copy_preview_image(viewer.preview_lbl)
+        copied = app.clipboard().image()
+        assert not copied.isNull()
+        assert copied.width() == 31
+        assert copied.height() == 17
+        assert app.clipboard().mimeData().hasImage()
+        assert not app.clipboard().mimeData().hasUrls()
+    finally:
+        viewer.deleteLater()
+        app.processEvents()
+
+
+def test_image_viewer_keeps_context_menu_alive_until_it_is_closed(tmp_path):
+    import sys
+    from types import SimpleNamespace
+    from PIL import Image
+    from PyQt6.QtCore import QPoint
+    from PyQt6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication(sys.argv)
+    from ui.common.image_results_viewer import ImageResultsViewer
+
+    png = tmp_path / "menu.png"
+    Image.new("RGBA", (20, 12), (80, 140, 220, 255)).save(png)
+
+    viewer = ImageResultsViewer("Imágenes")
+    try:
+        viewer.set_results([SimpleNamespace(output_path=str(png), success=True, error="")])
+        app.processEvents()
+
+        viewer._show_preview_context_menu(viewer.preview_lbl, QPoint(20, 20))
+        menu = viewer._preview_context_menu
+        assert menu is not None
+        assert menu.parent() is viewer
+        assert menu.actions()[0].isEnabled()
+
+        menu.close()
+        app.processEvents()
+        assert viewer._preview_context_menu is None
+    finally:
+        viewer.deleteLater()
+        app.processEvents()

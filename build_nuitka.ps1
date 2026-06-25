@@ -55,6 +55,35 @@ function Ok([string]$msg)   { Write-Host "    ✓ $msg" -ForegroundColor Green  
 function Warn([string]$msg) { Write-Host "    ⚠ $msg" -ForegroundColor Yellow }
 function Err([string]$msg)  { Write-Host "    ✗ $msg" -ForegroundColor Red; throw $msg }
 
+function Copy-OptionalPdfEngine([string]$Name, [string[]]$SourceCandidates, [string]$DestRelative, [string[]]$RequiredExeNames) {
+    $source = $SourceCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+    if (-not $source) {
+        Warn "$Name no se empaquetara: no hay carpeta local aprobada."
+        return
+    }
+
+    $hasExe = $false
+    foreach ($exeName in $RequiredExeNames) {
+        if (Get-ChildItem -LiteralPath $source -Recurse -Filter $exeName -ErrorAction SilentlyContinue | Select-Object -First 1) {
+            $hasExe = $true
+            break
+        }
+    }
+    if (-not $hasExe) {
+        Warn "$Name no se empaquetara: no se encontro ejecutable en $source"
+        return
+    }
+
+    $dest = Join-Path $AppDir $DestRelative
+    if (Test-Path -LiteralPath $dest) {
+        Remove-Item -LiteralPath $dest -Recurse -Force
+    }
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
+    Copy-Item -LiteralPath $source -Destination $dest -Recurse -Force
+    $engineMB = [math]::Round((Get-ChildItem -LiteralPath $dest -Recurse | Measure-Object -Property Length -Sum).Sum / 1MB, 1)
+    Ok "$Name empaquetado en $DestRelative ($engineMB MB)"
+}
+
 function Resolve-EnterpriseServicesMode([string]$RequestedMode) {
     $raw = if ($RequestedMode) {
         $RequestedMode
@@ -318,6 +347,29 @@ if (Test-Path $tdDest) {
 } else {
     Warn "tessdata NO copiado a dist\PDFlex\assets\tessdata — verifica el build."
 }
+
+# Motores PDF opcionales para que el compresor híbrido funcione igual en PCs
+# sin QPDF/Ghostscript instalados. Coloca distribuciones aprobadas en:
+#   tools\qpdf\...
+#   tools\ghostscript\...
+# El motor tambien funciona sin ellos, usando PyMuPDF interno.
+Copy-OptionalPdfEngine `
+    -Name "QPDF" `
+    -SourceCandidates @(
+        (Join-Path $ProjectDir "tools\qpdf"),
+        (Join-Path $ProjectDir "third_party\pdf_engines\qpdf")
+    ) `
+    -DestRelative "tools\qpdf" `
+    -RequiredExeNames @("qpdf.exe", "qpdf")
+
+Copy-OptionalPdfEngine `
+    -Name "Ghostscript" `
+    -SourceCandidates @(
+        (Join-Path $ProjectDir "tools\ghostscript"),
+        (Join-Path $ProjectDir "third_party\pdf_engines\ghostscript")
+    ) `
+    -DestRelative "tools\ghostscript" `
+    -RequiredExeNames @("gswin64c.exe", "gswin32c.exe", "gs")
 
 # Tamaño total de la distribución
 $totalMB = [math]::Round(

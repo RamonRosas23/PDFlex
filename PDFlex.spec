@@ -1,9 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
+
 from PyInstaller.utils.hooks import collect_all
 
 datas = [('assets', 'assets')]
 binaries = []
 hiddenimports = []
+
+if os.path.isdir('tools'):
+    datas.append(('tools', 'tools'))
 
 for pkg in ('pymupdf', 'PIL', 'PyQt6', 'docx', 'numpy', 'cv2', 'requests'):
     tmp = collect_all(pkg)

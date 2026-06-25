@@ -14,7 +14,7 @@ from typing import List
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import QPixmap, QImage, QIcon
 from PyQt6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
@@ -33,7 +33,7 @@ from ui.common.result_ui import (
     make_result_list_item,
 )
 from ui.common.file_dialogs import get_save_file_name
-from ui.common.icons import set_button_icon
+from ui.common.icons import icon, set_button_icon
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog
 
 
@@ -71,6 +71,8 @@ class GenericPdfViewer(QWidget):
         self._current_page: int = 0
         self._zoom_index: int = 2
         self._fit_mode: str = "width"
+        self._thumb_generation: int = 0
+        self._thumb_queue: list[int] = []
 
         self._build()
 
@@ -474,6 +476,8 @@ class GenericPdfViewer(QWidget):
         ]
 
     def _close_doc(self) -> None:
+        self._thumb_generation += 1
+        self._thumb_queue = []
         if self._current_doc is not None:
             try:
                 self._current_doc.close()
@@ -533,23 +537,17 @@ class GenericPdfViewer(QWidget):
             self._set_zoom_enabled(False)
             return
 
-        self.page_list.blockSignals(True)
-        try:
-            self.page_list.clear()
-            for i in range(self._current_doc.page_count):
-                # DPI adaptativo: la miniatura nunca ocupa más de _THUMB_TARGET_PX
-                # en su lado largo, independientemente del tamaño físico de la página.
-                thumb_dpi = self._thumb_dpi_for_page(i)
-                thumb = self._render(i, dpi=thumb_dpi)
-                item = QListWidgetItem(QIcon(thumb), str(i + 1))
-                item.setToolTip(f"Página {i + 1}")
-                self.page_list.addItem(item)
-        finally:
-            self.page_list.blockSignals(False)
+        self._populate_page_placeholders()
 
         if self._current_doc.page_count > 0:
-            self.page_list.setCurrentRow(0)
+            self.page_list.blockSignals(True)
+            try:
+                self.page_list.setCurrentRow(0)
+            finally:
+                self.page_list.blockSignals(False)
+            self._current_page = 0
             self._render_current()
+            self._start_thumb_rendering()
         else:
             self.canvas.clear()
 
@@ -576,6 +574,52 @@ class GenericPdfViewer(QWidget):
             return
         self._current_page = row
         self._render_current()
+
+    def _populate_page_placeholders(self) -> None:
+        if self._current_doc is None:
+            return
+        self._thumb_generation += 1
+        self._thumb_queue = []
+        placeholder = icon("file-text", _COLORS["text_muted"], 15)
+        self.page_list.blockSignals(True)
+        try:
+            self.page_list.clear()
+            for i in range(self._current_doc.page_count):
+                item = QListWidgetItem(placeholder, str(i + 1))
+                item.setToolTip(f"Página {i + 1}")
+                self.page_list.addItem(item)
+        finally:
+            self.page_list.blockSignals(False)
+
+    def _start_thumb_rendering(self) -> None:
+        if self._current_doc is None:
+            return
+        generation = self._thumb_generation
+        selected = self._current_page
+        pages = list(range(self._current_doc.page_count))
+        if 0 <= selected < len(pages):
+            pages.remove(selected)
+            pages.insert(0, selected)
+        self._thumb_queue = pages
+        QTimer.singleShot(0, lambda gen=generation: self._render_next_thumb(gen))
+
+    def _render_next_thumb(self, generation: int) -> None:
+        if generation != self._thumb_generation or self._current_doc is None:
+            return
+        if not self._thumb_queue:
+            return
+        page_index = self._thumb_queue.pop(0)
+        if 0 <= page_index < self.page_list.count() and page_index < self._current_doc.page_count:
+            try:
+                thumb_dpi = self._thumb_dpi_for_page(page_index)
+                thumb = self._render(page_index, dpi=thumb_dpi)
+                item = self.page_list.item(page_index)
+                if item is not None:
+                    item.setIcon(QIcon(thumb))
+            except Exception:
+                pass
+        if self._thumb_queue:
+            QTimer.singleShot(0, lambda gen=generation: self._render_next_thumb(gen))
 
     # ------------------------------------------------------------------ #
     # Render
@@ -714,3 +758,11 @@ class GenericPdfViewer(QWidget):
         super().resizeEvent(event)
         if self._current_doc is not None and self._fit_mode != "manual":
             self._render_current()
+
+    def closeEvent(self, event) -> None:
+        self._close_doc()
+        super().closeEvent(event)
+
+    def deleteLater(self) -> None:  # type: ignore[override]
+        self._close_doc()
+        super().deleteLater()

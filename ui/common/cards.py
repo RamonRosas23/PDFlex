@@ -33,6 +33,7 @@ def make_page_header(title: str, subtitle: str) -> QVBoxLayout:
     v.setContentsMargins(0, 0, 0, 0)
     t = QLabel(title)
     t.setObjectName("PageTitle")
+    t.setWordWrap(True)
     v.addWidget(t)
     s = QLabel(subtitle)
     s.setObjectName("PageSubtitle")

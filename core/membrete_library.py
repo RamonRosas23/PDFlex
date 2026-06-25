@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import fitz
@@ -26,6 +26,7 @@ class SavedLetterhead:
     page_count: int = 0
     page_width_pt: float = 0.0
     page_height_pt: float = 0.0
+    config: dict = field(default_factory=dict)
 
 
 def membrete_library_root() -> Path:
@@ -61,6 +62,7 @@ def load_letterhead_library(root: Path | None = None) -> list[SavedLetterhead]:
                 page_count=int(raw.get("page_count") or 0),
                 page_width_pt=float(raw.get("page_width_pt") or 0.0),
                 page_height_pt=float(raw.get("page_height_pt") or 0.0),
+                config=_safe_config(raw.get("config")),
             )
         except (KeyError, TypeError, ValueError):
             continue
@@ -73,6 +75,7 @@ def add_letterhead_to_library(
     pdf_path: str | Path,
     *,
     label: str = "",
+    config: dict | None = None,
     root: Path | None = None,
 ) -> SavedLetterhead:
     source = Path(pdf_path).resolve()
@@ -91,6 +94,10 @@ def add_letterhead_to_library(
     if not stored_path.exists():
         shutil.copy2(source, stored_path)
 
+    existing = next(
+        (item for item in load_letterhead_library(library_root) if item.id == digest),
+        None,
+    )
     entry = SavedLetterhead(
         id=digest,
         label=_friendly_label(label or source.stem),
@@ -100,6 +107,7 @@ def add_letterhead_to_library(
         page_count=page_count,
         page_width_pt=width,
         page_height_pt=height,
+        config=_safe_config(config if config is not None else (existing.config if existing else {})),
     )
 
     entries = [item for item in load_letterhead_library(library_root) if item.id != entry.id]
@@ -118,12 +126,46 @@ def remove_letterhead_from_library(letterhead_id: str, root: Path | None = None)
     return removed
 
 
+def update_letterhead_config(
+    letterhead_id: str,
+    config: dict,
+    root: Path | None = None,
+) -> SavedLetterhead | None:
+    library_root = root or membrete_library_root()
+    entries = load_letterhead_library(library_root)
+    updated: list[SavedLetterhead] = []
+    result: SavedLetterhead | None = None
+    for entry in entries:
+        if entry.id == letterhead_id:
+            result = SavedLetterhead(
+                id=entry.id,
+                label=entry.label,
+                path=entry.path,
+                source_name=entry.source_name,
+                added_at=entry.added_at,
+                page_count=entry.page_count,
+                page_width_pt=entry.page_width_pt,
+                page_height_pt=entry.page_height_pt,
+                config=_safe_config(config),
+            )
+            updated.append(result)
+        else:
+            updated.append(entry)
+    if result is not None:
+        _save_letterhead_library(updated, library_root)
+    return result
+
+
 def _save_letterhead_library(entries: list[SavedLetterhead], root: Path) -> None:
     root.mkdir(parents=True, exist_ok=True)
     payload = {"version": 1, "letterheads": [asdict(item) for item in entries]}
     tmp = root / f"{MEMBRETE_LIBRARY_FILE}.tmp"
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     tmp.replace(root / MEMBRETE_LIBRARY_FILE)
+
+
+def _safe_config(value) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _pdf_metadata(path: Path) -> tuple[int, float, float]:

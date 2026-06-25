@@ -67,6 +67,48 @@ class MembretadoWindowTests(unittest.TestCase):
                 self.app.processEvents()
                 os.environ.pop("PDFLEX_MEMBRETE_LIBRARY_DIR", None)
 
+    def test_library_letterhead_restores_saved_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            os.environ["PDFLEX_MEMBRETE_LIBRARY_DIR"] = str(root / "library")
+            pdf = self._make_pdf(root / "membrete.pdf")
+            add_letterhead_to_library(
+                pdf,
+                label="Config",
+                config={
+                    "version": 1,
+                    "margins": {
+                        "top_pt": 111,
+                        "bottom_pt": 44,
+                        "left_pt": 22,
+                        "right_pt": 33,
+                    },
+                    "scope": {
+                        "mode": "exclude",
+                        "pages": "1",
+                        "preserve_unselected": True,
+                    },
+                },
+            )
+
+            window = MembretadoWindow(self._make_ctx())
+            try:
+                window._library_list.setCurrentRow(0)
+                window._on_use_library_membrete()
+                self._wait_for_membrete_load(window)
+
+                self.assertEqual(window._s_top.value(), 111)
+                self.assertEqual(window._s_bottom.value(), 44)
+                self.assertEqual(window._s_left.value(), 22)
+                self.assertEqual(window._s_right.value(), 33)
+                self.assertEqual(window._global_scope_combo.currentData(), "exclude")
+                self.assertEqual(window._global_pages_edit.text(), "1")
+                self.assertTrue(window._preserve_unselected_chk.isChecked())
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+                os.environ.pop("PDFLEX_MEMBRETE_LIBRARY_DIR", None)
+
     def test_continue_stays_disabled_until_letterhead_is_loaded(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pdf = self._make_pdf(Path(tmp) / "membrete.pdf")
@@ -111,11 +153,37 @@ class MembretadoWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_build_jobs_uses_scope_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            letterhead = self._make_pdf(root / "membrete.pdf")
+            document = self._make_pdf(root / "documento.pdf", pages=4)
+            window = MembretadoWindow(self._make_ctx())
+            try:
+                window._load_membrete(str(letterhead), source_name="Membrete")
+                self._wait_for_membrete_load(window)
+                window._docs_card.add_paths([str(document)])
+
+                window._global_scope_combo.setCurrentIndex(
+                    window._global_scope_combo.findData("include")
+                )
+                window._global_pages_edit.setText("2-final")
+
+                jobs = window._build_jobs()
+
+                self.assertEqual(len(jobs), 1)
+                self.assertEqual(jobs[0].pages_to_letterhead, [1, 2, 3])
+                self.assertTrue(jobs[0].preserve_unselected)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     @staticmethod
-    def _make_pdf(path: Path) -> Path:
+    def _make_pdf(path: Path, pages: int = 1) -> Path:
         doc = fitz.open()
-        page = doc.new_page(width=300, height=420)
-        page.insert_text((36, 36), path.stem)
+        for index in range(pages):
+            page = doc.new_page(width=300, height=420)
+            page.insert_text((36, 36), f"{path.stem} {index + 1}")
         doc.save(path)
         doc.close()
         return path

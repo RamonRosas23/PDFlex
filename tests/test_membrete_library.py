@@ -33,6 +33,24 @@ class MembreteLibraryTests(unittest.TestCase):
             self.assertTrue(remove_letterhead_from_library(entry.id, library_root))
             self.assertEqual(load_letterhead_library(library_root), [])
 
+    def test_letterhead_config_roundtrip(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_pdf(root / "Membrete Config.pdf")
+            library_root = root / "library"
+            config = {
+                "version": 1,
+                "margins": {"top_pt": 91, "bottom_pt": 43, "left_pt": 12, "right_pt": 14},
+                "scope": {"mode": "exclude", "pages": "1", "preserve_unselected": True},
+            }
+
+            entry = add_letterhead_to_library(source, root=library_root, config=config)
+            loaded = load_letterhead_library(library_root)
+
+            self.assertEqual(loaded[0].id, entry.id)
+            self.assertEqual(loaded[0].config["margins"]["top_pt"], 91)
+            self.assertEqual(loaded[0].config["scope"]["mode"], "exclude")
+
     @staticmethod
     def _make_pdf(path: Path) -> Path:
         doc = fitz.open()

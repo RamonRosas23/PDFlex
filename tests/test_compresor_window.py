@@ -19,6 +19,7 @@ from shell.tool_registry import get_tool
 from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
 from core.pdf_compress_engine import CompressJob, CompressResult
+from core.pdf_page_rules import PageCompressionRule
 from ui.compresor.window import CompresorWindow
 
 
@@ -76,6 +77,145 @@ class CompresorWindowTests(unittest.TestCase):
                 self.assertEqual(jobs[0].options.dpi_threshold, 240)
                 self.assertEqual(jobs[0].options.quality, 69)
                 self.assertTrue(jobs[0].options.set_to_gray)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_builds_jobs_with_page_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._docs_card.add_paths([str(pdf_path)])
+                window._page_rules_panel._pages_edit.setText("1")
+                idx = window._page_rules_panel._preset_combo.findData("exclude")
+                window._page_rules_panel._preset_combo.setCurrentIndex(idx)
+                window._page_rules_panel._save_rule()
+
+                jobs = window._build_jobs()
+                self.assertEqual(len(jobs[0].page_rules), 1)
+                self.assertEqual(jobs[0].page_rules[0].page_spec, "1")
+                self.assertEqual(jobs[0].page_rules[0].preset, "exclude")
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_builds_jobs_with_custom_page_rule_options(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._docs_card.add_paths([str(pdf_path)])
+                panel = window._page_rules_panel
+                panel._pages_edit.setText("1")
+                idx = panel._preset_combo.findData("custom")
+                panel._preset_combo.setCurrentIndex(idx)
+                panel._dpi_target_spin.setValue(190)
+                panel._dpi_threshold_spin.setValue(260)
+                panel._quality_spin.setValue(71)
+                panel._gray_check.setChecked(True)
+                validation_idx = panel._validation_combo.findData("strict")
+                panel._validation_combo.setCurrentIndex(validation_idx)
+                panel._save_rule()
+
+                rule = window._build_jobs()[0].page_rules[0]
+                self.assertEqual(rule.preset, "custom")
+                self.assertEqual(rule.options["dpi_target"], 190)
+                self.assertEqual(rule.options["dpi_threshold"], 260)
+                self.assertEqual(rule.options["quality"], 71)
+                self.assertTrue(rule.options["set_to_gray"])
+                self.assertEqual(rule.options["validation_level"], "strict")
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_rejects_page_rules_outside_document_range(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._docs_card.add_paths([str(pdf_path)])
+                window._page_rules_panel._rules = [
+                    PageCompressionRule("2", "exclude")
+                ]
+
+                error = window._validate_ready()
+                self.assertIsNotNone(error)
+                self.assertIn("fuera de rango", error)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_rejects_invalid_custom_page_rule_dpi(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._docs_card.add_paths([str(pdf_path)])
+                window._page_rules_panel._rules = [
+                    PageCompressionRule(
+                        "1",
+                        "custom",
+                        options={
+                            "dpi_target": 260,
+                            "dpi_threshold": 180,
+                            "quality": 70,
+                        },
+                    )
+                ]
+
+                error = window._validate_ready()
+                self.assertIsNotNone(error)
+                self.assertIn("DPI objetivo", error)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_rejects_document_level_engine_with_page_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._docs_card.add_paths([str(pdf_path)])
+                window._page_rules_panel._rules = [
+                    PageCompressionRule("1", "exclude")
+                ]
+                idx = window._engine_combo.findData("qpdf")
+                window._engine_combo.setCurrentIndex(idx)
+
+                error = window._validate_ready()
+                self.assertIsNotNone(error)
+                self.assertIn("Automatico o PyMuPDF", error)
             finally:
                 window.deleteLater()
                 self.app.processEvents()

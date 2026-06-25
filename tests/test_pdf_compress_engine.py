@@ -16,6 +16,7 @@ from core.pdf_compress_engine import (
     format_bytes,
     profile_for,
 )
+from core.pdf_page_rules import PageCompressionRule
 
 
 class PdfCompressEngineTests(unittest.TestCase):
@@ -252,6 +253,94 @@ class PdfCompressEngineTests(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertIn("QPDF", result.error)
 
+    def test_page_rules_require_page_aware_engine(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_text_pdf(root / "simple.pdf")
+            output = root / "out" / "simple_comprimido.pdf"
+
+            result = PdfCompressEngine().run_job(
+                CompressJob(
+                    pdf_path=str(source),
+                    output_path=str(output),
+                    profile_id="balanced",
+                    options=CompressOptions(engine_mode="qpdf"),
+                    page_rules=[PageCompressionRule("1", "exclude")],
+                )
+            )
+
+            self.assertFalse(result.success)
+            self.assertIn("reglas por pagina", result.error)
+
+    def test_all_excluded_page_rules_copy_original(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_text_pdf(root / "simple.pdf")
+            output = root / "out" / "simple_comprimido.pdf"
+
+            result = PdfCompressEngine().run_job(
+                CompressJob(
+                    pdf_path=str(source),
+                    output_path=str(output),
+                    profile_id="email",
+                    page_rules=[PageCompressionRule("todo", "exclude")],
+                )
+            )
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "original conservado")
+            self.assertEqual(result.pages_excluded, 1)
+            self.assertEqual(result.pages_compressed, 0)
+            self.assertIn("excluidas", result.warning)
+
+    def test_page_rules_compress_only_allowed_pages(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_multi_image_pdf(root / "scan.pdf")
+            output = root / "out" / "scan_comprimido.pdf"
+
+            result = PdfCompressEngine().run_job(
+                CompressJob(
+                    pdf_path=str(source),
+                    output_path=str(output),
+                    profile_id="email",
+                    page_rules=[
+                        PageCompressionRule("1", "exclude"),
+                        PageCompressionRule("2", "email"),
+                    ],
+                )
+            )
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "reglas por pagina")
+            self.assertEqual(result.pages_excluded, 1)
+            self.assertEqual(result.pages_compressed, 1)
+            self.assertIn("regla", result.page_rule_summary)
+            self.assertLess(result.output_bytes, result.input_bytes)
+
+    def test_page_rules_report_shared_images_between_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_shared_image_pdf(root / "shared.pdf")
+            output = root / "out" / "shared_comprimido.pdf"
+
+            result = PdfCompressEngine().run_job(
+                CompressJob(
+                    pdf_path=str(source),
+                    output_path=str(output),
+                    profile_id="email",
+                    page_rules=[
+                        PageCompressionRule("1", "exclude"),
+                        PageCompressionRule("2", "email"),
+                    ],
+                )
+            )
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "reglas por pagina")
+            self.assertIn("imagen compartida", " ".join(result.rule_warnings))
+            self.assertLess(result.output_bytes, result.input_bytes)
+
     def test_custom_options_build_effective_profile(self) -> None:
         profile = compress_engine._effective_profile(
             profile_for("balanced"),
@@ -354,6 +443,47 @@ class PdfCompressEngineTests(unittest.TestCase):
         page.insert_image(rect, filename=str(png))
         doc.save(path)
         doc.close()
+        return path
+
+    @classmethod
+    def _make_multi_image_pdf(cls, path: Path) -> Path:
+        first_png = cls._make_scan_image(path.with_name("scan_page_1.png"), seed=1)
+        second_png = cls._make_scan_image(path.with_name("scan_page_2.png"), seed=2)
+        doc = fitz.open()
+        for png in (first_png, second_png):
+            page = doc.new_page(width=612, height=792)
+            page.insert_image(fitz.Rect(36, 72, 576, 612), filename=str(png))
+        doc.save(path)
+        doc.close()
+        return path
+
+    @classmethod
+    def _make_shared_image_pdf(cls, path: Path) -> Path:
+        png = cls._make_scan_image(path.with_name("shared_scan.png"), seed=9)
+        doc = fitz.open()
+        for _ in range(2):
+            page = doc.new_page(width=612, height=792)
+            page.insert_image(fitz.Rect(36, 72, 576, 612), filename=str(png))
+        doc.save(path)
+        doc.close()
+        return path
+
+    @staticmethod
+    def _make_scan_image(path: Path, *, seed: int) -> Path:
+        rng = np.random.default_rng(20260625 + seed)
+        paper = rng.integers(238, 255, size=(1900, 1500, 1), dtype=np.uint8)
+        image = Image.fromarray(np.repeat(paper, 3, axis=2), mode="RGB")
+        draw = ImageDraw.Draw(image)
+        font = ImageFont.load_default()
+        for y in range(110, 1780, 80):
+            draw.text(
+                (105, y),
+                f"PDFlex pagina {seed} - tablas pequenas y texto de control",
+                fill=(20, 20, 20),
+                font=font,
+            )
+            draw.rectangle((105, y + 24, 1340, y + 48), outline=(80, 80, 80), width=2)
+        image.save(path, format="PNG")
         return path
 
 

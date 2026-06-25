@@ -1,7 +1,7 @@
 # PDFlex - Compresion PDF por Reglas de Pagina
 
-> **Estado:** Plan creado.  
-> **Bitacora viva:** `docs/superpowers/plans/2026-06-25-pdf-compression-page-rules-bitacora.md`  
+> **Estado:** Implementacion base terminada; QA final en curso.
+> **Bitacora viva:** `docs/superpowers/plans/2026-06-25-pdf-compression-page-rules-bitacora.md`
 > **Objetivo:** permitir excluir paginas de la compresion y aplicar calidades distintas por paginas o intervalos, con validacion visual y una experiencia clara, confiable y segura.
 
 ## Objetivo
@@ -514,4 +514,4 @@ Se implementara primero **Fase 1 funcional**:
 - motor PyMuPDF page-aware;
 - reporte basico de paginas comprimidas/excluidas.
 
-La personalizacion fina por regla y las sugerencias automaticas quedan documentadas como fases posteriores, salvo que durante la implementacion sea mas barato integrarlas sin comprometer estabilidad.
+La personalizacion fina por regla quedo integrada en la primera entrega porque no comprometia estabilidad y mejoraba mucho el flujo. Las sugerencias automaticas quedan documentadas como fase posterior.

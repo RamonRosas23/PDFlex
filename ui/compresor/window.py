@@ -25,6 +25,7 @@ from core.pdf_compress_engine import (
     optional_engine_status,
     profile_for,
 )
+from core.pdf_page_rules import build_page_compression_plan
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.dialogs import show_error, show_success, show_warning
@@ -35,6 +36,7 @@ from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
+from ui.compresor.page_rules import PageRulesPanel
 
 
 class CompressWorker(QObject):
@@ -83,6 +85,7 @@ class CompresorWindow(PipelineWindow):
         self._worker_thread: Optional[QThread] = None
         self._profile_grid: Optional[QGridLayout] = None
         self._profile_cards: list[QWidget] = []
+        self._profile_card_refs: dict[str, QWidget] = {}
         self._profile_grid_columns = 0
         self._profile_scroll: Optional[QScrollArea] = None
 
@@ -236,6 +239,9 @@ class CompresorWindow(PipelineWindow):
         self._validation_combo.currentIndexChanged.connect(self._sync_profile_desc)
         card_layout(safety_card).addWidget(self._validation_combo)
 
+        self._page_rules_panel = PageRulesPanel()
+        self._page_rules_panel.rulesChanged.connect(self._on_page_rules_changed)
+
         details_card = make_card("Detalle tecnico")
         self._profile_desc_lbl = QLabel("")
         self._profile_desc_lbl.setProperty("class", "Mono")
@@ -264,9 +270,19 @@ class CompresorWindow(PipelineWindow):
             engine_card,
             image_card,
             safety_card,
+            self._page_rules_panel,
             details_card,
             guidance_card,
         ]
+        self._profile_card_refs = {
+            "profile": profile_card,
+            "engine": engine_card,
+            "image": image_card,
+            "safety": safety_card,
+            "rules": self._page_rules_panel,
+            "details": details_card,
+            "guidance": guidance_card,
+        }
         for card in self._profile_cards:
             card.setMinimumWidth(0)
             card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -404,8 +420,20 @@ class CompresorWindow(PipelineWindow):
             self._profile_grid.setColumnStretch(1, 1)
             self._profile_grid.setColumnMinimumWidth(0, 0)
             self._profile_grid.setColumnMinimumWidth(1, 0)
-            for index, card in enumerate(self._profile_cards):
-                self._profile_grid.addWidget(card, index // 2, index % 2)
+            refs = self._profile_card_refs
+            placements = [
+                ("profile", 0, 0, 1, 1),
+                ("engine", 0, 1, 1, 1),
+                ("image", 1, 0, 1, 1),
+                ("safety", 1, 1, 1, 1),
+                ("rules", 2, 0, 1, 2),
+                ("details", 3, 0, 1, 1),
+                ("guidance", 3, 1, 1, 1),
+            ]
+            for key, row, col, row_span, col_span in placements:
+                card = refs.get(key)
+                if card is not None:
+                    self._profile_grid.addWidget(card, row, col, row_span, col_span)
         self._profile_grid_columns = columns
 
     def set_inputs(self, paths: List[str]) -> None:
@@ -420,11 +448,19 @@ class CompresorWindow(PipelineWindow):
         count = len(paths)
         if count == 0:
             self._docs_summary_lbl.setText("Sin documentos cargados.")
+            self._page_rules_panel.set_page_context(0, "")
             return
         total = sum(_file_size(path) for path in paths)
         self._docs_summary_lbl.setText(
             f"{count} documento{'s' if count != 1 else ''} · {format_bytes(total)} de entrada"
         )
+        first = paths[0]
+        self._page_rules_panel.set_page_context(_pdf_page_count(first), Path(first).name)
+
+    def _on_page_rules_changed(self) -> None:
+        self._sync_profile_desc()
+        if self.stack.currentIndex() == 2:
+            self._refresh_summary()
 
     def _profile_id(self) -> str:
         return str(self._profile_combo.currentData() or "balanced")
@@ -458,6 +494,7 @@ class CompresorWindow(PipelineWindow):
         self._gray_check.blockSignals(True)
         self._gray_check.setChecked(profile.set_to_gray)
         self._gray_check.blockSignals(False)
+        self._page_rules_panel.set_global_profile(profile.id)
         self._sync_profile_desc()
 
     def _sync_profile_desc(self) -> None:
@@ -474,6 +511,7 @@ class CompresorWindow(PipelineWindow):
             f"Calidad JPEG: {self._quality_spin.value()}%\n"
             f"Grises: {'si' if self._gray_check.isChecked() else 'no'}\n"
             f"Validacion: {validation}\n"
+            f"Reglas: {self._page_rules_panel.summary_text()}\n"
             f"{profile.description}"
         )
         if engine_mode in {"qpdf", "ghostscript"}:
@@ -505,6 +543,7 @@ class CompresorWindow(PipelineWindow):
             f"<b>Motor:</b> {self._engine_combo.currentText()}",
             f"<b>Imagenes:</b> {options.dpi_target} DPI / JPEG {options.quality}%",
             f"<b>Validacion:</b> {self._validation_combo.currentText()}",
+            f"<b>Reglas:</b> {self._page_rules_panel.summary_text()}",
             "<b>Salida:</b> PDF temporal por documento",
         ]
         if count == 0:
@@ -516,12 +555,34 @@ class CompresorWindow(PipelineWindow):
     def _validate_ready(self) -> Optional[str]:
         if self._docs_card.is_empty():
             return "Agrega al menos un PDF."
+        if self._page_rules_panel.has_rules() and self._engine_mode() in {"qpdf", "ghostscript"}:
+            return "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
         missing = self._missing_selected_engine()
         if missing:
             return f"{missing} no esta disponible en esta PC."
         if self._dpi_target_spin.value() >= self._dpi_threshold_spin.value():
             return "El DPI objetivo debe ser menor que el umbral de procesamiento."
+        rules_error = self._page_rules_error_for_paths(self._docs_card.paths())
+        if rules_error:
+            return rules_error
         return None
+
+    def _page_rules_error_for_paths(self, paths: List[str]) -> str:
+        rules = self._page_rules_panel.rules()
+        if not rules:
+            return ""
+        panel_error = self._page_rules_panel.validation_error()
+        if panel_error:
+            return panel_error
+        for path in paths:
+            page_count = _pdf_page_count(path)
+            if page_count <= 0:
+                return f"No se pudo leer el numero de paginas de {Path(path).name}."
+            try:
+                build_page_compression_plan(page_count, self._profile_id(), rules)
+            except ValueError as exc:
+                return f"{Path(path).name}: {exc}"
+        return ""
 
     def _missing_selected_engine(self) -> str:
         mode = self._engine_mode()
@@ -555,6 +616,7 @@ class CompresorWindow(PipelineWindow):
                     output_path=str(out_path),
                     profile_id=profile_id,
                     options=options,
+                    page_rules=self._page_rules_panel.rules(),
                 )
             )
         return jobs
@@ -709,6 +771,7 @@ class CompresorWindow(PipelineWindow):
         self._profile_combo.setCurrentIndex(1)
         self._engine_combo.setCurrentIndex(0)
         self._validation_combo.setCurrentIndex(0)
+        self._page_rules_panel.clear_rules()
         self._sync_controls_from_profile()
         self._result_viewer.clear_results()
         self._send_btn.set_output_paths([])
@@ -728,6 +791,18 @@ def _file_size(path: str) -> int:
     try:
         return Path(path).stat().st_size
     except OSError:
+        return 0
+
+
+def _pdf_page_count(path: str) -> int:
+    try:
+        import fitz
+        doc = fitz.open(path)
+        try:
+            return int(doc.page_count)
+        finally:
+            doc.close()
+    except Exception:
         return 0
 
 

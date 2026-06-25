@@ -1,7 +1,7 @@
 # Bitacora - Compresion PDF por Reglas de Pagina
 
-> **Plan maestro:** `docs/superpowers/plans/2026-06-25-pdf-compression-page-rules.md`  
-> **Estado general:** Plan creado, pendiente de implementacion.  
+> **Plan maestro:** `docs/superpowers/plans/2026-06-25-pdf-compression-page-rules.md`
+> **Estado general:** Implementacion base terminada; QA final en curso.
 > **Ultima actualizacion:** 2026-06-25.
 
 ## Resumen Ejecutivo
@@ -21,12 +21,12 @@ La implementacion debe ser conservadora: si una regla puede degradar una pagina 
 
 | Fase | Nombre | Estado |
 | --- | --- | --- |
-| 0 | Preparacion y contratos | En progreso |
-| 1 | Parser y plan efectivo | Pendiente |
-| 2 | UI de reglas | Pendiente |
-| 3 | Motor page-aware | Pendiente |
-| 4 | Validacion y reporte | Pendiente |
-| 5 | Pulido y QA | Pendiente |
+| 0 | Preparacion y contratos | Completada |
+| 1 | Parser y plan efectivo | Completada |
+| 2 | UI de reglas | Completada |
+| 3 | Motor page-aware | Completada |
+| 4 | Validacion y reporte | Completada |
+| 5 | Pulido y QA | En progreso |
 | 6 | Sugerencias automaticas | Pendiente |
 
 ## Decisiones Iniciales
@@ -79,22 +79,100 @@ La implementacion debe ser conservadora: si una regla puede degradar una pagina 
 
 **Estado:** Fase 0 iniciada. Siguiente paso: auditar `core/pdf_compress_engine.py` y definir los contratos finales de `PageCompressionRule`, parser y plan efectivo.
 
+## Entrada 2026-06-25 - Implementacion Base
+
+**Objetivo de la sesion:** entregar la primera version funcional de reglas por pagina con UX clara, motor page-aware y validacion confiable.
+
+**Trabajo realizado:**
+
+- Se creo `core/pdf_page_rules.py` con:
+  - presets de regla;
+  - `PageCompressionRule`;
+  - `EffectivePageCompression`;
+  - `PageCompressionPlan`;
+  - parser de rangos `1`, `1-5`, `1,3,7-10`, `10-fin`, `pares`, `impares`, `todo`;
+  - deteccion de solapamientos y errores de rango.
+- Se integro `page_rules` en `CompressJob`.
+- Se extendio `CompressResult` con:
+  - paginas comprimibles por reglas;
+  - paginas excluidas;
+  - paginas personalizadas;
+  - resumen de reglas;
+  - advertencias de seguridad.
+- Se agrego candidato page-aware en `core/pdf_compress_engine.py`:
+  - usa PyMuPDF interno;
+  - divide el PDF por segmentos de regla efectiva;
+  - evita Ghostscript y QPDF como motor principal cuando hay reglas por pagina;
+  - conserva paginas excluidas sin recomprimir imagenes;
+  - valida visualmente segun la regla efectiva;
+  - reporta imagenes compartidas entre reglas distintas.
+- Se creo `ui/compresor/page_rules.py` con:
+  - editor de reglas;
+  - lista editable;
+  - presets `No comprimir`, `Alta legibilidad`, `Equilibrado`, `Maxima reduccion`, `Personalizado`;
+  - controles custom de DPI, umbral, JPEG, grises y validacion;
+  - mapa compacto de paginas con scroll;
+  - validacion inmediata de rangos, solapamientos y DPI custom.
+- Se integro el panel en `ui/compresor/window.py`:
+  - vive dentro del paso Perfil;
+  - ocupa ancho completo en layout de dos columnas;
+  - mantiene scroll en ventanas pequenas;
+  - valida reglas contra todos los PDFs cargados;
+  - bloquea motores incompatibles con un mensaje claro;
+  - envia reglas a cada job.
+- Se hizo auditoria visual offscreen en ventanas:
+  - `785x652`;
+  - `1180x760`;
+  - `1420x860`;
+  - vista scrolleada del panel de reglas.
+- Se agregaron pruebas focalizadas:
+  - parser y plan efectivo;
+  - solapamientos;
+  - reglas custom;
+  - engine incompatible;
+  - todas las paginas excluidas;
+  - compresion por paginas permitidas;
+  - imagen compartida entre reglas;
+  - construccion de jobs desde UI;
+  - rechazo de rangos fuera del documento;
+  - rechazo de DPI custom invalido;
+  - procesamiento asincrono ya existente.
+
+**Resultado de pruebas focalizadas:**
+
+- `python -m py_compile core\pdf_page_rules.py core\pdf_compress_engine.py ui\compresor\page_rules.py ui\compresor\window.py tests\test_pdf_page_rules.py tests\test_pdf_compress_engine.py tests\test_compresor_window.py`
+- `python -m pytest tests\test_pdf_page_rules.py tests\test_pdf_compress_engine.py tests\test_compresor_window.py -q`
+- Estado: `34 passed, 5 subtests passed`.
+
+**Resultado de suite amplia:**
+
+- `python -m pytest -q`
+- Estado: `405 passed, 8 subtests passed`.
+
+**Decisiones finales de esta entrega:**
+
+- Las reglas por pagina requieren `Automatico` o `PyMuPDF`.
+- Si todas las paginas quedan excluidas, se copia el original y se reporta.
+- Si hay una imagen compartida entre paginas con reglas distintas, se aisla al reconstruir segmentos y se reporta la advertencia.
+- `No comprimir` protege fidelidad visual; no promete bytes identicos.
+- Las sugerencias automaticas quedan fuera de esta entrega.
+
+**Estado:** Fases 0 a 5 completadas. Siguiente paso: limpiar temporales, revisar `git status` y cerrar con commit.
+
 ## Pendientes Inmediatos
 
-- Revisar estructura actual de `CompressJob`, `CompressOptions` y `CompressResult`.
-- Decidir si las reglas viven en `core/pdf_compress_engine.py` o en `core/pdf_page_rules.py`.
-- Implementar pruebas del parser antes de tocar UI.
-- Definir mensajes de error UX para rangos invalidos y solapamientos.
-- Definir estrategia exacta para recursos compartidos.
+- Eliminar artefactos temporales de auditoria visual.
+- Revisar diff final y `git status`.
+- Crear commit de implementacion.
 
 ## Registro de Riesgos
 
 | Riesgo | Estado | Nota |
 | --- | --- | --- |
-| Imagen compartida entre paginas con reglas distintas | Abierto | Debe resolverse con regla mas conservadora |
-| UI demasiado compleja | Abierto | Mantener presets y mapa compacto |
-| Ghostscript incompatible con reglas mixtas | Mitigado en plan | No usarlo como motor principal page-aware |
-| Rendimiento con PDFs grandes | Abierto | Evitar miniaturas pesadas en Fase 1 |
+| Imagen compartida entre paginas con reglas distintas | Mitigado | Segmentos aislados y advertencia en resultado |
+| UI demasiado compleja | Mitigado | Presets, mapa compacto y scroll |
+| Ghostscript incompatible con reglas mixtas | Mitigado | Bloqueado para reglas por pagina |
+| Rendimiento con PDFs grandes | Mitigado inicial | Mapa sin miniaturas pesadas, maximo visual compacto |
 | PDFs firmados | Mitigado en plan | Mantener politica actual de no modificar |
 
 ## Criterios para Cerrar Fase 0

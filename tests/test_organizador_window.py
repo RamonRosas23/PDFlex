@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -16,6 +17,7 @@ from shell.tool_registry import get_tool
 from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
 from ui.organizador.window import OrganizadorWindow
+from ui.organizador.page_preview_dialog import OrganizerPagePreviewDialog
 from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailKey, ThumbnailWorker, render_page_thumb
 from core.page_organizer_engine import (
     MultiOrganizerResult,
@@ -80,6 +82,32 @@ class OrganizadorWindowTests(unittest.TestCase):
                 self.assertEqual(window._lane_container.total_lanes(), 1)
                 self.assertEqual(window._lane_container.total_pages(), 1)
                 self.assertEqual(ctx.tray.items[0].status, "in_work")
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_opens_large_preview_at_requested_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = Path(tmp) / "preview.pdf"
+            doc = fitz.open()
+            for i in range(3):
+                doc.new_page().insert_text((36, 72), f"Preview {i+1}")
+            doc.save(pdf_path)
+            doc.close()
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window.set_inputs([str(pdf_path)])
+                target = window._lane_container.lanes()[0].page_refs()[1]
+                with patch("ui.organizador.window.OrganizerPagePreviewDialog") as dlg_cls:
+                    dlg_cls.return_value.exec.return_value = 0
+                    window._open_page_preview(target)
+
+                args, kwargs = dlg_cls.call_args
+                self.assertIs(args[0], window)
+                self.assertEqual(len(args[1]), 3)
+                self.assertEqual(kwargs["current_index"], 1)
+                self.assertEqual(args[1][1].page_id, target.page_id)
             finally:
                 window.deleteLater()
                 self.app.processEvents()
@@ -187,6 +215,34 @@ class PageMimeTests(unittest.TestCase):
         mime = QMimeData()
         mime.setText("hello")
         self.assertIsNone(decode_drag(mime))
+
+
+class OrganizerPagePreviewDialogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.app = QApplication.instance() or QApplication([])
+
+    def test_preview_dialog_renders_rotated_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "large.pdf"
+            doc = fitz.open()
+            page = doc.new_page(width=300, height=500)
+            page.insert_text((36, 72), "Large preview")
+            doc.save(pdf)
+            doc.close()
+
+            ref = PageRef(str(pdf), 0, rotation_deg=90, page_id="p1")
+            dlg = OrganizerPagePreviewDialog(None, [ref])
+            try:
+                self.app.processEvents()
+                pix = dlg._canvas.pixmap()
+                self.assertIsNotNone(pix)
+                self.assertFalse(pix.isNull())
+                self.assertGreater(pix.width(), pix.height())
+                self.assertIn("90", dlg._meta_lbl.toolTip())
+            finally:
+                dlg.close()
+                self.app.processEvents()
 
 
 from ui.organizador.lane_widget import DocLane, LANE_COLORS
@@ -377,6 +433,28 @@ class LaneContainerTests(unittest.TestCase):
         names = [lane.display_name for lane in container.lanes()]
         self.assertEqual(names, ["B", "A"])
         container.deleteLater()
+
+    def test_page_preview_signal_bubbles_from_lane(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "preview-signal.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            container = LaneContainer()
+            try:
+                received: list[str] = []
+                container.page_preview_requested.connect(
+                    lambda ref: received.append(ref.page_id)
+                )
+                lane = container.add_lane_from_pdf(str(pdf))
+                ref = lane.page_refs()[0]
+                lane._request_preview_for_ref(ref)
+                self.app.processEvents()
+                self.assertEqual(received, [ref.page_id])
+            finally:
+                container.deleteLater()
 
 
 class OrganizadorWindowV2Tests(unittest.TestCase):

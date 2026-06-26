@@ -28,6 +28,7 @@ class LaneContainer(QWidget):
     """Scroll vertical con N DocLanes, portapapeles y pila de deshacer."""
 
     layout_changed = pyqtSignal()
+    page_preview_requested = pyqtSignal(object)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -147,6 +148,12 @@ class LaneContainer(QWidget):
     def all_lane_states(self) -> List[Tuple[str, str, List[PageRef]]]:
         return [(lane.lane_id, lane.display_name, lane.page_refs()) for lane in self._lanes]
 
+    def ordered_page_refs(self) -> List[PageRef]:
+        refs: List[PageRef] = []
+        for lane in self._lanes:
+            refs.extend(lane.page_refs())
+        return refs
+
     def total_pages(self) -> int:
         return sum(lane.count() for lane in self._lanes)
 
@@ -253,6 +260,7 @@ class LaneContainer(QWidget):
         lane.lane_delete_requested.connect(self.remove_lane)
         lane.reorder_requested.connect(self.move_lane)
         lane.cross_lane_drop_received.connect(self._on_cross_lane_drop)
+        lane.page_preview_requested.connect(self.page_preview_requested)
         lane.set_before_mutation_cb(self._take_snapshot)
 
         self._lanes.append(lane)

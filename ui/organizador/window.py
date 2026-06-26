@@ -36,6 +36,7 @@ from ui.common.process_step import ProcessStep
 from ui.common.tray_input_panel import TrayInputPanel
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.organizador.lane_container import LaneContainer
+from ui.organizador.page_preview_dialog import OrganizerPagePreviewDialog
 
 
 class _MultiWorker(QObject):
@@ -113,6 +114,7 @@ class OrganizadorWindow(PipelineWindow):
 
         self._lane_container = LaneContainer()
         self._lane_container.layout_changed.connect(self._on_layout_changed)
+        self._lane_container.page_preview_requested.connect(self._open_page_preview)
         body.addWidget(self._lane_container, 1)
         outer.addLayout(body, 1)
 
@@ -259,6 +261,23 @@ class OrganizadorWindow(PipelineWindow):
                 f"{total} pagina{'s' if total != 1 else ''}"
                 f" · {lanes} fila{'s' if lanes != 1 else ''}"
             )
+
+    def _open_page_preview(self, ref) -> None:
+        refs = self._lane_container.ordered_page_refs()
+        if not refs:
+            return
+        current = 0
+        for idx, candidate in enumerate(refs):
+            if candidate.page_id == getattr(ref, "page_id", ""):
+                current = idx
+                break
+        dlg = OrganizerPagePreviewDialog(
+            self,
+            refs,
+            current_index=current,
+            accent_color=self.ACCENT_COLOR,
+        )
+        dlg.exec()
 
     def _on_merge_toggled(self, checked: bool) -> None:
         self._merge_name_edit.setEnabled(checked)

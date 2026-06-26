@@ -343,6 +343,7 @@ class DocLane(QFrame):
     pages_changed            = pyqtSignal(str)
     lane_delete_requested    = pyqtSignal(str)
     reorder_requested        = pyqtSignal(str, int)
+    page_preview_requested   = pyqtSignal(object)
     # src_id, dst_id, refs, ctrl, target_row
     cross_lane_drop_received = pyqtSignal(str, str, list, bool, int)
 
@@ -417,11 +418,12 @@ class DocLane(QFrame):
         self._list.before_internal_reorder.connect(self._record_before_mutation)
         self._list.cross_lane_drop_received.connect(self.cross_lane_drop_received)
         self._list.pdf_file_dropped.connect(self.add_pages_from_pdf)
+        self._list.itemDoubleClicked.connect(self._request_preview_for_item)
         self._list.installEventFilter(self)
         sw.addWidget(self._list)
 
         self._shortcut_lbl = QLabel(
-            "Del  ·  R rotar  ·  Shift+R rotar ←  ·  "
+            "Enter ver grande  ·  Del  ·  R rotar  ·  Shift+R rotar ←  ·  "
             "Ctrl+D duplicar  ·  Ctrl+C copiar  ·  Ctrl+X cortar  ·  Ctrl+V pegar  ·  Ctrl+Z deshacer"
         )
         self._shortcut_lbl.setStyleSheet(
@@ -773,6 +775,11 @@ class DocLane(QFrame):
                 if key == Qt.Key.Key_Z and ctrl:
                     self._trigger_undo()
                     return True
+                if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and not ctrl:
+                    item = self._list.currentItem()
+                    if item is not None:
+                        self._request_preview_for_item(item)
+                        return True
                 if key == Qt.Key.Key_R and not ctrl:
                     self.rotate_selected(-90 if shift else 90)
                     return True
@@ -803,6 +810,9 @@ class DocLane(QFrame):
             "QMenu::separator { height:1px; background:#32323C; margin:3px 8px; }"
         )
 
+        view_act = menu.addAction("Ver en grande  (Enter)")
+        menu.addSeparator()
+
         rot_cw  = menu.addAction("Rotar 90° →  (R)")
         rot_ccw = menu.addAction("Rotar 90° ←  (Shift+R)")
         menu.addSeparator()
@@ -832,7 +842,9 @@ class DocLane(QFrame):
         chosen = menu.exec(global_pos)
         if chosen is None:
             return
-        if chosen == rot_cw:
+        if chosen == view_act:
+            self._request_preview_for_ref(selected[0])
+        elif chosen == rot_cw:
             self.rotate_selected(90)
         elif chosen == rot_ccw:
             self.rotate_selected(-90)
@@ -855,6 +867,16 @@ class DocLane(QFrame):
             )
 
     # ── Helpers internos ─────────────────────────────────────────────────
+
+    def _request_preview_for_item(self, item: QListWidgetItem) -> None:
+        if item is None:
+            return
+        ref = item.data(Qt.ItemDataRole.UserRole)
+        self._request_preview_for_ref(ref)
+
+    def _request_preview_for_ref(self, ref: PageRef) -> None:
+        if ref is not None:
+            self.page_preview_requested.emit(ref)
 
     def _make_item(self, ref: PageRef) -> QListWidgetItem:
         item = QListWidgetItem(QIcon(_placeholder_pixmap()), self._label_for(ref))

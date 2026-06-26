@@ -6,7 +6,7 @@ Cada página recibe una pequeña variación pseudoaleatoria de:
   - escala
   - posición (offset)
   - opacidad (sutil)
-  - "pressure jitter" (ligera deformación PIL para simular trazo no idéntico)
+  - "pressure jitter" y variacion interna de trazo/tinta
 
 La variación es determinista a partir de una semilla (seed) para que
 el resultado sea reproducible y previsible en el visor final.
@@ -27,6 +27,8 @@ class VariationConfig:
     opacity_min: float = 0.92
     opacity_max: float = 1.0
     enable_pressure_jitter: bool = True
+    stroke_mode: str = "antefirma"  # exacta, natural, antefirma
+    stroke_strength: float = 0.70   # 0..1, intensidad interna de trazo/tinta
     seed: int = 42
 
     def clamp(self) -> None:
@@ -36,6 +38,18 @@ class VariationConfig:
         self.offset_y = max(0.0, min(self.offset_y, 30.0))
         self.opacity_min = max(0.5, min(self.opacity_min, 1.0))
         self.opacity_max = max(self.opacity_min, min(self.opacity_max, 1.0))
+        mode = str(self.stroke_mode or "exacta").strip().lower()
+        aliases = {
+            "exact": "exacta",
+            "exacto": "exacta",
+            "off": "exacta",
+            "none": "exacta",
+            "ante-firma": "antefirma",
+        }
+        self.stroke_mode = aliases.get(mode, mode)
+        if self.stroke_mode not in {"exacta", "natural", "antefirma"}:
+            self.stroke_mode = "natural"
+        self.stroke_strength = max(0.0, min(float(self.stroke_strength), 1.0))
 
 
 @dataclass
@@ -47,6 +61,18 @@ class Variation:
     d_y: float
     opacity: float
     pressure: float  # 0..1, fuerza del jitter
+    stroke_seed: int = 0
+    stroke_mode: str = "exacta"
+    stroke_strength: float = 0.0
+    stretch_x: float = 1.0
+    stretch_y: float = 1.0
+    stroke_width_delta: float = 0.0
+    ink_flow: float = 0.0
+    dryness: float = 0.0
+
+    @property
+    def has_stroke_variation(self) -> bool:
+        return self.stroke_strength > 0.0 and self.stroke_mode != "exacta"
 
 
 class VariationGenerator:
@@ -73,6 +99,22 @@ class VariationGenerator:
         d_y = rng.uniform(-self.config.offset_y, self.config.offset_y)
         opacity = rng.uniform(self.config.opacity_min, self.config.opacity_max)
         pressure = rng.uniform(0.0, 1.0) if self.config.enable_pressure_jitter else 0.0
+        mode = self.config.stroke_mode
+        if not self.config.enable_pressure_jitter or mode == "exacta":
+            stroke_strength = 0.0
+            mode = "exacta"
+        else:
+            mode_gain = 0.68 if mode == "natural" else 1.0
+            stroke_strength = self.config.stroke_strength * mode_gain
+
+        shape_range = 0.018 if mode == "natural" else 0.032
+        shape_range *= stroke_strength
+        stretch_x = 1.0 + rng.uniform(-shape_range, shape_range)
+        stretch_y = 1.0 + rng.uniform(-shape_range * 0.75, shape_range * 0.75)
+        stroke_width_delta = rng.uniform(-1.0, 1.0) * stroke_strength
+        ink_flow = rng.uniform(-1.0, 1.0) * stroke_strength
+        dryness = rng.uniform(0.0, 1.0) * stroke_strength
+        stroke_seed = rng.randrange(0, 2**31)
 
         return Variation(
             d_angle=d_angle,
@@ -81,4 +123,12 @@ class VariationGenerator:
             d_y=d_y,
             opacity=opacity,
             pressure=pressure,
+            stroke_seed=stroke_seed,
+            stroke_mode=mode,
+            stroke_strength=stroke_strength,
+            stretch_x=stretch_x,
+            stretch_y=stretch_y,
+            stroke_width_delta=stroke_width_delta,
+            ink_flow=ink_flow,
+            dryness=dryness,
         )

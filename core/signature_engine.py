@@ -17,6 +17,7 @@ from PIL import Image, ImageEnhance, ImageFilter
 
 from .pdf_analyzer import PdfAnalyzer, PageAnalysis
 from .safe_zone import SafeZoneFinder, Placement, fit_placement_inside_page
+from .signature_naturalizer import naturalize_signature
 from .variation import Variation, VariationGenerator, VariationConfig
 
 
@@ -109,9 +110,7 @@ class SignatureEngine:
         self._img_cache: Dict[str, Image.Image] = {}
         # Caché acotada de PNGs transformados. Normalmente cada página varía,
         # pero cuando la transformación coincide evitamos repetir PIL + zlib.
-        self._transformed_png_cache: OrderedDict[
-            Tuple[str, float, float, float], bytes
-        ] = OrderedDict()
+        self._transformed_png_cache: OrderedDict[Tuple[object, ...], bytes] = OrderedDict()
         self._transformed_png_cache_limit = 16
 
     # ------------------------------------------------------------------ #
@@ -348,7 +347,7 @@ class SignatureEngine:
 
         # La clave de caché incluye rot para que imágenes pre-rotadas no se
         # reutilicen en páginas con orientación diferente.
-        base_key = self._transformed_image_key(sig_path, placement, variation.pressure)
+        base_key = self._transformed_image_key(sig_path, placement, variation)
         cache_key = (*base_key, rot)
         xref = image_xrefs.get(cache_key, 0)
 
@@ -359,7 +358,7 @@ class SignatureEngine:
                 )
             else:
                 img_bytes = self._transformed_png_bytes(
-                    base_key, base_img, placement, variation.pressure, page_rot=rot
+                    base_key, base_img, placement, variation, page_rot=rot
                 )
                 xref = page.insert_image(
                     target,
@@ -372,7 +371,7 @@ class SignatureEngine:
                 page.insert_image(target, xref=xref, overlay=True)
             else:
                 img_bytes = self._transformed_png_bytes(
-                    base_key, base_img, placement, variation.pressure, page_rot=rot
+                    base_key, base_img, placement, variation, page_rot=rot
                 )
                 xref = page.insert_image(target, stream=img_bytes, overlay=True)
 
@@ -383,16 +382,29 @@ class SignatureEngine:
     def _transformed_image_key(
         sig_path: str,
         placement: Placement,
-        pressure: float,
-    ) -> Tuple[str, float, float, float]:
-        return (sig_path, placement.angle, placement.opacity, pressure)
+        variation: Variation,
+    ) -> Tuple[object, ...]:
+        return (
+            sig_path,
+            round(float(placement.angle), 6),
+            round(float(placement.opacity), 6),
+            round(float(variation.pressure), 6),
+            variation.stroke_seed,
+            variation.stroke_mode,
+            round(float(variation.stroke_strength), 6),
+            round(float(variation.stretch_x), 6),
+            round(float(variation.stretch_y), 6),
+            round(float(variation.stroke_width_delta), 6),
+            round(float(variation.ink_flow), 6),
+            round(float(variation.dryness), 6),
+        )
 
     def _transformed_png_bytes(
         self,
-        image_key: Tuple[str, float, float, float],
+        image_key: Tuple[object, ...],
         base_img: Image.Image,
         placement: Placement,
-        pressure: float,
+        variation: Variation,
         page_rot: int = 0,
     ) -> bytes:
         # La clave de caché incluye page_rot para separar variantes por orientación
@@ -402,7 +414,7 @@ class SignatureEngine:
             self._transformed_png_cache.move_to_end(cache_key)
             return cached
 
-        img = self._transform_image(base_img, placement, pressure)
+        img = self._transform_image(base_img, placement, variation)
 
         if page_rot != 0:
             # Pre-rotar la imagen CCW para compensar la rotación del visor.
@@ -440,9 +452,10 @@ class SignatureEngine:
         )
 
     def _transform_image(
-        self, base: Image.Image, placement: Placement, pressure: float
+        self, base: Image.Image, placement: Placement, variation: Variation
     ) -> Image.Image:
-        img = base.copy()
+        img = naturalize_signature(base, variation)
+        pressure = variation.pressure
 
         if pressure > 0:
             contrast = 0.95 + 0.10 * pressure

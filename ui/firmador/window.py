@@ -977,12 +977,29 @@ class FirmadorWindow(PipelineWindow):
         grid.addWidget(c5, 2, 0)
 
         c6 = make_card(
-            "Imperfecciones de trazo",
-            "Variaciones sutiles de contraste / brillo / blur.",
+            "Trazo vivo",
+            "Modifica tinta, bordes y microforma para evitar clones visibles.",
         )
+        stroke_row = QHBoxLayout()
+        stroke_row.setSpacing(8)
         self.s_pressure = QCheckBox("Activar")
         self.s_pressure.setChecked(True)
-        card_layout(c6).addWidget(self.s_pressure)
+        self.c_stroke_mode = QComboBox()
+        self.c_stroke_mode.addItem("Natural", "natural")
+        self.c_stroke_mode.addItem("Antefirma", "antefirma")
+        self.c_stroke_mode.addItem("Exacta", "exacta")
+        self.c_stroke_mode.setCurrentIndex(1)
+        stroke_row.addWidget(self.s_pressure)
+        stroke_row.addWidget(self.c_stroke_mode, 1)
+        card_layout(c6).addLayout(stroke_row)
+        self.s_stroke_strength = SliderWithValue(
+            0.0, 100.0, 70.0, step=5.0, suffix="%", decimals=0
+        )
+        card_layout(c6).addWidget(self.s_stroke_strength)
+        self.s_pressure.stateChanged.connect(
+            lambda _: self._sync_stroke_variation_controls()
+        )
+        self._sync_stroke_variation_controls()
         grid.addWidget(c6, 2, 1)
 
         c7 = make_card("Semilla aleatoria", "Misma semilla = mismo resultado.")
@@ -1023,6 +1040,11 @@ class FirmadorWindow(PipelineWindow):
         outer.addWidget(grid_scroll, 1)
 
         return page
+
+    def _sync_stroke_variation_controls(self) -> None:
+        enabled = bool(self.s_pressure.isChecked())
+        self.c_stroke_mode.setEnabled(enabled)
+        self.s_stroke_strength.setEnabled(enabled)
 
     # ================================================================== #
     # Paso 04: Intervalos
@@ -2883,6 +2905,7 @@ class FirmadorWindow(PipelineWindow):
             f"<b>Variación:</b>&nbsp;&nbsp;"
             f"±{self.s_angle.value():.1f}°&nbsp;&nbsp;·&nbsp;&nbsp;"
             f"±{self.s_scale.value():.1f}%",
+            f"<b>Trazo:</b>&nbsp;&nbsp;{self._stroke_variation_summary()}",
         ]
         html = "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         self._proc_step.set_summary_html(html)
@@ -2994,6 +3017,15 @@ class FirmadorWindow(PipelineWindow):
         return result
 
     def _build_variation_config(self) -> VariationConfig:
+        stroke_enabled = bool(self.s_pressure.isChecked())
+        stroke_mode = (
+            str(self.c_stroke_mode.currentData() or "natural")
+            if stroke_enabled else "exacta"
+        )
+        stroke_strength = (
+            float(self.s_stroke_strength.value()) / 100.0
+            if stroke_enabled else 0.0
+        )
         return VariationConfig(
             angle_deg=self.s_angle.value(),
             scale_pct=self.s_scale.value(),
@@ -3001,9 +3033,18 @@ class FirmadorWindow(PipelineWindow):
             offset_y=self.s_dy.value(),
             opacity_min=self.s_op.value(),
             opacity_max=1.0,
-            enable_pressure_jitter=self.s_pressure.isChecked(),
+            enable_pressure_jitter=stroke_enabled,
+            stroke_mode=stroke_mode,
+            stroke_strength=stroke_strength,
             seed=int(self.s_seed.value()),
         )
+
+    def _stroke_variation_summary(self) -> str:
+        if not self.s_pressure.isChecked():
+            return "Exacta"
+        mode = self.c_stroke_mode.currentText()
+        strength = self.s_stroke_strength.value()
+        return f"{mode}&nbsp;&nbsp;·&nbsp;&nbsp;{strength:.0f}%"
 
     def _on_run(self) -> None:
         self._stop_active_worker()

@@ -4,7 +4,6 @@ Pipeline:
     01 Documentos  →  02 Opciones  →  03 Procesar  →  04 Resultados
 """
 from __future__ import annotations
-from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
@@ -17,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from shell.context import ShellContext
+from core.pdf_merge_engine import PdfMergeEngine, PdfMergeOptions, PdfMergeResult
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
@@ -26,19 +26,6 @@ from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.dialogs import show_error, show_warning
 from ui.common.icons import set_button_icon
-
-
-# ====================================================================== #
-#  Resultado
-# ====================================================================== #
-
-@dataclass
-class MergeResult:
-    output_path: str
-    success: bool
-    error: str = ""
-    total_pages: int = 0
-    source_count: int = 0
 
 
 # ====================================================================== #
@@ -68,64 +55,23 @@ class MergeWorker(QObject):
         self._cancel = True
 
     def run(self) -> None:
-        out_doc = None
         try:
-            out_doc = fitz.open()
-            total = len(self.pdf_paths)
-            toc_entries: list = []
-            current_page = 0
-
-            for i, path in enumerate(self.pdf_paths):
-                if self._cancel:
-                    out_doc.close()
-                    self.error.emit("Operación cancelada.")
-                    return
-
-                stem = Path(path).stem
-                self.progress.emit(i + 1, total, f"Uniendo {stem}…")
-
-                # Insertar página en blanco de separación (excepto antes del primero)
-                if self.blank_between and i > 0:
-                    # Mismas dimensiones que la última página insertada
-                    ref_rect = out_doc[-1].rect if out_doc.page_count > 0 \
-                        else fitz.Rect(0, 0, 595, 842)
-                    out_doc.new_page(width=ref_rect.width, height=ref_rect.height)
-                    current_page += 1
-
-                src = None
-                try:
-                    src = fitz.open(path)
-                    if self.add_bookmarks:
-                        # Guardar marcador al inicio del documento fuente
-                        toc_entries.append([1, stem, current_page + 1])
-
-                    out_doc.insert_pdf(src)
-                    current_page += src.page_count
-                finally:
-                    if src is not None:
-                        src.close()
-
-            if self.add_bookmarks and toc_entries:
-                out_doc.set_toc(toc_entries)
-
-            self.progress.emit(total, total, "Guardando…")
-            Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
-            out_doc.save(self.output_path, garbage=4, deflate=True)
-            total_pages = out_doc.page_count
-            out_doc.close()
-
-            self.finished.emit(MergeResult(
-                output_path=self.output_path,
-                success=True,
-                total_pages=total_pages,
-                source_count=len(self.pdf_paths),
-            ))
+            result = PdfMergeEngine().run(
+                self.pdf_paths,
+                self.output_path,
+                PdfMergeOptions(
+                    blank_between=self.blank_between,
+                    add_bookmarks=self.add_bookmarks,
+                    validate_visual=True,
+                ),
+                progress=self.progress.emit,
+                should_cancel=lambda: self._cancel,
+            )
+            if result.success:
+                self.finished.emit(result)
+            else:
+                self.error.emit(result.error or "No se pudo unir los PDFs.")
         except Exception as exc:
-            if out_doc is not None:
-                try:
-                    out_doc.close()
-                except Exception:
-                    pass
             self.error.emit(str(exc))
 
 
@@ -384,6 +330,10 @@ class UnirWindow(PipelineWindow):
 
     def _on_files_changed(self, paths: List[str]) -> None:
         self._pdf_paths = paths
+        for cached in list(self._page_cache):
+            if cached not in paths:
+                self._page_cache.pop(cached, None)
+
         n = len(paths)
         if n == 0:
             self._docs_summary_lbl.setText("Sin documentos cargados.")
@@ -393,7 +343,7 @@ class UnirWindow(PipelineWindow):
             )
         else:
             for p in paths:
-                if p not in self._page_cache:
+                if p not in self._page_cache or self._page_cache.get(p, 0) <= 0:
                     try:
                         doc = fitz.open(p)
                         self._page_cache[p] = doc.page_count
@@ -401,7 +351,18 @@ class UnirWindow(PipelineWindow):
                     except Exception:
                         self._page_cache[p] = 0
             total = sum(self._page_cache.get(p, 0) for p in paths)
-            self._docs_summary_lbl.setText(f"{n} documentos · {total} páginas en total")
+            invalid = [Path(p).name for p in paths if self._page_cache.get(p, 0) <= 0]
+            if invalid:
+                shown = ", ".join(invalid[:3])
+                extra = "..." if len(invalid) > 3 else ""
+                self._docs_summary_lbl.setText(
+                    f"{n} documentos · {total} páginas legibles · "
+                    f"revisa: {shown}{extra}"
+                )
+            else:
+                self._docs_summary_lbl.setText(
+                    f"{n} documentos · {total} páginas en total"
+                )
         self._sync_run_enabled()
 
     # ------------------------------------------------------------------ #
@@ -424,17 +385,31 @@ class UnirWindow(PipelineWindow):
             f"<b>Página en blanco entre docs:</b>&nbsp;&nbsp;{blank}",
             f"<b>Marcadores de navegación:</b>&nbsp;&nbsp;{bm}",
         ]
+        if n >= 2:
+            expected = sum(self._page_cache.get(p, 0) for p in self._pdf_paths)
+            if self._blank_between_chk.isChecked():
+                expected += max(0, n - 1)
+            rows.append(f"<b>Páginas esperadas:</b>&nbsp;&nbsp;{expected}")
         if n == 0:
             rows.insert(0, "<span style='color:#E5484D;'>Atención: no hay documentos cargados.</span>")
         elif n == 1:
             rows.insert(0, "<span style='color:#F5A623;'>Atención: solo hay 1 documento — agrega más para unir.</span>")
+        elif not self._inputs_are_readable():
+            rows.insert(0, "<span style='color:#E5484D;'>Atención: hay PDFs que no se pudieron leer correctamente.</span>")
 
         self._proc_step.set_summary_html("<br>".join(rows))
         self._sync_run_enabled()
 
     def _sync_run_enabled(self) -> None:
         if hasattr(self, "_proc_step"):
-            self._proc_step.set_run_enabled(len(self._pdf_paths) >= 2)
+            self._proc_step.set_run_enabled(
+                len(self._pdf_paths) >= 2 and self._inputs_are_readable()
+            )
+
+    def _inputs_are_readable(self) -> bool:
+        if len(self._pdf_paths) < 2:
+            return False
+        return all(self._page_cache.get(p, 0) > 0 for p in self._pdf_paths)
 
     # ------------------------------------------------------------------ #
     # Ejecutar
@@ -488,7 +463,7 @@ class UnirWindow(PipelineWindow):
         pct = int(current / total * 100) if total > 0 else 0
         self._proc_step.set_progress(pct, msg)
 
-    def _on_finished(self, result: MergeResult) -> None:
+    def _on_finished(self, result: PdfMergeResult) -> None:
         self._cleanup_thread()
         self._proc_step.set_running(False)
         self._proc_step.set_progress(100, "¡Listo!")

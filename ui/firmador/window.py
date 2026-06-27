@@ -29,7 +29,9 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QObject, QUrl, QStandardPaths
+from PyQt6.QtCore import (
+    Qt, QSize, pyqtSignal, QThread, QObject, QUrl, QStandardPaths, QTimer,
+)
 from PyQt6.QtGui import (
     QPixmap, QIcon, QDragEnterEvent, QDropEvent, QDesktopServices,
     QColor, QPainter, QImage,
@@ -439,7 +441,7 @@ class FirmadorWindow(PipelineWindow):
         ("03", "Variación",        "Configura la variación"),
         ("04", "Intervalos",       "Define páginas específicas"),
         ("05", "Procesar",         "Ejecuta el firmado"),
-        ("06", "Validar",          "Ajusta el resultado"),
+        ("06", "Validar",          "Ajuste opcional"),
         ("07", "Resultados",       "Revisa el resultado"),
     ]
     BRAND = "Firmador"
@@ -1242,6 +1244,24 @@ class FirmadorWindow(PipelineWindow):
             show_output_dir=False,
         )
         self._proc_step.watch_documents(self._docs_card)
+
+        review_card = make_card(
+            "Validación final",
+            "Opcional. Si está activa, podrás corregir cada firma antes de guardar el resultado final.",
+        )
+        review_l = card_layout(review_card)
+        review_l.setSpacing(8)
+        self._review_enabled_chk = QCheckBox("Revisar y ajustar antes de generar final")
+        self._review_enabled_chk.setChecked(True)
+        self._review_enabled_chk.stateChanged.connect(self._on_review_enabled_changed)
+        review_l.addWidget(self._review_enabled_chk)
+        review_hint = QLabel(
+            "Desactívalo para conservar el flujo rápido: al terminar Procesar se publican los PDFs directamente en Resultados."
+        )
+        review_hint.setProperty("class", "CardHint")
+        review_hint.setWordWrap(True)
+        review_l.addWidget(review_hint)
+        outer.addWidget(review_card)
         outer.addWidget(self._proc_step, 1)
 
         return page
@@ -1291,13 +1311,107 @@ class FirmadorWindow(PipelineWindow):
         left_l.addWidget(self._review_page_list, 2)
         body.addWidget(left)
 
-        center = make_card()
-        center_l = card_layout(center)
+        center = QFrame()
+        center.setObjectName("ReviewCanvasShell")
+        center.setMinimumSize(560, 420)
+        center.setStyleSheet(
+            "QFrame#ReviewCanvasShell {"
+            "  background: #101016;"
+            "  border: 1px solid #252532;"
+            "  border-radius: 8px;"
+            "}"
+            "QFrame#ReviewToolbar {"
+            "  background: #16161D;"
+            "  border: none;"
+            "  border-bottom: 1px solid #262633;"
+            "  border-top-left-radius: 8px;"
+            "  border-top-right-radius: 8px;"
+            "}"
+            "QFrame#ReviewFooter {"
+            "  background: #14141B;"
+            "  border: none;"
+            "  border-top: 1px solid #262633;"
+            "  border-bottom-left-radius: 8px;"
+            "  border-bottom-right-radius: 8px;"
+            "}"
+        )
+        center_l = QVBoxLayout(center)
         center_l.setContentsMargins(0, 0, 0, 0)
         center_l.setSpacing(0)
 
+        toolbar = QFrame()
+        toolbar.setObjectName("ReviewToolbar")
+        toolbar.setFixedHeight(48)
+        tb = QHBoxLayout(toolbar)
+        tb.setContentsMargins(12, 0, 12, 0)
+        tb.setSpacing(8)
+
+        self._review_doc_title_lbl = QLabel("Sin documento")
+        self._review_doc_title_lbl.setStyleSheet(
+            "color:#ECEDEE; font-size:13px; font-weight:600; background: transparent;"
+        )
+        self._review_doc_title_lbl.setMinimumWidth(0)
+        tb.addWidget(self._review_doc_title_lbl, 1)
+
+        self._review_prev_page_btn = QPushButton()
+        self._review_prev_page_btn.setProperty("class", "IconBtn")
+        self._review_prev_page_btn.setFixedSize(28, 28)
+        self._review_prev_page_btn.setToolTip("Página anterior")
+        set_button_icon(self._review_prev_page_btn, "chevron-left", size=15, icon_only=True)
+        self._review_prev_page_btn.clicked.connect(self._review_prev_page)
+        tb.addWidget(self._review_prev_page_btn)
+
+        self._review_page_spin = QSpinBox()
+        self._review_page_spin.setRange(1, 1)
+        self._review_page_spin.setFixedWidth(56)
+        self._review_page_spin.setFixedHeight(28)
+        self._review_page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+        self._review_page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._review_page_spin.editingFinished.connect(self._on_review_page_jump)
+        self._review_page_spin.setStyleSheet(
+            "QSpinBox { background: #1D1D26; color: #F0F1F3; "
+            "border: 1px solid #343442; border-radius: 5px; padding: 2px 6px; }"
+        )
+        tb.addWidget(self._review_page_spin)
+
+        self._review_page_total_lbl = QLabel("/ —")
+        self._review_page_total_lbl.setStyleSheet(
+            "color:#9094A0; font-size:12px; background: transparent;"
+        )
+        tb.addWidget(self._review_page_total_lbl)
+
+        self._review_next_page_btn = QPushButton()
+        self._review_next_page_btn.setProperty("class", "IconBtn")
+        self._review_next_page_btn.setFixedSize(28, 28)
+        self._review_next_page_btn.setToolTip("Página siguiente")
+        set_button_icon(self._review_next_page_btn, "chevron-right", size=15, icon_only=True)
+        self._review_next_page_btn.clicked.connect(self._review_next_page)
+        tb.addWidget(self._review_next_page_btn)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.Shape.VLine)
+        sep.setStyleSheet("color:#30303A; background: transparent;")
+        tb.addWidget(sep)
+
+        for icon_name, handler, tip in (
+            ("minus", lambda: self._review_preview.zoom_out(), "Reducir zoom"),
+            ("plus", lambda: self._review_preview.zoom_in(), "Aumentar zoom"),
+            ("maximize", lambda: self._review_preview.fit_to_view(), "Ajustar a vista"),
+        ):
+            btn = QPushButton()
+            btn.setProperty("class", "IconBtn")
+            btn.setFixedSize(28, 28)
+            btn.setToolTip(tip)
+            set_button_icon(btn, icon_name, size=15, icon_only=True)
+            btn.clicked.connect(handler)
+            tb.addWidget(btn)
+
+        center_l.addWidget(toolbar)
+
         self._review_preview = PdfPreviewView()
         self._review_preview.setObjectName("PdfPreview")
+        self._review_preview.setMinimumSize(520, 360)
+        self._review_preview.viewport().setStyleSheet("background: #0B0B10;")
         self._review_preview.sig_placement_changed.connect(
             self._on_review_placement_changed
         )
@@ -1308,6 +1422,21 @@ class FirmadorWindow(PipelineWindow):
             self._on_review_preview_page_changed
         )
         center_l.addWidget(self._review_preview, 1)
+
+        footer = QFrame()
+        footer.setObjectName("ReviewFooter")
+        footer.setFixedHeight(34)
+        footer_l = QHBoxLayout(footer)
+        footer_l.setContentsMargins(12, 0, 12, 0)
+        footer_l.setSpacing(8)
+        self._review_canvas_hint_lbl = QLabel(
+            "Arrastra la firma para moverla. Usa sus esquinas para redimensionar y el tirador superior para rotar."
+        )
+        self._review_canvas_hint_lbl.setStyleSheet(
+            "color:#8E93A3; font-size:12px; background: transparent;"
+        )
+        footer_l.addWidget(self._review_canvas_hint_lbl, 1)
+        center_l.addWidget(footer)
         body.addWidget(center, 1)
 
         right = make_card("Firma de la página")
@@ -3114,9 +3243,22 @@ class FirmadorWindow(PipelineWindow):
             f"±{self.s_angle.value():.1f}°&nbsp;&nbsp;·&nbsp;&nbsp;"
             f"±{self.s_scale.value():.1f}%",
             f"<b>Trazo:</b>&nbsp;&nbsp;{self._stroke_variation_summary()}",
+            f"<b>Validación:</b>&nbsp;&nbsp;{self._review_mode_summary()}",
         ]
         html = "<div style='line-height:180%;'>" + "<br>".join(rows) + "</div>"
         self._proc_step.set_summary_html(html)
+
+    def _review_mode_summary(self) -> str:
+        if self._is_review_enabled():
+            return "Activada — revisar y ajustar antes de publicar"
+        return "Desactivada — publicar directo al terminar"
+
+    def _is_review_enabled(self) -> bool:
+        checkbox = getattr(self, "_review_enabled_chk", None)
+        return bool(checkbox is None or checkbox.isChecked())
+
+    def _on_review_enabled_changed(self) -> None:
+        self._refresh_summary()
 
     def _validate_ready(self) -> Optional[str]:
         if not self.pdf_paths:
@@ -3340,6 +3482,18 @@ class FirmadorWindow(PipelineWindow):
 
         ok = sum(1 for r in self._draft_results if r.success)
         fail = len(self._draft_results) - ok
+        if not self._is_review_enabled():
+            self._review_documents = []
+            self._publish_signed_results(
+                self._draft_results,
+                title="Hecho",
+                message=(
+                    f"Se procesaron {len(self._draft_results)} documentos.\n\n"
+                    f"Exitosos: {ok}" + (f"\nCon error: {fail}" if fail else "")
+                ),
+            )
+            return
+
         if self._review_documents:
             show_success(
                 self, "Borrador listo",
@@ -3364,6 +3518,25 @@ class FirmadorWindow(PipelineWindow):
         # thread.quit + deleteLater happen automatically via signal connections in _on_run
         self._worker_thread = None
         self._worker = None
+
+    def _publish_signed_results(
+        self,
+        results: list,
+        *,
+        title: str,
+        message: str,
+    ) -> None:
+        self.last_results = list(results)
+        output_paths = [
+            r.output_path for r in self.last_results
+            if r.success and r.output_path
+        ]
+        self.ctx.tray.add_items(output_paths, "Firmador")
+        self._send_btn.set_output_paths(output_paths)
+        self.outputs_ready.emit(output_paths)
+        self.results_viewer.set_results(self.last_results)
+        show_success(self, title, message)
+        self._switch_section(6)
 
     # ================================================================== #
     # Paso 06: Validar — lógica
@@ -3432,7 +3605,9 @@ class FirmadorWindow(PipelineWindow):
             self._review_loading = False
         self._populate_review_pages(selected_page=0)
         if self._review_page_list.count() > 0:
-            self._review_page_list.setCurrentRow(0)
+            row = max(0, self._review_page_list.currentRow())
+            self._review_page_list.setCurrentRow(row)
+            self._load_review_page(row)
         self._refresh_review_ui()
 
     def _populate_review_pages(self, *, selected_page: Optional[int] = None) -> None:
@@ -3514,6 +3689,8 @@ class FirmadorWindow(PipelineWindow):
         self._refresh_review_page_signature_list()
         self._refresh_review_summary()
         self._refresh_review_actions()
+        self._refresh_review_viewer_chrome()
+        QTimer.singleShot(0, self._review_preview.fit_to_view)
 
     def _review_pixmap_for_instance(self, inst: ReviewSignatureInstance) -> QPixmap:
         review = self._current_review_document()
@@ -3644,6 +3821,43 @@ class FirmadorWindow(PipelineWindow):
             self._review_page_list.blockSignals(False)
         self._load_review_page(cur)
 
+    def _refresh_review_viewer_chrome(self) -> None:
+        review = self._current_review_document()
+        page_count = self._review_preview.page_count() if review is not None else 0
+        cur = self._review_preview.current_page() if page_count else 0
+        self._review_doc_title_lbl.setText(
+            Path(review.source_path).name if review is not None else "Sin documento"
+        )
+        self._review_page_spin.blockSignals(True)
+        self._review_page_spin.setRange(1, max(1, page_count))
+        self._review_page_spin.setValue(cur + 1 if page_count else 1)
+        self._review_page_spin.blockSignals(False)
+        self._review_page_spin.setEnabled(page_count > 1)
+        self._review_page_total_lbl.setText(f"/ {page_count}" if page_count else "/ —")
+        self._review_prev_page_btn.setEnabled(cur > 0)
+        self._review_next_page_btn.setEnabled(page_count > 1 and cur < page_count - 1)
+
+    def _review_prev_page(self) -> None:
+        if self._review_preview.page_count() <= 0:
+            return
+        self._review_preview.set_page(max(0, self._review_preview.current_page() - 1))
+
+    def _review_next_page(self) -> None:
+        page_count = self._review_preview.page_count()
+        if page_count <= 0:
+            return
+        self._review_preview.set_page(
+            min(page_count - 1, self._review_preview.current_page() + 1)
+        )
+
+    def _on_review_page_jump(self) -> None:
+        page_count = self._review_preview.page_count()
+        if page_count <= 0:
+            return
+        target = max(0, min(self._review_page_spin.value() - 1, page_count - 1))
+        if target != self._review_preview.current_page():
+            self._review_preview.set_page(target)
+
     def _on_review_delete_selected(self) -> None:
         inst = self._find_review_instance(self._review_active_instance_id)
         if inst is None or inst.deleted:
@@ -3724,6 +3938,7 @@ class FirmadorWindow(PipelineWindow):
 
     def _refresh_review_ui(self) -> None:
         self._refresh_review_summary()
+        self._refresh_review_viewer_chrome()
         self._refresh_review_actions()
 
     def _refresh_review_actions(self) -> None:
@@ -3798,25 +4013,17 @@ class FirmadorWindow(PipelineWindow):
         self._review_progress.setValue(100)
 
         failed_drafts = [r for r in self._draft_results if not r.success]
-        self.last_results = list(results) + failed_drafts
-        output_paths = [
-            r.output_path for r in self.last_results
-            if r.success and r.output_path
-        ]
-        self.ctx.tray.add_items(output_paths, "Firmador")
-        self._send_btn.set_output_paths(output_paths)
-        self.outputs_ready.emit(output_paths)
-        self.results_viewer.set_results(self.last_results)
-
-        ok = sum(1 for r in self.last_results if r.success)
-        fail = len(self.last_results) - ok
-        show_success(
-            self,
-            "Final generado",
-            f"Se generaron {ok} documentos finales."
-            + (f"\nCon error: {fail}" if fail else ""),
+        final_results = list(results) + failed_drafts
+        ok = sum(1 for r in final_results if r.success)
+        fail = len(final_results) - ok
+        self._publish_signed_results(
+            final_results,
+            title="Final generado",
+            message=(
+                f"Se generaron {ok} documentos finales."
+                + (f"\nCon error: {fail}" if fail else "")
+            ),
         )
-        self._switch_section(6)
 
     def _on_review_export_error(self, msg: str) -> None:
         self._review_worker_thread = None
@@ -3859,6 +4066,12 @@ class FirmadorWindow(PipelineWindow):
             self._review_preview.clear_page()
             self._review_progress.setValue(0)
             self._review_status_lbl.setText("Listo para validar.")
+            self._review_doc_title_lbl.setText("Sin documento")
+            self._review_page_total_lbl.setText("/ —")
+            self._review_page_spin.setRange(1, 1)
+            self._review_page_spin.setValue(1)
+            self._review_prev_page_btn.setEnabled(False)
+            self._review_next_page_btn.setEnabled(False)
         self._docs_card.clear()
         self._sigs.clear()
         self.sigs_list.clear()

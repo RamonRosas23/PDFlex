@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import QApplication
 from shell.context import ShellContext
 from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
+from core.signature_engine import JobResult, SignJob
 from ui.firmador.window import FirmadorWindow, _signature_fingerprint
 
 
@@ -92,6 +93,53 @@ def test_validation_blocks_when_every_document_is_excluded(
         error = window._validate_ready()
         assert error is not None
         assert "Todos los documentos quedaron excluidos" in error
+    finally:
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_review_stage_can_be_disabled_from_process_step(app, ctx) -> None:
+    window = FirmadorWindow(ctx)
+    try:
+        assert window._review_enabled_chk.isChecked()
+        assert "Activada" in window._review_mode_summary()
+
+        window._review_enabled_chk.setChecked(False)
+
+        assert "Desactivada" in window._review_mode_summary()
+        assert "publicar directo" in window._proc_step._summary_lbl.text()
+    finally:
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_disabled_review_publishes_processed_outputs_directly(
+    app,
+    ctx,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("ui.firmador.window.show_success", lambda *args, **kwargs: None)
+    source_pdf = _make_pdf(tmp_path / "source.pdf")
+    output_pdf = tmp_path / "source_firmado.pdf"
+    output_pdf.write_bytes(source_pdf.read_bytes())
+
+    job = SignJob(
+        pdf_path=str(source_pdf),
+        output_path=str(output_pdf),
+        signatures=[],
+    )
+    result = JobResult(job=job, output_path=str(output_pdf), success=True)
+
+    window = FirmadorWindow(ctx)
+    try:
+        window._review_enabled_chk.setChecked(False)
+        window._on_all_finished([result])
+
+        assert window.last_results == [result]
+        assert window._review_documents == []
+        assert window.stack.currentIndex() == 6
+        assert ctx.tray.paths() == [str(output_pdf)]
     finally:
         window.deleteLater()
         app.processEvents()

@@ -48,6 +48,8 @@ class SigPlacement:
     base_width_pt: float     # ancho en puntos PDF
     base_height_pt: float    # alto en puntos PDF
     base_angle: float = 0.0  # ángulo base en grados
+    signature_uid: str = ""
+    signature_label: str = ""
     excluded_pages: frozenset = field(default_factory=frozenset)  # 0-based indices a omitir
 
 
@@ -65,6 +67,8 @@ class SignJob:
 class SignaturePageResult:
     signature_path: str
     placement: Placement
+    signature_uid: str = ""
+    signature_label: str = ""
 
 
 @dataclass
@@ -204,6 +208,8 @@ class SignatureEngine:
                     signature_results.append(SignaturePageResult(
                         signature_path=sig_conf.signature_path,
                         placement=placement,
+                        signature_uid=sig_conf.signature_uid,
+                        signature_label=sig_conf.signature_label,
                     ))
                     if primary_placement is None:
                         primary_placement = placement
@@ -288,13 +294,7 @@ class SignatureEngine:
         base_x = sig_conf.base_x_norm * page_width
         base_y = sig_conf.base_y_norm * page_height
 
-        # Semilla única por (doc, firma, página).
-        # Usamos solo el nombre del archivo (sin path completo) para estabilidad.
-        import os as _os
-        doc_name = _os.path.basename(doc_id)
-        sig_name = _os.path.basename(sig_conf.signature_path)
-        seed_key = doc_name + "\x00" + sig_name
-        v = self.variation_gen.variation_for(seed_key, page_index)
+        v = self.variation_for_signature(doc_id, sig_conf.signature_path, page_index)
 
         w = sig_conf.base_width_pt * v.scale_factor
         h = sig_conf.base_height_pt * v.scale_factor
@@ -307,6 +307,51 @@ class SignatureEngine:
             angle=angle, opacity=v.opacity,
         )
         return desired, v
+
+    def variation_for_signature(
+        self,
+        doc_id: str,
+        signature_path: str,
+        page_index: int,
+    ) -> Variation:
+        """Devuelve la variación determinista usada para una firma/página."""
+        # Semilla única por (doc, firma, página). Usamos solo nombres de archivo
+        # para mantener estabilidad aunque el directorio temporal cambie.
+        import os as _os
+        doc_name = _os.path.basename(doc_id)
+        sig_name = _os.path.basename(signature_path)
+        seed_key = doc_name + "\x00" + sig_name
+        return self.variation_gen.variation_for(seed_key, page_index)
+
+    def preview_image(
+        self,
+        signature_path: str,
+        placement: Placement,
+        doc_id: str,
+        page_index: int,
+    ) -> Image.Image:
+        """Imagen RGBA naturalizada para preview; la rotación la aplica Qt."""
+        base_img = self._get_image(signature_path)
+        variation = self.variation_for_signature(doc_id, signature_path, page_index)
+        return self._transform_image(
+            base_img, placement, variation, apply_rotation=False
+        )
+
+    def apply_signature_instance(
+        self,
+        page: fitz.Page,
+        signature_path: str,
+        placement: Placement,
+        doc_id: str,
+        page_index: int,
+        image_xrefs: Dict[Tuple, int],
+    ) -> Placement:
+        """Inserta una instancia revisada sin recalcular zona segura."""
+        base_img = self._get_image(signature_path)
+        variation = self.variation_for_signature(doc_id, signature_path, page_index)
+        return self._apply_signature(
+            page, placement, base_img, signature_path, variation, image_xrefs
+        )
 
     def _apply_signature(
         self,
@@ -452,7 +497,12 @@ class SignatureEngine:
         )
 
     def _transform_image(
-        self, base: Image.Image, placement: Placement, variation: Variation
+        self,
+        base: Image.Image,
+        placement: Placement,
+        variation: Variation,
+        *,
+        apply_rotation: bool = True,
     ) -> Image.Image:
         img = naturalize_signature(base, variation)
         pressure = variation.pressure
@@ -470,7 +520,7 @@ class SignatureEngine:
             a = a.point(lambda v: int(v * placement.opacity))
             img = Image.merge("RGBA", (r, g, b, a))
 
-        if abs(placement.angle) > 0.01:
+        if apply_rotation and abs(placement.angle) > 0.01:
             img = img.rotate(
                 placement.angle,
                 expand=True,

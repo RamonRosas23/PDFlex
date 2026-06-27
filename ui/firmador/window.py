@@ -10,7 +10,7 @@ v3 — Reescritura completa:
 
 Pipeline:
     01 Documentos  →  02 Firma y posición  →  03 Variación
-    →  04 Procesar  →  05 Resultados
+    →  04 Intervalos  →  05 Procesar  →  06 Validar  →  07 Resultados
 """
 from __future__ import annotations
 import hashlib
@@ -49,6 +49,13 @@ from core.signature_engine import (
     SignJob,
     SignatureEngine,
     run_job_in_process,
+)
+from core.signature_review import (
+    ReviewDocument,
+    ReviewSignatureInstance,
+    build_review_documents,
+    export_review_documents,
+    validate_review_document,
 )
 from core.output_paths import make_run_dir
 from core.output_naming import unique_output_path_for_source
@@ -364,6 +371,38 @@ class SignWorker(QObject):
         return min(2, total_docs, max(1, os.cpu_count() or 1))
 
 
+class ReviewExportWorker(QObject):
+    progress = pyqtSignal(int, int, str)
+    finished = pyqtSignal(list)
+    error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        review_documents: List[ReviewDocument],
+        variation: VariationConfig,
+    ) -> None:
+        super().__init__()
+        self.review_documents = review_documents
+        self.variation = variation
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        try:
+            results = export_review_documents(
+                self.review_documents,
+                self.variation,
+                progress=lambda cur, total, msg: self.progress.emit(cur, total, msg),
+                should_cancel=lambda: self._cancel,
+            )
+        except Exception as exc:
+            self.error.emit(str(exc))
+            return
+        self.finished.emit(results)
+
+
 # ====================================================================== #
 #  Utilidad: ícono compuesto (franja de color + miniatura)
 # ====================================================================== #
@@ -400,7 +439,8 @@ class FirmadorWindow(PipelineWindow):
         ("03", "Variación",        "Configura la variación"),
         ("04", "Intervalos",       "Define páginas específicas"),
         ("05", "Procesar",         "Ejecuta el firmado"),
-        ("06", "Resultados",       "Revisa el resultado"),
+        ("06", "Validar",          "Ajusta el resultado"),
+        ("07", "Resultados",       "Revisa el resultado"),
     ]
     BRAND = "Firmador"
     TAGLINE = "Firma masiva con variación natural"
@@ -435,9 +475,19 @@ class FirmadorWindow(PipelineWindow):
         self._page_count_cache: Dict[str, int] = {}
         self._active_interval_doc_path: Optional[str] = None
         self._updating_interval_ui: bool = False
+        self._draft_results: List[JobResult] = []
         self.last_results: List[JobResult] = []
         self._worker_thread: Optional[QThread] = None
         self._worker: Optional[SignWorker] = None
+        self._review_documents: List[ReviewDocument] = []
+        self._review_doc_idx: int = -1
+        self._review_active_instance_id: Optional[str] = None
+        self._review_loading: bool = False
+        self._review_running: bool = False
+        self._review_worker_thread: Optional[QThread] = None
+        self._review_worker: Optional[ReviewExportWorker] = None
+        self._review_preview_pixmaps: Dict[Tuple[str, str, int, float], QPixmap] = {}
+        self._last_variation_config: Optional[VariationConfig] = None
 
         self._build_pages()
         self._refresh_saved_signature_list()
@@ -461,6 +511,7 @@ class FirmadorWindow(PipelineWindow):
         self.stack.addWidget(self._build_variation_section())
         self.stack.addWidget(self._build_intervals_section())
         self.stack.addWidget(self._build_process_section())
+        self.stack.addWidget(self._build_validation_section())
         self.stack.addWidget(self._build_results_section())
 
     def _switch_section(self, idx: int) -> None:
@@ -1196,7 +1247,139 @@ class FirmadorWindow(PipelineWindow):
         return page
 
     # ================================================================== #
-    # Paso 06: Resultados
+    # Paso 06: Validar
+    # ================================================================== #
+
+    def _build_validation_section(self) -> QWidget:
+        page = QWidget()
+        page.setProperty("class", "PageContainer")
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(14)
+
+        outer.addLayout(make_page_header(
+            "Validar y ajustar",
+            "Revisa el resultado automático. Puedes mover, redimensionar, rotar, eliminar o restaurar firmas antes de generar el PDF final.",
+        ))
+
+        body = QHBoxLayout()
+        body.setSpacing(12)
+
+        left = make_card("Revisión")
+        left.setFixedWidth(248)
+        left_l = card_layout(left)
+        left_l.setSpacing(10)
+
+        docs_lbl = QLabel("Documentos")
+        docs_lbl.setProperty("class", "CardHint")
+        left_l.addWidget(docs_lbl)
+
+        self._review_doc_list = QListWidget()
+        self._review_doc_list.setObjectName("ReviewDocList")
+        self._review_doc_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._review_doc_list.currentRowChanged.connect(self._on_review_doc_selected)
+        left_l.addWidget(self._review_doc_list, 1)
+
+        pages_lbl = QLabel("Páginas")
+        pages_lbl.setProperty("class", "CardHint")
+        left_l.addWidget(pages_lbl)
+
+        self._review_page_list = QListWidget()
+        self._review_page_list.setObjectName("ReviewPageList")
+        self._review_page_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._review_page_list.currentRowChanged.connect(self._on_review_page_selected)
+        left_l.addWidget(self._review_page_list, 2)
+        body.addWidget(left)
+
+        center = make_card()
+        center_l = card_layout(center)
+        center_l.setContentsMargins(0, 0, 0, 0)
+        center_l.setSpacing(0)
+
+        self._review_preview = PdfPreviewView()
+        self._review_preview.setObjectName("PdfPreview")
+        self._review_preview.sig_placement_changed.connect(
+            self._on_review_placement_changed
+        )
+        self._review_preview.item_activated.connect(
+            self._on_review_item_activated
+        )
+        self._review_preview.pageChanged.connect(
+            self._on_review_preview_page_changed
+        )
+        center_l.addWidget(self._review_preview, 1)
+        body.addWidget(center, 1)
+
+        right = make_card("Firma de la página")
+        right.setFixedWidth(300)
+        right_l = card_layout(right)
+        right_l.setSpacing(10)
+
+        self._review_summary_lbl = QLabel("Procesa documentos para revisar firmas.")
+        self._review_summary_lbl.setWordWrap(True)
+        self._review_summary_lbl.setProperty("class", "CardHint")
+        right_l.addWidget(self._review_summary_lbl)
+
+        self._review_sig_list = QListWidget()
+        self._review_sig_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._review_sig_list.currentRowChanged.connect(
+            self._on_review_sig_row_changed
+        )
+        right_l.addWidget(self._review_sig_list, 1)
+
+        self._review_selection_lbl = QLabel("Sin firma seleccionada")
+        self._review_selection_lbl.setWordWrap(True)
+        self._review_selection_lbl.setProperty("class", "CardHint")
+        right_l.addWidget(self._review_selection_lbl)
+
+        action_grid = QGridLayout()
+        action_grid.setHorizontalSpacing(8)
+        action_grid.setVerticalSpacing(8)
+
+        self._review_delete_btn = QPushButton("Eliminar")
+        self._review_delete_btn.setProperty("class", "Ghost")
+        set_button_icon(self._review_delete_btn, "trash-2", color="#E5484D")
+        self._review_delete_btn.clicked.connect(self._on_review_delete_selected)
+        action_grid.addWidget(self._review_delete_btn, 0, 0)
+
+        self._review_restore_btn = QPushButton("Restaurar")
+        self._review_restore_btn.setProperty("class", "Ghost")
+        set_button_icon(self._review_restore_btn, "rotate-ccw")
+        self._review_restore_btn.clicked.connect(self._on_review_restore_selected)
+        action_grid.addWidget(self._review_restore_btn, 0, 1)
+
+        self._review_reset_btn = QPushButton("Auto original")
+        self._review_reset_btn.setProperty("class", "Ghost")
+        set_button_icon(self._review_reset_btn, "rotate-ccw")
+        self._review_reset_btn.clicked.connect(self._on_review_reset_selected)
+        action_grid.addWidget(self._review_reset_btn, 1, 0)
+
+        self._review_reset_page_btn = QPushButton("Reset pág.")
+        self._review_reset_page_btn.setProperty("class", "Ghost")
+        set_button_icon(self._review_reset_page_btn, "refresh-cw")
+        self._review_reset_page_btn.clicked.connect(self._on_review_reset_page)
+        action_grid.addWidget(self._review_reset_page_btn, 1, 1)
+        right_l.addLayout(action_grid)
+
+        self._review_progress = QProgressBar()
+        self._review_progress.setRange(0, 100)
+        self._review_progress.setValue(0)
+        self._review_progress.setTextVisible(False)
+        self._review_progress.setFixedHeight(6)
+        right_l.addWidget(self._review_progress)
+
+        self._review_status_lbl = QLabel("Listo para validar.")
+        self._review_status_lbl.setProperty("class", "CardHint")
+        self._review_status_lbl.setWordWrap(True)
+        right_l.addWidget(self._review_status_lbl)
+
+        body.addWidget(right)
+        outer.addLayout(body, 1)
+
+        return page
+
+    # ================================================================== #
+    # Paso 07: Resultados
     # ================================================================== #
 
     def _build_results_section(self) -> QWidget:
@@ -1243,6 +1426,14 @@ class FirmadorWindow(PipelineWindow):
 
         self._send_btn = SendToToolButton(self.ctx, "firmador")
 
+        self._review_finalize_btn = QPushButton("Aprobar y generar final")
+        self._review_finalize_btn.setProperty("class", "Primary")
+        self._review_finalize_btn.setFixedHeight(36)
+        self._review_finalize_btn.setMinimumWidth(190)
+        set_button_icon(self._review_finalize_btn, "check")
+        self._review_finalize_btn.setEnabled(False)
+        self._review_finalize_btn.clicked.connect(self._on_review_finalize)
+
         self._proc_step.run_enabled_changed.connect(self._run_btn.setEnabled)
         self._proc_step.running_changed.connect(self._on_proc_running)
 
@@ -1251,6 +1442,12 @@ class FirmadorWindow(PipelineWindow):
             self._run_btn.setEnabled(False)
         self._cancel_btn.setEnabled(running)
         self._apply_primary_glows()
+
+    def _get_step_actions(self, idx: int) -> list:
+        if self.SECTIONS and idx < len(self.SECTIONS):
+            if self.SECTIONS[idx][1] == "Validar":
+                return [self._review_finalize_btn]
+        return super()._get_step_actions(idx)
 
     # ================================================================== #
     # Hooks de PipelineWindow
@@ -1288,6 +1485,8 @@ class FirmadorWindow(PipelineWindow):
             self._refresh_interval_documents()
         elif idx == 4:
             self._refresh_summary()
+        elif idx == 5:
+            self._refresh_review_ui()
 
     def set_inputs(self, paths: List[str]) -> None:
         self._docs_card.add_paths(paths)
@@ -2885,7 +3084,7 @@ class FirmadorWindow(PipelineWindow):
         return per.get(None)
 
     # ================================================================== #
-    # Paso 04: Procesar — lógica
+    # Paso 05: Procesar — lógica
     # ================================================================== #
 
     def _refresh_summary(self) -> None:
@@ -2991,6 +3190,8 @@ class FirmadorWindow(PipelineWindow):
                     base_width_pt=w_frac * page_w_pt,
                     base_height_pt=h_frac * page_h_pt,
                     base_angle=angle,
+                    signature_uid=e.uid,
+                    signature_label=e.label,
                     excluded_pages=frozenset(
                         self._sig_page_exclusions.get(e.uid, {}).get(pdf_path, set())
                     ),
@@ -3056,6 +3257,7 @@ class FirmadorWindow(PipelineWindow):
 
     def _on_run(self) -> None:
         self._stop_active_worker()
+        self._stop_review_worker()
         err = self._validate_ready()
         if err:
             show_warning(self, "Falta información", err)
@@ -3072,6 +3274,7 @@ class FirmadorWindow(PipelineWindow):
             return
 
         variation = self._build_variation_config()
+        self._last_variation_config = variation
         preflight = SignatureEngine(variation).preflight_bounds(jobs)
         if preflight.adjusted_to_page:
             msg = (
@@ -3123,26 +3326,37 @@ class FirmadorWindow(PipelineWindow):
         self._proc_step.set_progress(int(current / max(1, total) * 100), msg)
 
     def _on_all_finished(self, results: list) -> None:
-        self.last_results = list(results)
+        self._draft_results = list(results)
+        self.last_results = []
         self._proc_step.set_running(False)
-        self._proc_step.set_progress(100, "Completado")
+        self._proc_step.set_progress(100, "Borrador listo")
         self._worker_thread = None
         self._worker = None
 
-        output_paths = [r.output_path for r in self.last_results if r.success and r.output_path]
-        self.ctx.tray.add_items(output_paths, "Firmador")
-        self._send_btn.set_output_paths(output_paths)
-        self.outputs_ready.emit(output_paths)
+        self._review_documents = build_review_documents(self._draft_results)
+        self._review_doc_idx = -1
+        self._review_active_instance_id = None
+        self._review_preview_pixmaps.clear()
 
-        ok = sum(1 for r in self.last_results if r.success)
-        fail = len(self.last_results) - ok
-        show_success(
-            self, "Hecho",
-            f"Se procesaron {len(self.last_results)} documentos.\n\n"
-            f"Exitosos: {ok}" + (f"\nCon error: {fail}" if fail else ""),
-        )
-        self.results_viewer.set_results(self.last_results)
-        self._switch_section(5)
+        ok = sum(1 for r in self._draft_results if r.success)
+        fail = len(self._draft_results) - ok
+        if self._review_documents:
+            show_success(
+                self, "Borrador listo",
+                f"Se procesaron {len(self._draft_results)} documentos.\n\n"
+                f"Listos para validar: {ok}" + (f"\nCon error: {fail}" if fail else ""),
+            )
+            self._populate_review_documents()
+            self._switch_section(5)
+        else:
+            self.last_results = list(self._draft_results)
+            self.results_viewer.set_results(self.last_results)
+            show_warning(
+                self,
+                "Sin documentos para validar",
+                "No se generó ningún documento firmado correctamente.",
+            )
+            self._switch_section(6)
 
     def _on_worker_error(self, msg: str) -> None:
         show_error(self, "Error", msg)
@@ -3151,6 +3365,465 @@ class FirmadorWindow(PipelineWindow):
         self._worker_thread = None
         self._worker = None
 
+    # ================================================================== #
+    # Paso 06: Validar — lógica
+    # ================================================================== #
+
+    def _current_review_document(self) -> Optional[ReviewDocument]:
+        if 0 <= self._review_doc_idx < len(self._review_documents):
+            return self._review_documents[self._review_doc_idx]
+        return None
+
+    def _populate_review_documents(self) -> None:
+        if not hasattr(self, "_review_doc_list"):
+            return
+        current = self._review_doc_idx
+        self._review_doc_list.blockSignals(True)
+        try:
+            self._review_doc_list.clear()
+            for review in self._review_documents:
+                item = QListWidgetItem(self._review_doc_item_text(review))
+                item.setToolTip(review.final_path)
+                self._review_doc_list.addItem(item)
+        finally:
+            self._review_doc_list.blockSignals(False)
+
+        if self._review_documents:
+            row = current if 0 <= current < len(self._review_documents) else 0
+            self._review_doc_list.setCurrentRow(row)
+        else:
+            self._review_doc_idx = -1
+            self._review_page_list.clear()
+            self._review_sig_list.clear()
+            self._review_preview.clear_page()
+        self._refresh_review_actions()
+
+    def _review_doc_item_text(self, review: ReviewDocument) -> str:
+        notes = [f"{review.live_count} firma" + ("" if review.live_count == 1 else "s")]
+        deleted = sum(1 for inst in review.instances if inst.deleted)
+        if deleted:
+            notes.append(f"{deleted} eliminada" + ("" if deleted == 1 else "s"))
+        if review.warning_count:
+            notes.append(f"{review.warning_count} por revisar")
+        return f"{Path(review.final_path).name}\n{' · '.join(notes)}"
+
+    def _refresh_review_doc_item(self) -> None:
+        review = self._current_review_document()
+        if review is None:
+            return
+        item = self._review_doc_list.item(self._review_doc_idx)
+        if item is not None:
+            item.setText(self._review_doc_item_text(review))
+
+    def _on_review_doc_selected(self, row: int) -> None:
+        if row < 0 or row >= len(self._review_documents):
+            return
+        self._review_doc_idx = row
+        self._review_active_instance_id = None
+        review = self._review_documents[row]
+        validate_review_document(review)
+        self._review_loading = True
+        try:
+            self._review_preview.load_pdf(review.source_path)
+        except Exception as exc:
+            show_error(self, "Error", f"No se pudo abrir el documento original: {exc}")
+            return
+        finally:
+            self._review_loading = False
+        self._populate_review_pages(selected_page=0)
+        if self._review_page_list.count() > 0:
+            self._review_page_list.setCurrentRow(0)
+        self._refresh_review_ui()
+
+    def _populate_review_pages(self, *, selected_page: Optional[int] = None) -> None:
+        review = self._current_review_document()
+        if review is None or not hasattr(self, "_review_page_list"):
+            return
+        selected = (
+            selected_page
+            if selected_page is not None
+            else max(0, self._review_page_list.currentRow())
+        )
+        try:
+            with fitz.open(review.source_path) as doc:
+                page_count = doc.page_count
+        except Exception:
+            page_count = max((inst.page_index for inst in review.instances), default=-1) + 1
+
+        self._review_page_list.blockSignals(True)
+        try:
+            self._review_page_list.clear()
+            for page_index in range(page_count):
+                all_items = review.page_instances(page_index, include_deleted=True)
+                live = [inst for inst in all_items if not inst.deleted]
+                deleted = len(all_items) - len(live)
+                warnings = sum(1 for inst in live if inst.warnings)
+                notes = []
+                if live:
+                    notes.append(f"{len(live)} firma" + ("" if len(live) == 1 else "s"))
+                if deleted:
+                    notes.append(f"{deleted} eliminada" + ("" if deleted == 1 else "s"))
+                if warnings:
+                    notes.append("revisar")
+                text = f"Página {page_index + 1}"
+                if notes:
+                    text += "\n" + " · ".join(notes)
+                self._review_page_list.addItem(QListWidgetItem(text))
+            if page_count:
+                self._review_page_list.setCurrentRow(max(0, min(selected, page_count - 1)))
+        finally:
+            self._review_page_list.blockSignals(False)
+
+    def _on_review_page_selected(self, row: int) -> None:
+        if row < 0:
+            return
+        self._load_review_page(row)
+
+    def _load_review_page(self, page_index: int) -> None:
+        review = self._current_review_document()
+        if review is None:
+            return
+        self._review_loading = True
+        try:
+            self._review_preview.clear_all_sigs()
+            if self._review_preview.current_page() != page_index:
+                self._review_preview.set_page(page_index)
+            page_w, page_h = self._review_preview.page_size_pt()
+            live_instances = review.page_instances(page_index)
+            for inst in live_instances:
+                pixmap = self._review_pixmap_for_instance(inst)
+                self._review_preview.add_sig(
+                    inst.instance_id,
+                    pixmap,
+                    self._review_color_for_instance(inst),
+                )
+                cx, cy, w_pt, h_pt, angle = inst.preview_tuple(page_w, page_h)
+                self._review_preview.restore_placement(
+                    inst.instance_id, cx, cy, w_pt, h_pt, angle
+                )
+            if (
+                self._review_active_instance_id not in
+                {inst.instance_id for inst in live_instances}
+            ):
+                self._review_active_instance_id = (
+                    live_instances[0].instance_id if live_instances else None
+                )
+            self._review_preview.set_active_uid(self._review_active_instance_id)
+        finally:
+            self._review_loading = False
+        self._refresh_review_page_signature_list()
+        self._refresh_review_summary()
+        self._refresh_review_actions()
+
+    def _review_pixmap_for_instance(self, inst: ReviewSignatureInstance) -> QPixmap:
+        review = self._current_review_document()
+        doc_id = review.source_path if review is not None else ""
+        key = (doc_id, inst.signature_path, inst.page_index, round(float(inst.opacity), 4))
+        cached = self._review_preview_pixmaps.get(key)
+        if cached is not None:
+            return cached
+        variation = self._last_variation_config or self._build_variation_config()
+        try:
+            img = SignatureEngine(variation).preview_image(
+                inst.signature_path,
+                inst.to_placement(),
+                doc_id,
+                inst.page_index,
+            )
+            pixmap = pil_to_qpixmap(img)
+        except Exception:
+            try:
+                pixmap = pil_to_qpixmap(Image.open(inst.signature_path).convert("RGBA"))
+            except Exception:
+                pixmap = QPixmap(120, 44)
+                pixmap.fill(QColor("#5E6AD2"))
+        self._review_preview_pixmaps[key] = pixmap
+        return pixmap
+
+    def _review_color_for_instance(self, inst: ReviewSignatureInstance) -> QColor:
+        entry = self._entry_for_uid(inst.signature_uid)
+        if entry is not None:
+            return entry.color
+        return SIG_COLORS[inst.order % len(SIG_COLORS)]
+
+    def _refresh_review_page_signature_list(self) -> None:
+        review = self._current_review_document()
+        if review is None:
+            return
+        page_index = self._review_preview.current_page()
+        all_instances = review.page_instances(page_index, include_deleted=True)
+        self._review_sig_list.blockSignals(True)
+        try:
+            self._review_sig_list.clear()
+            selected_row = -1
+            for row, inst in enumerate(all_instances):
+                status = "Eliminada" if inst.deleted else "Activa"
+                if inst.warnings and not inst.deleted:
+                    status += " · " + " · ".join(inst.warnings)
+                item = QListWidgetItem(f"{inst.signature_label}\n{status}")
+                item.setData(Qt.ItemDataRole.UserRole, inst.instance_id)
+                item.setToolTip(status)
+                self._review_sig_list.addItem(item)
+                if inst.instance_id == self._review_active_instance_id:
+                    selected_row = row
+            if selected_row >= 0:
+                self._review_sig_list.setCurrentRow(selected_row)
+        finally:
+            self._review_sig_list.blockSignals(False)
+        self._refresh_review_selection_label()
+
+    def _find_review_instance(
+        self, instance_id: Optional[str]
+    ) -> Optional[ReviewSignatureInstance]:
+        if not instance_id:
+            return None
+        for review in self._review_documents:
+            for inst in review.instances:
+                if inst.instance_id == instance_id:
+                    return inst
+        return None
+
+    def _on_review_sig_row_changed(self, row: int) -> None:
+        item = self._review_sig_list.item(row)
+        instance_id = item.data(Qt.ItemDataRole.UserRole) if item else None
+        self._review_active_instance_id = instance_id
+        inst = self._find_review_instance(instance_id)
+        if inst is not None and not inst.deleted:
+            self._review_preview.set_active_uid(inst.instance_id)
+        else:
+            self._review_preview.set_active_uid(None)
+        self._refresh_review_selection_label()
+        self._refresh_review_actions()
+
+    def _on_review_item_activated(self, instance_id: str) -> None:
+        self._review_active_instance_id = instance_id
+        for row in range(self._review_sig_list.count()):
+            item = self._review_sig_list.item(row)
+            if item and item.data(Qt.ItemDataRole.UserRole) == instance_id:
+                self._review_sig_list.blockSignals(True)
+                self._review_sig_list.setCurrentRow(row)
+                self._review_sig_list.blockSignals(False)
+                break
+        self._refresh_review_selection_label()
+        self._refresh_review_actions()
+
+    def _on_review_placement_changed(self, instance_id: str) -> None:
+        if self._review_loading:
+            return
+        review = self._current_review_document()
+        inst = self._find_review_instance(instance_id)
+        if review is None or inst is None:
+            return
+        placement = self._review_preview.configured_placement_of(instance_id)
+        if placement is None:
+            return
+        cx, cy, width, height, angle = placement
+        page_w, page_h = self._review_preview.page_size_pt()
+        inst.update_from_preview(
+            cx_norm=cx,
+            cy_norm=cy,
+            width_pt=width,
+            height_pt=height,
+            angle=angle,
+            page_width=page_w,
+            page_height=page_h,
+        )
+        validate_review_document(review)
+        self._refresh_review_doc_item()
+        self._populate_review_pages(selected_page=self._review_preview.current_page())
+        self._refresh_review_page_signature_list()
+        self._refresh_review_summary()
+
+    def _on_review_preview_page_changed(self, cur: int, total: int) -> None:
+        if self._review_loading:
+            return
+        self._review_page_list.blockSignals(True)
+        try:
+            self._review_page_list.setCurrentRow(cur)
+        finally:
+            self._review_page_list.blockSignals(False)
+        self._load_review_page(cur)
+
+    def _on_review_delete_selected(self) -> None:
+        inst = self._find_review_instance(self._review_active_instance_id)
+        if inst is None or inst.deleted:
+            return
+        inst.deleted = True
+        self._review_active_instance_id = inst.instance_id
+        self._after_review_instance_change(reload_page=True)
+
+    def _on_review_restore_selected(self) -> None:
+        inst = self._find_review_instance(self._review_active_instance_id)
+        if inst is None:
+            return
+        inst.deleted = False
+        inst.reset_to_original()
+        self._after_review_instance_change(reload_page=True)
+
+    def _on_review_reset_selected(self) -> None:
+        inst = self._find_review_instance(self._review_active_instance_id)
+        if inst is None:
+            return
+        inst.reset_to_original()
+        self._after_review_instance_change(reload_page=True)
+
+    def _on_review_reset_page(self) -> None:
+        review = self._current_review_document()
+        if review is None:
+            return
+        page_index = self._review_preview.current_page()
+        for inst in review.page_instances(page_index, include_deleted=True):
+            inst.reset_to_original()
+        self._after_review_instance_change(reload_page=True)
+
+    def _after_review_instance_change(self, *, reload_page: bool) -> None:
+        review = self._current_review_document()
+        if review is not None:
+            validate_review_document(review)
+        self._refresh_review_doc_item()
+        self._populate_review_pages(selected_page=self._review_preview.current_page())
+        if reload_page:
+            self._load_review_page(self._review_preview.current_page())
+        else:
+            self._refresh_review_page_signature_list()
+            self._refresh_review_summary()
+            self._refresh_review_actions()
+
+    def _refresh_review_selection_label(self) -> None:
+        inst = self._find_review_instance(self._review_active_instance_id)
+        if inst is None:
+            self._review_selection_lbl.setText("Sin firma seleccionada")
+            return
+        if inst.deleted:
+            self._review_selection_lbl.setText(
+                f"<b>{inst.signature_label}</b><br>Eliminada en esta página."
+            )
+            return
+        warnings = " · ".join(inst.warnings) if inst.warnings else "Sin advertencias"
+        self._review_selection_lbl.setText(
+            f"<b>{inst.signature_label}</b><br>"
+            f"x {inst.x:.0f} pt · y {inst.y:.0f} pt<br>"
+            f"{inst.width:.0f}×{inst.height:.0f} pt · {inst.angle:+.1f}°<br>"
+            f"{warnings}"
+        )
+
+    def _refresh_review_summary(self) -> None:
+        review = self._current_review_document()
+        if review is None:
+            self._review_summary_lbl.setText("Sin documentos para validar.")
+            self._review_status_lbl.setText("Procesa documentos para iniciar la revisión.")
+            return
+        deleted = sum(1 for inst in review.instances if inst.deleted)
+        self._review_summary_lbl.setText(
+            f"<b>{Path(review.source_path).name}</b><br>"
+            f"{review.live_count} firmas activas"
+            + (f" · {deleted} eliminadas" if deleted else "")
+            + (f"<br><span style='color:#E5484D'>{review.warning_count} con advertencias</span>"
+               if review.warning_count else "<br>Sin advertencias pendientes")
+        )
+
+    def _refresh_review_ui(self) -> None:
+        self._refresh_review_summary()
+        self._refresh_review_actions()
+
+    def _refresh_review_actions(self) -> None:
+        inst = self._find_review_instance(self._review_active_instance_id)
+        has_docs = bool(self._review_documents)
+        if hasattr(self, "_review_finalize_btn"):
+            self._review_finalize_btn.setEnabled(has_docs and not self._review_running)
+        has_instance = inst is not None
+        live_instance = has_instance and not inst.deleted
+        self._review_delete_btn.setEnabled(live_instance and not self._review_running)
+        self._review_restore_btn.setEnabled(has_instance and not self._review_running)
+        self._review_reset_btn.setEnabled(live_instance and not self._review_running)
+        review = self._current_review_document()
+        page_has_instances = False
+        if review is not None:
+            page_has_instances = bool(
+                review.page_instances(
+                    self._review_preview.current_page(), include_deleted=True
+                )
+            )
+        self._review_reset_page_btn.setEnabled(page_has_instances and not self._review_running)
+
+    def _on_review_finalize(self) -> None:
+        if not self._review_documents or self._review_running:
+            return
+        for review in self._review_documents:
+            validate_review_document(review)
+        warning_count = sum(review.warning_count for review in self._review_documents)
+        if warning_count:
+            if not ask_question(
+                self,
+                "Firmas con advertencias",
+                f"Hay {warning_count} firmas marcadas para revisar.\n\n"
+                "Puedes volver a ajustarlas o generar el PDF final de todos modos.",
+                accept_text="Generar final",
+                cancel_text="Seguir revisando",
+            ):
+                self._populate_review_documents()
+                return
+        variation = self._last_variation_config or self._build_variation_config()
+        self._set_review_running(True, "Generando PDF final…")
+        self._review_worker = ReviewExportWorker(self._review_documents, variation)
+        self._review_worker_thread = RunnerThread(self._review_worker.run, self)
+        self._review_worker.progress.connect(self._on_review_export_progress)
+        self._review_worker.finished.connect(self._on_review_export_finished)
+        self._review_worker.error.connect(self._on_review_export_error)
+        self._review_worker.finished.connect(self._review_worker_thread.quit)
+        self._review_worker.error.connect(self._review_worker_thread.quit)
+        self._review_worker_thread.finished.connect(self._review_worker.deleteLater)
+        self._review_worker_thread.finished.connect(self._review_worker_thread.deleteLater)
+        self._review_worker_thread.start()
+
+    def _set_review_running(self, running: bool, msg: str = "") -> None:
+        self._review_running = running
+        if running:
+            self._review_progress.setValue(0)
+        if msg:
+            self._review_status_lbl.setText(msg)
+        self._refresh_review_actions()
+        if hasattr(self, "_review_finalize_btn"):
+            self._review_finalize_btn.setEnabled(bool(self._review_documents) and not running)
+
+    def _on_review_export_progress(self, current: int, total: int, msg: str) -> None:
+        pct = int(current / max(1, total) * 100)
+        self._review_progress.setValue(max(0, min(100, pct)))
+        self._review_status_lbl.setText(msg)
+
+    def _on_review_export_finished(self, results: list) -> None:
+        self._review_worker_thread = None
+        self._review_worker = None
+        self._set_review_running(False, "PDF final generado.")
+        self._review_progress.setValue(100)
+
+        failed_drafts = [r for r in self._draft_results if not r.success]
+        self.last_results = list(results) + failed_drafts
+        output_paths = [
+            r.output_path for r in self.last_results
+            if r.success and r.output_path
+        ]
+        self.ctx.tray.add_items(output_paths, "Firmador")
+        self._send_btn.set_output_paths(output_paths)
+        self.outputs_ready.emit(output_paths)
+        self.results_viewer.set_results(self.last_results)
+
+        ok = sum(1 for r in self.last_results if r.success)
+        fail = len(self.last_results) - ok
+        show_success(
+            self,
+            "Final generado",
+            f"Se generaron {ok} documentos finales."
+            + (f"\nCon error: {fail}" if fail else ""),
+        )
+        self._switch_section(6)
+
+    def _on_review_export_error(self, msg: str) -> None:
+        self._review_worker_thread = None
+        self._review_worker = None
+        self._set_review_running(False, "Error al generar el final.")
+        show_error(self, "Error", msg)
+
     def _open_in_explorer(self, path: str) -> None:
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
@@ -3158,10 +3831,34 @@ class FirmadorWindow(PipelineWindow):
     # Reset
     # ================================================================== #
 
+    def _stop_review_worker(self) -> None:
+        if self._review_worker and callable(getattr(self._review_worker, "cancel", None)):
+            self._review_worker.cancel()
+        if self._review_worker_thread and self._review_worker_thread.isRunning():
+            self._review_worker_thread.quit()
+            self._review_worker_thread.wait(3000)
+        self._review_worker = None
+        self._review_worker_thread = None
+        self._review_running = False
+
     def _reset_session(self) -> None:
+        self._stop_review_worker()
         self.results_viewer.clear_results()
         self._send_btn.set_output_paths([])
+        self._draft_results = []
         self.last_results = []
+        self._review_documents.clear()
+        self._review_doc_idx = -1
+        self._review_active_instance_id = None
+        self._review_preview_pixmaps.clear()
+        self._last_variation_config = None
+        if hasattr(self, "_review_doc_list"):
+            self._review_doc_list.clear()
+            self._review_page_list.clear()
+            self._review_sig_list.clear()
+            self._review_preview.clear_page()
+            self._review_progress.setValue(0)
+            self._review_status_lbl.setText("Listo para validar.")
         self._docs_card.clear()
         self._sigs.clear()
         self.sigs_list.clear()

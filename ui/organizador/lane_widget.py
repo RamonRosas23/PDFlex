@@ -27,7 +27,8 @@ from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailKey, ThumbnailWo
 THUMB_W = 116
 THUMB_H = 150
 STRIP_HEIGHT = 206
-PDF_FILTER = "PDF (*.pdf)"
+PDF_WORD_FILTER = "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)"
+ACCEPTED_EXTS = {".pdf", ".doc", ".docx"}
 
 LANE_COLORS: List[QColor] = [
     QColor(94, 106, 210),   # índigo
@@ -63,7 +64,7 @@ class _PageStrip(QListWidget):
     # src_id, dst_id, refs, ctrl, target_row (-1 = al final)
     cross_lane_drop_received = pyqtSignal(str, str, list, bool, int)
     before_internal_reorder  = pyqtSignal()   # disparado ANTES de _reorder_to
-    pdf_file_dropped          = pyqtSignal(str)
+    files_dropped             = pyqtSignal(list, int)
     internal_reorder_done     = pyqtSignal()
 
     def __init__(self, lane_id: str, parent=None) -> None:
@@ -212,10 +213,14 @@ class _PageStrip(QListWidget):
             return
 
         if event.mimeData().hasUrls():
-            for url in event.mimeData().urls():
-                path = url.toLocalFile()
-                if path.lower().endswith(".pdf"):
-                    self.pdf_file_dropped.emit(path)
+            paths = [
+                url.toLocalFile()
+                for url in event.mimeData().urls()
+                if Path(url.toLocalFile()).suffix.lower() in ACCEPTED_EXTS
+            ]
+            if paths:
+                _, target_row = self._insertion_for_pos(event.position().toPoint())
+                self.files_dropped.emit(paths, target_row)
             event.acceptProposedAction()
             return
 
@@ -344,6 +349,7 @@ class DocLane(QFrame):
     lane_delete_requested    = pyqtSignal(str)
     reorder_requested        = pyqtSignal(str, int)
     page_preview_requested   = pyqtSignal(object)
+    files_add_requested      = pyqtSignal(str, list, int)
     # src_id, dst_id, refs, ctrl, target_row
     cross_lane_drop_received = pyqtSignal(str, str, list, bool, int)
 
@@ -417,7 +423,9 @@ class DocLane(QFrame):
         )
         self._list.before_internal_reorder.connect(self._record_before_mutation)
         self._list.cross_lane_drop_received.connect(self.cross_lane_drop_received)
-        self._list.pdf_file_dropped.connect(self.add_pages_from_pdf)
+        self._list.files_dropped.connect(
+            lambda paths, row: self.files_add_requested.emit(self._lane_id, paths, row)
+        )
         self._list.itemDoubleClicked.connect(self._request_preview_for_item)
         self._list.installEventFilter(self)
         sw.addWidget(self._list)
@@ -496,7 +504,7 @@ class DocLane(QFrame):
         add_btn = QPushButton("+ Agregar")
         add_btn.setProperty("class", "Ghost")
         add_btn.setFixedHeight(26)
-        add_btn.setToolTip("Agregar páginas de un PDF")
+        add_btn.setToolTip("Agregar páginas de PDF o Word después de la selección")
         add_btn.clicked.connect(self._on_add_pages)
         h.addWidget(add_btn)
         h.addSpacing(4)
@@ -532,11 +540,22 @@ class DocLane(QFrame):
     def set_siblings_provider(self, fn: Callable[[], List[Tuple[str, str]]]) -> None:
         self._siblings_provider = fn
 
-    def add_pages_from_pdf(self, path: str) -> None:
-        self._record_before_mutation()
+    def add_pages_from_pdf(
+        self,
+        path: str,
+        *,
+        at_row: Optional[int] = None,
+        _record: bool = True,
+        select_new: bool = False,
+    ) -> list[str]:
+        if _record:
+            self._record_before_mutation()
+        inserted_ids: list[str] = []
         try:
             doc = fitz.open(path)
             try:
+                insert_at = self._normalized_insert_row(at_row)
+                new_items: list[QListWidgetItem] = []
                 for idx in range(doc.page_count):
                     page_id = f"{Path(path).stem}-{idx+1}-{uuid.uuid4().hex[:8]}"
                     ref = PageRef(
@@ -546,17 +565,29 @@ class DocLane(QFrame):
                         page_id=page_id,
                     )
                     item = self._make_item(ref)
-                    self._list.addItem(item)
+                    row = insert_at + idx
+                    self._list.insertItem(row, item)
                     self._worker.request(
                         self._lane_id, ref.page_id,
                         ref.source_path, ref.page_index, ref.rotation_deg, THUMB_W,
                     )
+                    inserted_ids.append(ref.page_id)
+                    real = self._list.item(row)
+                    if real:
+                        new_items.append(real)
+                if select_new and new_items:
+                    self._list.clearSelection()
+                    for item in new_items:
+                        item.setSelected(True)
+                    self._list.setCurrentItem(new_items[-1])
+                    self._flash_items(new_items, "paste")
             finally:
                 doc.close()
         except Exception:
             pass
         self._update_count()
         self.pages_changed.emit(self._lane_id)
+        return inserted_ids
 
     def add_page_ref(self, ref: PageRef, at_row: Optional[int] = None) -> None:
         """Agrega un ref. No dispara snapshot — el llamador es responsable."""
@@ -599,6 +630,42 @@ class DocLane(QFrame):
 
     def count(self) -> int:
         return self._list.count()
+
+    def insert_row_after_selection(self) -> int:
+        selected = self._list.selectedItems()
+        if selected:
+            return max(self._list.row(item) for item in selected) + 1
+        current = self._list.currentRow()
+        if current >= 0:
+            return current + 1
+        return self._list.count()
+
+    def page_id_at_row(self, row: int) -> str:
+        item = self._list.item(row)
+        if item is None:
+            return ""
+        ref = item.data(Qt.ItemDataRole.UserRole)
+        return getattr(ref, "page_id", "") or ""
+
+    def row_for_page_id(self, page_id: str) -> int:
+        for row in range(self._list.count()):
+            item = self._list.item(row)
+            if item and item.data(Qt.ItemDataRole.UserRole).page_id == page_id:
+                return row
+        return -1
+
+    def select_page_id(self, page_id: str) -> bool:
+        row = self.row_for_page_id(page_id)
+        if row < 0:
+            return False
+        self._list.clearSelection()
+        item = self._list.item(row)
+        if item:
+            item.setSelected(True)
+            self._list.setCurrentItem(item)
+            self._list.scrollToItem(item)
+            return True
+        return False
 
     def clear(self) -> None:
         self._record_before_mutation()
@@ -668,6 +735,66 @@ class DocLane(QFrame):
         self._update_count()
         self.pages_changed.emit(self._lane_id)
         self._flash_items(new_items, "paste")
+
+    def duplicate_page_id(self, page_id: str) -> str:
+        row = self.row_for_page_id(page_id)
+        if row < 0:
+            return ""
+        item = self._list.item(row)
+        ref = item.data(Qt.ItemDataRole.UserRole)
+        self._record_before_mutation()
+        stem = Path(ref.source_path).stem
+        new_ref = replace(ref, page_id=f"{stem}-{ref.page_index+1}-{uuid.uuid4().hex[:8]}")
+        new_item = self._make_item(new_ref)
+        self._list.insertItem(row + 1, new_item)
+        self._worker.request(
+            self._lane_id,
+            new_ref.page_id,
+            new_ref.source_path,
+            new_ref.page_index,
+            new_ref.rotation_deg,
+            THUMB_W,
+        )
+        real = self._list.item(row + 1)
+        if real:
+            self._list.clearSelection()
+            real.setSelected(True)
+            self._list.setCurrentItem(real)
+            self._flash_items([real], "paste")
+        self._update_count()
+        self.pages_changed.emit(self._lane_id)
+        return new_ref.page_id
+
+    def rotate_page_id(self, page_id: str, delta: int) -> bool:
+        if not self.select_page_id(page_id):
+            return False
+        self.rotate_selected(delta)
+        return True
+
+    def remove_page_id(self, page_id: str) -> bool:
+        if self.row_for_page_id(page_id) < 0:
+            return False
+        self.remove_by_page_ids({page_id}, _record=True)
+        return True
+
+    def keep_only_page_id(self, page_id: str) -> bool:
+        if self.row_for_page_id(page_id) < 0:
+            return False
+        self._record_before_mutation()
+        rows = sorted(
+            [
+                row
+                for row in range(self._list.count())
+                if self._list.item(row).data(Qt.ItemDataRole.UserRole).page_id != page_id
+            ],
+            reverse=True,
+        )
+        for row in rows:
+            self._list.takeItem(row)
+        self.select_page_id(page_id)
+        self._update_count()
+        self.pages_changed.emit(self._lane_id)
+        return True
 
     # ── Portapapeles ─────────────────────────────────────────────────────
 
@@ -921,15 +1048,29 @@ class DocLane(QFrame):
         self._update_count()
         self.pages_changed.emit(self._lane_id)
 
+    def _normalized_insert_row(self, at_row: Optional[int]) -> int:
+        if at_row is None or at_row < 0:
+            return self._list.count()
+        return max(0, min(at_row, self._list.count()))
+
     def _update_count(self) -> None:
         n = self._list.count()
         self._count_lbl.setText(f"{n} pág" + ("s" if n != 1 else ""))
         self._list.update_empty_state(n)
 
     def _on_add_pages(self) -> None:
-        files, _ = get_open_file_names(self.window(), "Agregar PDFs", "", PDF_FILTER)
-        for path in files:
-            self.add_pages_from_pdf(path)
+        files, _ = get_open_file_names(
+            self.window(),
+            "Agregar PDF o Word",
+            "",
+            PDF_WORD_FILTER,
+        )
+        if files:
+            self.files_add_requested.emit(
+                self._lane_id,
+                files,
+                self.insert_row_after_selection(),
+            )
 
     def _toggle_collapse(self) -> None:
         self._collapsed = not self._collapsed

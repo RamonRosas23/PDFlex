@@ -11,7 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QLineEdit,
@@ -29,7 +29,7 @@ from core.page_organizer_engine import (
 from shell.context import ShellContext
 from shell.transfer import ToolTransfer
 from ui.common.cards import make_page_header
-from ui.common.dialogs import show_error, show_warning
+from ui.common.dialogs import show_error, show_info, show_warning
 from ui.common.icons import set_button_icon
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
@@ -37,6 +37,8 @@ from ui.common.tray_input_panel import TrayInputPanel
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.organizador.lane_container import LaneContainer
 from ui.organizador.page_preview_dialog import OrganizerPagePreviewDialog
+
+_ACCEPTED_IMPORT_EXTS = {".pdf", ".doc", ".docx"}
 
 
 class _MultiWorker(QObject):
@@ -79,6 +81,10 @@ class OrganizadorWindow(PipelineWindow):
         self._last_result: Optional[MultiOrganizerResult] = None
         self._worker: Optional[_MultiWorker] = None
         self._worker_thread: Optional[QThread] = None
+        self._conv_thread: Optional[QThread] = None
+        self._conv_worker = None
+        self._conv_dlg = None
+        self._pending_import: Optional[dict] = None
         self._build_pages()
         self._build_action_buttons()
         self._switch_section(0)
@@ -107,7 +113,7 @@ class OrganizadorWindow(PipelineWindow):
         body = QHBoxLayout()
         body.setSpacing(12)
 
-        self._tray_panel = TrayInputPanel(self.ctx, {".pdf"})
+        self._tray_panel = TrayInputPanel(self.ctx, _ACCEPTED_IMPORT_EXTS)
         self._tray_panel.add_requested.connect(self._add_tray_paths)
         self._tray_panel.replace_requested.connect(self._replace_with_tray_paths)
         body.addWidget(self._tray_panel)
@@ -115,6 +121,7 @@ class OrganizadorWindow(PipelineWindow):
         self._lane_container = LaneContainer()
         self._lane_container.layout_changed.connect(self._on_layout_changed)
         self._lane_container.page_preview_requested.connect(self._open_page_preview)
+        self._lane_container.files_add_requested.connect(self._on_files_add_requested)
         body.addWidget(self._lane_container, 1)
         outer.addLayout(body, 1)
 
@@ -228,28 +235,174 @@ class OrganizadorWindow(PipelineWindow):
             self._proc_step.set_run_enabled(has_pages)
 
     def set_inputs(self, paths: List[str]) -> None:
-        self._lane_container.add_paths(paths)
+        self._add_input_paths(paths)
         self._switch_section(0)
 
     def set_transfer(self, transfer: ToolTransfer) -> None:
-        if transfer.mode == "replace":
-            self._lane_container.clear()
-        self._lane_container.add_paths(transfer.paths)
+        self._add_input_paths(transfer.paths, replace=transfer.mode == "replace")
         self.ctx.tray.mark_in_work(transfer.paths)
         self._switch_section(0)
 
     def handle_drop(self, paths: List[str]) -> None:
-        self._lane_container.add_paths(paths)
+        self._add_input_paths(paths)
         self._switch_section(0)
 
     # ── Slots ──────────────────────────────────────────────────────────────
 
     def _add_tray_paths(self, paths: List[str]) -> None:
-        self._lane_container.add_paths(paths)
+        self._add_input_paths(paths)
 
     def _replace_with_tray_paths(self, paths: List[str]) -> None:
-        self._lane_container.clear()
-        self._lane_container.add_paths(paths)
+        self._add_input_paths(paths, replace=True)
+
+    def _on_files_add_requested(
+        self,
+        paths: List[str],
+        target_lane_id,
+        at_row: int,
+    ) -> None:
+        lane_id = str(target_lane_id) if target_lane_id else None
+        self._add_input_paths(paths, target_lane_id=lane_id, at_row=at_row)
+
+    def _add_input_paths(
+        self,
+        paths: List[str],
+        *,
+        target_lane_id: str | None = None,
+        at_row: int = -1,
+        replace: bool = False,
+    ) -> None:
+        accepted = [
+            p for p in paths
+            if Path(p).suffix.lower() in _ACCEPTED_IMPORT_EXTS and Path(p).is_file()
+        ]
+        if not accepted:
+            return
+
+        pdfs = [p for p in accepted if Path(p).suffix.lower() == ".pdf"]
+        words = [p for p in accepted if Path(p).suffix.lower() in {".doc", ".docx"}]
+        if words:
+            self._convert_words_then_add(
+                words,
+                initial_pdfs=pdfs,
+                target_lane_id=target_lane_id,
+                at_row=at_row,
+                replace=replace,
+            )
+            return
+        self._add_pdfs_to_lanes(
+            pdfs,
+            target_lane_id=target_lane_id,
+            at_row=at_row,
+            replace=replace,
+        )
+
+    def _add_pdfs_to_lanes(
+        self,
+        pdfs: List[str],
+        *,
+        target_lane_id: str | None = None,
+        at_row: int = -1,
+        replace: bool = False,
+    ) -> None:
+        if replace:
+            self._lane_container.clear()
+            target_lane_id = None
+            at_row = -1
+        if not pdfs:
+            return
+        if target_lane_id:
+            self._lane_container.add_paths_to_lane(
+                target_lane_id,
+                pdfs,
+                at_row=at_row,
+            )
+        else:
+            self._lane_container.add_paths(pdfs)
+
+    def _convert_words_then_add(
+        self,
+        words: List[str],
+        *,
+        initial_pdfs: List[str],
+        target_lane_id: str | None,
+        at_row: int,
+        replace: bool,
+    ) -> None:
+        if not self.ctx.word_converter.is_available():
+            show_info(
+                self,
+                "Microsoft Office requerido",
+                "Para convertir archivos Word a PDF se necesita Microsoft Office.\n"
+                "Los archivos .doc/.docx han sido omitidos.",
+            )
+            self._add_pdfs_to_lanes(
+                initial_pdfs,
+                target_lane_id=target_lane_id,
+                at_row=at_row,
+                replace=replace,
+            )
+            return
+
+        from shell.word_to_pdf import WordConvertWorker
+        from ui.common.word_convert_dialog import WordConvertDialog
+
+        self._pending_import = {
+            "initial_pdfs": list(initial_pdfs),
+            "target_lane_id": target_lane_id,
+            "at_row": at_row,
+            "replace": replace,
+        }
+        self._conv_dlg = WordConvertDialog(self, words)
+        worker = WordConvertWorker(
+            self.ctx.word_converter,
+            words,
+            make_run_dir("converted"),
+        )
+        self._conv_thread = RunnerThread(worker.run, self)
+        self._conv_worker = worker
+        worker.progress.connect(self._conv_dlg.on_progress)
+        worker.finished.connect(self._on_word_done)
+        worker.finished.connect(self._conv_dlg.on_finished)
+        worker.error.connect(self._on_word_error)
+        worker.error.connect(self._conv_dlg.on_error)
+        worker.finished.connect(self._conv_thread.quit)
+        worker.error.connect(self._conv_thread.quit)
+        self._conv_thread.finished.connect(worker.deleteLater)
+        self._conv_thread.finished.connect(self._conv_thread.deleteLater)
+        self._conv_dlg.cancel_requested.connect(worker.cancel)
+        QTimer.singleShot(0, self._conv_thread.start)
+        self._conv_dlg.exec()
+
+    def _consume_pending_import(self) -> dict:
+        context = self._pending_import or {}
+        self._pending_import = None
+        return context
+
+    def _on_word_done(self, converted_paths: List[str]) -> None:
+        self._conv_thread = None
+        self._conv_worker = None
+        context = self._consume_pending_import()
+        pdfs = list(context.get("initial_pdfs") or []) + list(converted_paths)
+        self._add_pdfs_to_lanes(
+            pdfs,
+            target_lane_id=context.get("target_lane_id"),
+            at_row=int(context.get("at_row", -1)),
+            replace=bool(context.get("replace", False)),
+        )
+
+    def _on_word_error(self, msg: str) -> None:
+        self._conv_thread = None
+        self._conv_worker = None
+        context = self._consume_pending_import()
+        initial_pdfs = list(context.get("initial_pdfs") or [])
+        if initial_pdfs:
+            self._add_pdfs_to_lanes(
+                initial_pdfs,
+                target_lane_id=context.get("target_lane_id"),
+                at_row=int(context.get("at_row", -1)),
+                replace=bool(context.get("replace", False)),
+            )
 
     def _on_layout_changed(self) -> None:
         total = self._lane_container.total_pages()
@@ -277,7 +430,24 @@ class OrganizadorWindow(PipelineWindow):
             current_index=current,
             accent_color=self.ACCENT_COLOR,
         )
+        dlg.page_action_requested.connect(
+            lambda action, page_id, d=dlg: self._on_preview_action(d, action, page_id)
+        )
         dlg.exec()
+
+    def _on_preview_action(
+        self,
+        dialog: OrganizerPagePreviewDialog,
+        action: str,
+        page_id: str,
+    ) -> None:
+        next_id = self._lane_container.apply_page_action(page_id, action)
+        refs = self._lane_container.ordered_page_refs()
+        if not refs:
+            dialog.accept()
+            return
+        dialog.replace_refs(refs, current_page_id=next_id or page_id)
+        self._on_layout_changed()
 
     def _on_merge_toggled(self, checked: bool) -> None:
         self._merge_name_edit.setEnabled(checked)
@@ -454,3 +624,24 @@ class OrganizadorWindow(PipelineWindow):
         paths = [url.toLocalFile() for url in event.mimeData().urls()]
         self.handle_drop(paths)
         event.acceptProposedAction()
+
+    def deleteLater(self) -> None:  # type: ignore[override]
+        try:
+            self._stop_active_worker()
+        except Exception:
+            pass
+        try:
+            if self._conv_worker is not None:
+                cancel = getattr(self._conv_worker, "cancel", None)
+                if callable(cancel):
+                    cancel()
+            if self._conv_thread is not None:
+                self._conv_thread.quit()
+                self._conv_thread.wait(2000)
+        except Exception:
+            pass
+        try:
+            self._lane_container.deleteLater()
+        except Exception:
+            pass
+        super().deleteLater()

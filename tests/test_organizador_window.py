@@ -45,6 +45,7 @@ class OrganizadorWindowTests(unittest.TestCase):
         self.assertTrue(tool.enabled)
         self.assertEqual(tool.title, "Organizador visual")
         self.assertIn(".pdf", tool.input_extensions)
+        self.assertIn(".docx", tool.input_extensions)
 
     def test_window_loads_pdfs_into_separate_lanes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -244,6 +245,27 @@ class OrganizerPagePreviewDialogTests(unittest.TestCase):
                 dlg.close()
                 self.app.processEvents()
 
+    def test_preview_dialog_emits_editor_actions_for_current_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "action.pdf"
+            doc = fitz.open()
+            doc.new_page(width=300, height=400)
+            doc.save(pdf)
+            doc.close()
+
+            ref = PageRef(str(pdf), 0, page_id="p1")
+            dlg = OrganizerPagePreviewDialog(None, [ref])
+            try:
+                received: list[tuple[str, str]] = []
+                dlg.page_action_requested.connect(
+                    lambda action, page_id: received.append((action, page_id))
+                )
+                dlg._emit_page_action("delete")
+                self.assertEqual(received, [("delete", "p1")])
+            finally:
+                dlg.close()
+                self.app.processEvents()
+
 
 from ui.organizador.lane_widget import DocLane, LANE_COLORS
 from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailWorker
@@ -310,6 +332,31 @@ class DocLaneTests(unittest.TestCase):
             self.assertEqual(lane.count(), 3)
             self.assertEqual(lane.page_refs()[1].page_index, 0)
             self.assertNotEqual(lane.page_refs()[0].page_id, lane.page_refs()[1].page_id)
+
+    def test_add_pdf_at_row_inserts_pages_in_context(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.pdf"
+            second = root / "second.pdf"
+            for path, pages in ((first, 3), (second, 2)):
+                doc = fitz.open()
+                for _ in range(pages):
+                    doc.new_page()
+                doc.save(path)
+                doc.close()
+
+            lane = self._make_lane()
+            lane.add_pages_from_pdf(str(first))
+            lane.add_pages_from_pdf(str(second), at_row=2)
+
+            refs = lane.page_refs()
+            self.assertEqual([Path(r.source_path).name for r in refs], [
+                "first.pdf",
+                "first.pdf",
+                "second.pdf",
+                "second.pdf",
+                "first.pdf",
+            ])
 
     def test_clear_empties_lane(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -456,6 +503,35 @@ class LaneContainerTests(unittest.TestCase):
             finally:
                 container.deleteLater()
 
+    def test_add_paths_to_lane_inserts_after_selected_page(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / "first.pdf"
+            inserted = root / "inserted.pdf"
+            for path, pages in ((first, 3), (inserted, 2)):
+                doc = fitz.open()
+                for _ in range(pages):
+                    doc.new_page()
+                doc.save(path)
+                doc.close()
+
+            container = LaneContainer()
+            try:
+                lane = container.add_lane_from_pdf(str(first))
+                lane._list.setCurrentRow(1)
+                container.add_paths_to_lane(lane.lane_id, [str(inserted)])
+
+                refs = lane.page_refs()
+                self.assertEqual([Path(r.source_path).name for r in refs], [
+                    "first.pdf",
+                    "first.pdf",
+                    "inserted.pdf",
+                    "inserted.pdf",
+                    "first.pdf",
+                ])
+            finally:
+                container.deleteLater()
+
 
 class OrganizadorWindowV2Tests(unittest.TestCase):
     @classmethod
@@ -485,6 +561,79 @@ class OrganizadorWindowV2Tests(unittest.TestCase):
                 self.assertEqual(window._lane_container.total_lanes(), 2)
                 pages = sum(lane.count() for lane in window._lane_container.lanes())
                 self.assertEqual(pages, 2)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_routes_word_inputs_through_conversion_flow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            word = root / "contrato.docx"
+            word.write_text("dummy", encoding="utf-8")
+            converted = root / "contrato.pdf"
+            doc = fitz.open()
+            doc.new_page().insert_text((36, 72), "Convertido")
+            doc.save(converted)
+            doc.close()
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                with patch.object(window, "_convert_words_then_add") as convert:
+                    def _fake_convert(words, **kwargs):
+                        self.assertEqual(words, [str(word)])
+                        window._add_pdfs_to_lanes(
+                            [str(converted)],
+                            target_lane_id=kwargs["target_lane_id"],
+                            at_row=kwargs["at_row"],
+                            replace=kwargs["replace"],
+                        )
+
+                    convert.side_effect = _fake_convert
+                    window.set_inputs([str(word)])
+
+                self.assertEqual(window._lane_container.total_lanes(), 1)
+                self.assertEqual(window._lane_container.total_pages(), 1)
+                ref = window._lane_container.ordered_page_refs()[0]
+                self.assertEqual(ref.source_path, str(converted))
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_preview_delete_action_updates_lane_and_dialog_refs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "preview-action.pdf"
+            doc = fitz.open()
+            doc.new_page()
+            doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            class FakeDialog:
+                def __init__(self) -> None:
+                    self.accepted = False
+                    self.refs: list[PageRef] = []
+                    self.current_page_id = ""
+
+                def accept(self) -> None:
+                    self.accepted = True
+
+                def replace_refs(self, refs, *, current_page_id: str = "") -> None:
+                    self.refs = list(refs)
+                    self.current_page_id = current_page_id
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window.set_inputs([str(pdf)])
+                first_id = window._lane_container.ordered_page_refs()[0].page_id
+                second_id = window._lane_container.ordered_page_refs()[1].page_id
+                dialog = FakeDialog()
+
+                window._on_preview_action(dialog, "delete", first_id)
+
+                self.assertFalse(dialog.accepted)
+                self.assertEqual(window._lane_container.total_pages(), 1)
+                self.assertEqual(dialog.current_page_id, second_id)
+                self.assertEqual(dialog.refs[0].page_id, second_id)
             finally:
                 window.deleteLater()
                 self.app.processEvents()

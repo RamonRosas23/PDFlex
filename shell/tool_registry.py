@@ -157,6 +157,7 @@ TOOLS: List[ToolDescriptor] = [
             "- Carga uno o varios PDFs\n"
             "- Reordena páginas arrastrando miniaturas\n"
             "- Rota, duplica, quita y extrae páginas seleccionadas\n"
+            "- Convierte Word a PDF antes de organizar cuando sea necesario\n"
             "- Genera un PDF final sin modificar los originales"
         ),
         accent_color="#14B8A6",
@@ -164,6 +165,7 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_organizador()(ctx),
         icon_letter="O",
         icon_name="tool-organizador",
+        input_extensions=(".pdf", ".doc", ".docx"),
     ),
     ToolDescriptor(
         id="firmador",

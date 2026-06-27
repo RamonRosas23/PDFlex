@@ -20,7 +20,7 @@ from ui.common.icons import set_button_icon
 from ui.organizador.lane_widget import LANE_COLORS, DocLane
 from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailWorker
 
-PDF_FILTER = "PDF (*.pdf)"
+PDF_WORD_FILTER = "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)"
 _MAX_UNDO = 50
 
 
@@ -29,6 +29,7 @@ class LaneContainer(QWidget):
 
     layout_changed = pyqtSignal()
     page_preview_requested = pyqtSignal(object)
+    files_add_requested = pyqtSignal(list, object, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -84,7 +85,7 @@ class LaneContainer(QWidget):
         blank_btn.clicked.connect(self._on_add_blank)
         h.addWidget(blank_btn)
 
-        pdf_btn = QPushButton("＋ Agregar PDFs")
+        pdf_btn = QPushButton("＋ Agregar archivos")
         pdf_btn.setProperty("class", "Primary")
         set_button_icon(pdf_btn, "plus", size=13)
         pdf_btn.clicked.connect(self._on_add_pdfs)
@@ -140,10 +141,36 @@ class LaneContainer(QWidget):
         self._take_snapshot()
         for path in valid:
             lane = self._create_lane(Path(path).name)
-            # add_pages_from_pdf en DocLane llama _record_before_mutation, pero
-            # ya tomamos snapshot aquí, así que la segunda llamada es inofensiva
-            # (el stack no cambia porque _take_snapshot compara estado)
-            lane.add_pages_from_pdf(path)
+            lane.add_pages_from_pdf(path, _record=False)
+
+    def add_paths_to_lane(
+        self,
+        lane_id: str,
+        paths: List[str],
+        *,
+        at_row: int = -1,
+    ) -> list[str]:
+        lane = next((l for l in self._lanes if l.lane_id == lane_id), None)
+        valid = [p for p in paths if p.lower().endswith(".pdf") and Path(p).is_file()]
+        if lane is None or not valid:
+            return []
+
+        self._take_snapshot()
+        insert_at = at_row if at_row >= 0 else lane.insert_row_after_selection()
+        inserted_ids: list[str] = []
+        for path in valid:
+            ids = lane.add_pages_from_pdf(
+                path,
+                at_row=insert_at,
+                _record=False,
+                select_new=False,
+            )
+            inserted_ids.extend(ids)
+            insert_at += len(ids)
+        if inserted_ids:
+            lane.select_page_id(inserted_ids[-1])
+        self.layout_changed.emit()
+        return inserted_ids
 
     def all_lane_states(self) -> List[Tuple[str, str, List[PageRef]]]:
         return [(lane.lane_id, lane.display_name, lane.page_refs()) for lane in self._lanes]
@@ -168,6 +195,28 @@ class LaneContainer(QWidget):
             lane.deleteLater()
         self._lanes.clear()
         self.layout_changed.emit()
+
+    def apply_page_action(self, page_id: str, action: str) -> str:
+        lane = self._lane_for_page_id(page_id)
+        if lane is None:
+            return ""
+        if action == "rotate_cw":
+            lane.rotate_page_id(page_id, 90)
+            return page_id
+        if action == "rotate_ccw":
+            lane.rotate_page_id(page_id, -90)
+            return page_id
+        if action == "duplicate":
+            return lane.duplicate_page_id(page_id) or page_id
+        if action == "delete":
+            row = lane.row_for_page_id(page_id)
+            next_id = lane.page_id_at_row(row + 1) or lane.page_id_at_row(row - 1)
+            lane.remove_page_id(page_id)
+            return next_id
+        if action == "trim_lane":
+            lane.keep_only_page_id(page_id)
+            return page_id
+        return page_id
 
     # ── Undo ──────────────────────────────────────────────────────────────
 
@@ -261,6 +310,7 @@ class LaneContainer(QWidget):
         lane.reorder_requested.connect(self.move_lane)
         lane.cross_lane_drop_received.connect(self._on_cross_lane_drop)
         lane.page_preview_requested.connect(self.page_preview_requested)
+        lane.files_add_requested.connect(self._on_lane_files_add_requested)
         lane.set_before_mutation_cb(self._take_snapshot)
 
         self._lanes.append(lane)
@@ -293,14 +343,34 @@ class LaneContainer(QWidget):
             ]
             lane.set_siblings_provider(lambda s=siblings: s)
 
+    def _lane_for_page_id(self, page_id: str) -> DocLane | None:
+        for lane in self._lanes:
+            if lane.row_for_page_id(page_id) >= 0:
+                return lane
+        return None
+
+    def _on_lane_files_add_requested(
+        self,
+        lane_id: str,
+        paths: List[str],
+        at_row: int,
+    ) -> None:
+        self.files_add_requested.emit(paths, lane_id, at_row)
+
     # ── Botones del bottom bar ────────────────────────────────────────────
 
     def _on_add_blank(self) -> None:
         self.add_blank_lane()
 
     def _on_add_pdfs(self) -> None:
-        files, _ = get_open_file_names(self.window(), "Agregar PDFs", "", PDF_FILTER)
-        self.add_paths(files)
+        files, _ = get_open_file_names(
+            self.window(),
+            "Agregar PDF o Word",
+            "",
+            PDF_WORD_FILTER,
+        )
+        if files:
+            self.files_add_requested.emit(files, None, -1)
 
     def _stop_worker(self) -> None:
         if self._worker_stopped:

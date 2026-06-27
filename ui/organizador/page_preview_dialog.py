@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 import fitz
-from PyQt6.QtCore import Qt, QPoint
+from PyQt6.QtCore import Qt, QPoint, pyqtSignal
 from PyQt6.QtGui import QImage, QKeyEvent, QPixmap, QWheelEvent
 from PyQt6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
@@ -24,6 +24,8 @@ _CANVAS_MAX_PX = 2600
 
 class OrganizerPagePreviewDialog(QDialog):
     """Immersive preview for the current ordered PageRef list."""
+
+    page_action_requested = pyqtSignal(str, str)
 
     def __init__(
         self,
@@ -174,6 +176,43 @@ class OrganizerPagePreviewDialog(QDialog):
 
         h.addWidget(self._make_toolbar_separator())
 
+        self._rot_left_btn = self._make_action_btn(
+            "rotate-ccw",
+            "Rotar 90 grados a la izquierda (Shift+R)",
+            "rotate_ccw",
+        )
+        h.addWidget(self._rot_left_btn)
+
+        self._rot_right_btn = self._make_action_btn(
+            "rotate-cw",
+            "Rotar 90 grados a la derecha (R)",
+            "rotate_cw",
+        )
+        h.addWidget(self._rot_right_btn)
+
+        self._duplicate_btn = self._make_action_btn(
+            "copy",
+            "Duplicar hoja (Ctrl+D)",
+            "duplicate",
+        )
+        h.addWidget(self._duplicate_btn)
+
+        self._trim_btn = self._make_action_btn(
+            "scissors",
+            "Recortar fila a esta hoja (T)",
+            "trim_lane",
+        )
+        h.addWidget(self._trim_btn)
+
+        self._delete_btn = self._make_action_btn(
+            "trash-2",
+            "Eliminar hoja (Del)",
+            "delete",
+        )
+        h.addWidget(self._delete_btn)
+
+        h.addWidget(self._make_toolbar_separator())
+
         self._meta_lbl = QLabel("")
         self._meta_lbl.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 12px;")
         self._meta_lbl.setMinimumWidth(140)
@@ -218,6 +257,15 @@ class OrganizerPagePreviewDialog(QDialog):
         sep.setFixedSize(1, 22)
         sep.setStyleSheet(f"background: {COLORS['border_strong']}; border: none;")
         return sep
+
+    def _make_action_btn(self, icon_name: str, tooltip: str, action: str) -> QPushButton:
+        btn = QPushButton()
+        btn.setProperty("class", "IconBtn")
+        btn.setFixedSize(30, 30)
+        btn.setToolTip(tooltip)
+        set_button_icon(btn, icon_name, size=14, icon_only=True)
+        btn.clicked.connect(lambda _, a=action: self._emit_page_action(a))
+        return btn
 
     def _current_ref(self) -> Optional[PageRef]:
         if not (0 <= self._current_index < len(self._refs)):
@@ -330,6 +378,14 @@ class OrganizerPagePreviewDialog(QDialog):
         self._zoom_out_btn.setEnabled(self._zoom_index > 0)
         self._zoom_in_btn.setEnabled(self._zoom_index < len(ZOOM_LEVELS) - 1)
         self._zoom_lbl.setText(f"{int(ZOOM_LEVELS[self._zoom_index] * 100)}%")
+        for btn in (
+            self._rot_left_btn,
+            self._rot_right_btn,
+            self._duplicate_btn,
+            self._trim_btn,
+            self._delete_btn,
+        ):
+            btn.setEnabled(ref is not None)
         if ref is None:
             self._meta_lbl.setText("")
             self._meta_lbl.setToolTip("")
@@ -352,6 +408,30 @@ class OrganizerPagePreviewDialog(QDialog):
         if self._fit_mode != "manual":
             self._zoom_index = _FIT_ZOOM_IDX
         self._render_current()
+
+    def replace_refs(self, refs: list[PageRef], *, current_page_id: str = "") -> None:
+        previous_index = self._current_index
+        self._refs = list(refs)
+        if not self._refs:
+            self._current_index = 0
+            self._render_current()
+            return
+        if current_page_id:
+            for index, ref in enumerate(self._refs):
+                if ref.page_id == current_page_id:
+                    self._current_index = index
+                    break
+            else:
+                self._current_index = min(previous_index, len(self._refs) - 1)
+        else:
+            self._current_index = min(previous_index, len(self._refs) - 1)
+        self._render_current()
+
+    def _emit_page_action(self, action: str) -> None:
+        ref = self._current_ref()
+        if ref is None:
+            return
+        self.page_action_requested.emit(action, ref.page_id)
 
     def _prev_page(self) -> None:
         self._go_to_index(self._current_index - 1)
@@ -403,6 +483,17 @@ class OrganizerPagePreviewDialog(QDialog):
                 self._fit_page()
             else:
                 self._fit_width()
+        elif key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            self._emit_page_action("delete")
+        elif key == Qt.Key.Key_R:
+            if mods & Qt.KeyboardModifier.ShiftModifier:
+                self._emit_page_action("rotate_ccw")
+            else:
+                self._emit_page_action("rotate_cw")
+        elif key == Qt.Key.Key_D and (mods & ctrl):
+            self._emit_page_action("duplicate")
+        elif key == Qt.Key.Key_T:
+            self._emit_page_action("trim_lane")
         else:
             super().keyPressEvent(event)
 

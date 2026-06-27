@@ -1955,7 +1955,8 @@ class FirmadorWindow(PipelineWindow):
         return (
             f"{entry.label} · {entry.source_name or Path(entry.path).name}\n"
             "Marcada = aplicar en el documento actual\n"
-            "Sin marcar = omitir en el documento actual"
+            "Sin marcar = omitir en el documento actual; si todas quedan sin marcar, "
+            "el PDF se excluye del firmado"
             f"{opt_txt}"
         )
 
@@ -1981,7 +1982,8 @@ class FirmadorWindow(PipelineWindow):
         self._sig_list_hint.setVisible(count > 0)
         if count > 0:
             self._sig_list_hint.setText(
-                "Marcada: aplicar en este documento · desmarcada: omitir"
+                "Marcada: aplicar en este documento · desmarcada: omitir; "
+                "sin firmas activas = excluir PDF"
             )
 
     def _set_signature_notice(self, text: str) -> None:
@@ -2564,6 +2566,15 @@ class FirmadorWindow(PipelineWindow):
         """True si la firma está activa (visible) para el documento dado."""
         return doc_path not in self._sig_disabled.get(uid, set())
 
+    def _active_signature_count_for_doc(self, doc_path: str) -> int:
+        return sum(1 for e in self._sigs if self._sig_is_active(e.uid, doc_path))
+
+    def _documents_without_active_signatures(self) -> List[str]:
+        return [
+            p for p in self.pdf_paths
+            if self._active_signature_count_for_doc(p) == 0
+        ]
+
     # ================================================================== #
     # Checkbox de firmas por documento
     # ================================================================== #
@@ -2882,20 +2893,18 @@ class FirmadorWindow(PipelineWindow):
         n_sigs = len(self._sigs)
         mode_txt = "Por documento" if self.per_doc_mode else "Misma para todos"
 
-        # Contar firmas activas por doc
+        # Contar firmas activas por doc. Un documento con 0 firmas queda excluido.
         per_doc_info = ""
         if self._sigs and n > 0:
-            counts = []
-            for p in self.pdf_paths:
-                active_n = sum(
-                    1 for e in self._sigs if self._sig_is_active(e.uid, p)
-                )
-                counts.append(active_n)
+            counts = [self._active_signature_count_for_doc(p) for p in self.pdf_paths]
             unique = set(counts)
+            skipped = sum(1 for count in counts if count == 0)
             if len(unique) == 1:
                 per_doc_info = f" ({counts[0]} por documento)"
             else:
                 per_doc_info = f" (varía: {min(counts)}–{max(counts)} por doc)"
+            if skipped:
+                per_doc_info += f" · {skipped} excluido" + ("" if skipped == 1 else "s")
 
         rows = [
             f"<b>Documentos:</b>&nbsp;&nbsp;{n}",
@@ -2927,18 +2936,17 @@ class FirmadorWindow(PipelineWindow):
                 f"Ve al Paso 02 y coloca cada firma sobre el documento."
             )
 
-        docs_sin_firma = [
-            Path(p).name for p in self.pdf_paths
-            if not any(self._sig_is_active(e.uid, p) for e in self._sigs)
-        ]
-        if docs_sin_firma:
-            preview = "\n".join(f"  • {name}" for name in docs_sin_firma[:8])
+        docs_sin_firma = self._documents_without_active_signatures()
+        if len(docs_sin_firma) == len(self.pdf_paths):
+            preview = "\n".join(
+                f"  • {Path(path).name}" for path in docs_sin_firma[:8]
+            )
             if len(docs_sin_firma) > 8:
                 preview += f"\n  … y {len(docs_sin_firma) - 8} más"
             return (
-                "Hay documentos sin ninguna firma activa:\n\n"
+                "Todos los documentos quedaron excluidos porque no tienen firmas activas:\n\n"
                 f"{preview}\n\n"
-                "Activa al menos una firma para cada documento (☑ en el Paso 02)."
+                "Activa al menos una firma en un documento para poder procesar."
             )
 
         interval_error = self._validate_intervals()

@@ -191,6 +191,15 @@ _ICONS = {
         '<circle cx="9" cy="9" r="2"/>'
         '<path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>'
     ),
+    "tool-scan-simulator": (
+        '<path d="M4 7V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2"/>'
+        '<path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>'
+        '<path d="M3 12h18"/>'
+        '<path d="M8 8h8"/>'
+        '<path d="M8 16h8"/>'
+        '<path d="m6 12 2-2"/>'
+        '<path d="m16 14 2-2"/>'
+    ),
     "tool-imgs-a-pdf": (
         '<path d="M18 22H4a2 2 0 0 1-2-2V6"/>'
         '<path d="m22 13-1.296-1.296a2.41 2.41 0 0 0-3.408 0L11 18"/>'
@@ -244,6 +253,7 @@ TOOL_ICON_MAP: dict[str, str] = {
     "word_a_pdf":        "tool-word-a-pdf",
     "pdf_to_word":       "tool-pdf-to-word",
     "pdf_to_imgs":       "tool-pdf-to-imgs",
+    "scan_simulator":    "tool-scan-simulator",
     "imgs_a_pdf":        "tool-imgs-a-pdf",
     "extraer_imagenes":  "tool-extraer-imagenes",
     "quitar_fondo":      "tool-quitar-fondo",

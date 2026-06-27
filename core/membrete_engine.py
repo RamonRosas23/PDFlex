@@ -7,6 +7,9 @@ Para cada documento de entrada, crea un nuevo PDF donde cada página es:
 
 La superposición utiliza _place_page():
   - rotation=0: fitz.Page.show_pdf_page() — copia vectorial, calidad perfecta.
+  - Páginas con anotaciones: primero se aplanan en una copia en memoria, porque
+    show_pdf_page() copia el contenido de la página pero no su capa de anotaciones
+    (subrayados, resaltados, comentarios visuales, etc.).
   - rotation≠0: get_pixmap() + insert_image() a _RENDER_DPI — necesario porque
     show_pdf_page() en PyMuPDF ≥1.24 ignora /Rotate al calcular la posición del
     contenido, produciendo overflow y transposición de dimensiones en páginas con
@@ -133,8 +136,18 @@ class MembreteEngine:
         except Exception as e:
             return MembreteJobResult(job=job, output_path="", success=False, error=str(e))
 
-        out = fitz.open()
         selected = _normalized_page_selection(job.pages_to_letterhead, src.page_count)
+        annotated_pages = _annotated_selected_pages(src, selected)
+        placement_src = src
+        rasterize_annotation_pages: set[int] = set()
+        if annotated_pages:
+            try:
+                placement_src = _copy_with_baked_annotations(src)
+            except Exception:
+                placement_src = src
+                rasterize_annotation_pages = annotated_pages
+
+        out = fitz.open()
         letterheaded = 0
         preserved = 0
         omitted = 0
@@ -161,7 +174,13 @@ class MembreteEngine:
                 # 2. Superponer página del documento en la zona segura
                 src_page = src[page_idx]
                 target = _fit_rect(safe, src_page.rect.width, src_page.rect.height)
-                _place_page(new_page, src, page_idx, target)
+                _place_page(
+                    new_page,
+                    placement_src,
+                    page_idx,
+                    target,
+                    force_raster=page_idx in rasterize_annotation_pages,
+                )
                 letterheaded += 1
 
             if out.page_count <= 0:
@@ -187,6 +206,8 @@ class MembreteEngine:
             return MembreteJobResult(job=job, output_path="", success=False, error=str(e))
         finally:
             try:
+                if placement_src is not src:
+                    placement_src.close()
                 src.close()
                 out.close()
             except Exception:
@@ -234,6 +255,38 @@ def _normalized_page_selection(
         for index in page_indexes
         if 0 <= int(index) < page_count
     }
+
+
+def _annotated_selected_pages(
+    doc: fitz.Document,
+    selected: Optional[set[int]],
+) -> set[int]:
+    indexes = range(doc.page_count) if selected is None else selected
+    return {
+        page_idx
+        for page_idx in indexes
+        if 0 <= page_idx < doc.page_count and _page_has_annotations(doc[page_idx])
+    }
+
+
+def _page_has_annotations(page: fitz.Page) -> bool:
+    try:
+        annots = page.annots()
+        if annots is None:
+            return False
+        return any(True for _ in annots)
+    except Exception:
+        return False
+
+
+def _copy_with_baked_annotations(doc: fitz.Document) -> fitz.Document:
+    baked = fitz.open("pdf", doc.tobytes())
+    try:
+        baked.bake(annots=True, widgets=False)
+    except Exception:
+        baked.close()
+        raise
+    return baked
 
 
 def _result_meta_text(letterheaded: int, preserved: int, omitted: int) -> str:
@@ -354,10 +407,12 @@ def _place_page(
     page_idx: int,
     target: fitz.Rect,
     render_dpi: float = _RENDER_DPI,
+    force_raster: bool = False,
 ) -> None:
     """Coloca src_doc[page_idx] en dest_page dentro de target.
 
-    Para páginas con /Rotate=0 usa show_pdf_page (vectorial, calidad máxima).
+    Para páginas con /Rotate=0 usa show_pdf_page (vectorial, calidad máxima)
+    salvo que force_raster=True.
     Para páginas con /Rotate≠0 renderiza a pixmap vía get_pixmap() — que sí
     aplica /Rotate correctamente — e inserta la imagen con insert_image().
 
@@ -371,7 +426,7 @@ def _place_page(
       MediaBox subyacente.
     """
     src_page = src_doc[page_idx]
-    if src_page.rotation == 0:
+    if src_page.rotation == 0 and not force_raster:
         dest_page.show_pdf_page(target, src_doc, page_idx)
         return
 
@@ -379,7 +434,7 @@ def _place_page(
     # El pixmap tiene dimensiones page.rect (display), no del MediaBox.
     scale = render_dpi / 72.0
     mat = fitz.Matrix(scale, scale)
-    pm = src_page.get_pixmap(matrix=mat, alpha=False)
+    pm = src_page.get_pixmap(matrix=mat, alpha=False, annots=True)
     try:
         dest_page.insert_image(target, pixmap=pm)
     finally:

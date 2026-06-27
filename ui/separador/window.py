@@ -15,15 +15,16 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QFrame, QProgressBar,
+    QFrame,
     QLineEdit, QScrollArea, QSpinBox,
     QSizePolicy,
 )
 
 from core.split_ranges import (
-    SplitRange, ValidationIssue,
-    parse_range_text, validate_ranges,
-    generate_equal_ranges, generate_one_per_page,
+    SplitRange,
+    parse_range_list_text, validate_ranges,
+    generate_equal_ranges, generate_fixed_size_ranges,
+    generate_missing_ranges, generate_one_per_page,
 )
 from core.splitter_engine import SplitterJob, SplitterEngine, SplitterJobResult
 from core.output_paths import make_run_dir
@@ -37,6 +38,7 @@ from ui.common.send_to_tool import SendToToolButton
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
 from ui.common.output_settings import add_tool_suffix_enabled
+from ui.separador.preview_panel import SplitPreviewPanel
 from ui.common.dialogs import (
     ask_int,
     ask_question,
@@ -105,6 +107,8 @@ class SeparadorWindow(PipelineWindow):
         self._pdf_path: Optional[str] = None
         self._total_pages: int = 0
         self._ranges: List[SplitRange] = []
+        self._selected_range_idx: Optional[int] = None
+        self._rebuilding_ranges_ui = False
         self.last_result: Optional[SplitterJobResult] = None
         self._worker_thread: Optional[QThread] = None
         self._worker: Optional[SplitterWorker] = None
@@ -113,6 +117,8 @@ class SeparadorWindow(PipelineWindow):
         self._ranges_layout: Optional[QVBoxLayout] = None  # set during _build
 
         self._build_pages()
+        self.stack.setMinimumSize(0, 0)
+        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._build_action_buttons()
         self._switch_section(0)
         self.setAcceptDrops(True)
@@ -210,94 +216,145 @@ class SeparadorWindow(PipelineWindow):
     def _build_ranges_section(self) -> QWidget:
         page = QWidget()
         page.setProperty("class", "PageContainer")
-        outer = QVBoxLayout(page)
-        outer.setContentsMargins(36, 32, 36, 32)
-        outer.setSpacing(20)
+        root = QVBoxLayout(page)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        page_scroll = QScrollArea()
+        page_scroll.setWidgetResizable(True)
+        page_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        page_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        page_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        page_scroll.setSizeAdjustPolicy(QScrollArea.SizeAdjustPolicy.AdjustIgnored)
+        page_scroll.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        page_scroll.viewport().setStyleSheet("background: transparent;")
+        root.addWidget(page_scroll)
+
+        content = QWidget()
+        content.setProperty("class", "PageContainer")
+        page_scroll.setWidget(content)
+
+        outer = QVBoxLayout(content)
+        outer.setContentsMargins(28, 24, 28, 24)
+        outer.setSpacing(18)
 
         outer.addLayout(make_page_header(
-            "Definir tramos de separación",
-            "Cada tramo se guardará como un archivo PDF independiente. "
-            "Usa el formato 1-11 para un rango o 5 para una sola página.",
+            "Separación visual",
+            "Define tramos, revisa páginas y valida qué saldrá en cada archivo.",
         ))
+
+        workspace = QHBoxLayout()
+        workspace.setSpacing(12)
+
+        left_col = QWidget()
+        left_col.setMinimumWidth(300)
+        left_col.setMaximumWidth(470)
+        left_layout = QVBoxLayout(left_col)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
 
         # ---- Agregar tramo ----
         add_card = make_card()
         al = card_layout(add_card)
-        al.setSpacing(10)
+        al.setSpacing(12)
 
         add_title = QLabel("Agregar tramo")
         add_title.setProperty("class", "CardTitle")
         al.addWidget(add_title)
 
-        add_row = QHBoxLayout()
-        add_row.setSpacing(10)
+        pages_lbl = QLabel("Páginas")
+        pages_lbl.setProperty("class", "CardHint")
+        al.addWidget(pages_lbl)
 
-        pages_lbl = QLabel("Páginas:")
-        pages_lbl.setStyleSheet("color: #9094A0;")
         self._range_input = QLineEdit()
-        self._range_input.setPlaceholderText("ej: 1-11  o  5")
-        self._range_input.setMinimumWidth(170)
+        self._range_input.setPlaceholderText("1-4, 8, 10-final, pares, impares")
         self._range_input.returnPressed.connect(self._on_add_range)
+        al.addWidget(self._range_input)
 
-        name_lbl = QLabel("Nombre:")
-        name_lbl.setStyleSheet("color: #9094A0;")
+        name_lbl = QLabel("Nombre base")
+        name_lbl.setProperty("class", "CardHint")
+        al.addWidget(name_lbl)
         self._name_input = QLineEdit()
         self._name_input.setPlaceholderText("nombre-salida (opcional)")
-        self._name_input.setMinimumWidth(260)
         self._name_input.returnPressed.connect(self._on_add_range)
+        al.addWidget(self._name_input)
+
+        add_row = QHBoxLayout()
+        add_row.setSpacing(8)
 
         add_btn = QPushButton("Agregar")
         add_btn.setProperty("class", "Primary")
         add_btn.setFixedHeight(34)
         set_button_icon(add_btn, "plus")
         add_btn.clicked.connect(self._on_add_range)
-
-        add_row.addWidget(pages_lbl)
-        add_row.addWidget(self._range_input, 1)
-        add_row.addWidget(name_lbl)
-        add_row.addWidget(self._name_input, 2)
         add_row.addWidget(add_btn)
         add_row.addStretch()
         al.addLayout(add_row)
 
         self._add_error_lbl = QLabel("")
         self._add_error_lbl.setStyleSheet("color: #E5484D; font-size: 11px;")
+        self._add_error_lbl.setWordWrap(True)
         al.addWidget(self._add_error_lbl)
 
         # Accesos rápidos
-        quick_row = QHBoxLayout()
-        quick_row.setSpacing(8)
-        quick_lbl = QLabel("Accesos rápidos:")
+        quick_lbl = QLabel("Accesos rápidos")
         quick_lbl.setProperty("class", "CardHint")
-        quick_row.addWidget(quick_lbl)
+        al.addWidget(quick_lbl)
 
-        equal_btn = QPushButton("Dividir en N partes iguales")
-        equal_btn.setProperty("class", "Ghost")
-        set_button_icon(equal_btn, "divide")
+        quick_row_1 = QHBoxLayout()
+        quick_row_1.setSpacing(8)
+        quick_row_2 = QHBoxLayout()
+        quick_row_2.setSpacing(8)
+
+        equal_btn = self._make_quick_icon_button(
+            "divide",
+            "Divide el documento en N tramos consecutivos.",
+        )
         equal_btn.clicked.connect(self._on_divide_equal)
-        quick_row.addWidget(equal_btn)
+        quick_row_1.addWidget(equal_btn)
 
-        one_btn = QPushButton("Una página por archivo")
-        one_btn.setProperty("class", "Ghost")
-        set_button_icon(one_btn, "list")
+        chunk_btn = self._make_quick_icon_button(
+            "scissors",
+            "Crea tramos consecutivos con un tamaño fijo.",
+        )
+        chunk_btn.clicked.connect(self._on_chunk_by_size)
+        quick_row_1.addWidget(chunk_btn)
+        quick_row_1.addStretch()
+
+        one_btn = self._make_quick_icon_button(
+            "list",
+            "Crea un archivo por cada página del PDF.",
+        )
         one_btn.clicked.connect(self._on_one_per_page)
-        quick_row.addWidget(one_btn)
+        quick_row_2.addWidget(one_btn)
 
-        clear_all_btn = QPushButton("Vaciar lista")
-        clear_all_btn.setProperty("class", "Ghost")
+        fill_btn = self._make_quick_icon_button(
+            "plus",
+            "Agrega tramos solo para páginas sin cobertura.",
+        )
+        fill_btn.clicked.connect(self._on_fill_missing_ranges)
+        quick_row_2.addWidget(fill_btn)
+
+        clear_all_btn = self._make_quick_icon_button(
+            "eraser",
+            "Quita todos los tramos configurados.",
+        )
         clear_all_btn.clicked.connect(self._on_clear_ranges)
-        quick_row.addWidget(clear_all_btn)
-        quick_row.addStretch()
-        al.addLayout(quick_row)
+        quick_row_2.addWidget(clear_all_btn)
+        quick_row_2.addStretch()
 
-        outer.addWidget(add_card)
+        al.addLayout(quick_row_1)
+        al.addLayout(quick_row_2)
+
+        left_layout.addWidget(add_card)
 
         # ---- Lista de tramos ----
         list_card = make_card()
         ll = card_layout(list_card)
+        ll.setSpacing(10)
 
         list_header = QHBoxLayout()
-        list_header_lbl = QLabel("Tramos configurados")
+        list_header_lbl = QLabel("Tramos")
         list_header_lbl.setProperty("class", "CardTitle")
         self._tramo_count_lbl = QLabel("0 tramos")
         self._tramo_count_lbl.setProperty("class", "CardHint")
@@ -306,7 +363,6 @@ class SeparadorWindow(PipelineWindow):
         list_header.addWidget(self._tramo_count_lbl)
         ll.addLayout(list_header)
 
-        # Scroll con filas dinámicas
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -315,19 +371,35 @@ class SeparadorWindow(PipelineWindow):
 
         ranges_container = QWidget()
         self._ranges_layout = QVBoxLayout(ranges_container)
-        self._ranges_layout.setSpacing(4)
+        self._ranges_layout.setSpacing(6)
         self._ranges_layout.setContentsMargins(0, 0, 0, 0)
         scroll.setWidget(ranges_container)
         ll.addWidget(scroll, 1)
 
-        # Estado de validación
         self._validation_lbl = QLabel("Sin tramos configurados")
+        self._validation_lbl.setWordWrap(True)
         self._validation_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
         ll.addWidget(self._validation_lbl)
 
-        outer.addWidget(list_card, 1)
+        left_layout.addWidget(list_card, 1)
+
+        self._preview_panel = SplitPreviewPanel()
+        self._preview_panel.setMinimumWidth(320)
+        self._preview_panel.addVisiblePageRequested.connect(self._on_add_visible_page)
+
+        workspace.addWidget(left_col, 0)
+        workspace.addWidget(self._preview_panel, 1)
+        outer.addLayout(workspace, 1)
 
         return page
+
+    def _make_quick_icon_button(self, icon_name: str, tooltip: str) -> QPushButton:
+        btn = QPushButton()
+        btn.setProperty("class", "IconBtn")
+        btn.setFixedSize(34, 34)
+        btn.setToolTip(tooltip)
+        set_button_icon(btn, icon_name, size=15, icon_only=True)
+        return btn
 
     # ------------------------------------------------------------------ #
     # Paso 03: Procesar (via ProcessStep compartido)
@@ -494,9 +566,14 @@ class SeparadorWindow(PipelineWindow):
         )
         self._schedule_thumb(path)
 
+        if hasattr(self, "_preview_panel"):
+            self._preview_panel.set_document(path, self._total_pages)
+
         # Actualizar validación de rangos existentes
         if self._ranges:
             self._rebuild_ranges_ui()
+        else:
+            self._sync_preview_ranges()
         self._sync_run_enabled()
 
     def _schedule_thumb(self, path: str) -> None:
@@ -546,6 +623,7 @@ class SeparadorWindow(PipelineWindow):
         self._pdf_path = None
         self._total_pages = 0
         self._ranges.clear()
+        self._selected_range_idx = None
         self._doc_name_lbl.setText("—")
         self._doc_pages_lbl.setText("")
         self._doc_size_lbl.setText("")
@@ -557,6 +635,8 @@ class SeparadorWindow(PipelineWindow):
             " color: #6B6F7A; font-size: 11px;"
         )
         self._proc_step.reset()
+        if hasattr(self, "_preview_panel"):
+            self._preview_panel.close_document()
         self._rebuild_ranges_ui()
         self._sync_run_enabled()
 
@@ -565,103 +645,210 @@ class SeparadorWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _sync_names(self) -> None:
-        """Lee los nombres de los QLineEdits del UI y actualiza self._ranges."""
+        """Mantiene compatibilidad con llamadas existentes."""
+        self._sync_ranges_from_ui()
+
+    def _sync_ranges_from_ui(self) -> None:
+        """Lee nombre/inicio/fin desde las filas editables."""
+        if self._rebuilding_ranges_ui:
+            return
         if self._ranges_layout is None:
             return
-        edits_found = 0
+        row_idx = 0
         for i in range(self._ranges_layout.count()):
             item = self._ranges_layout.itemAt(i)
             if not item or not item.widget():
                 continue
-            edits = item.widget().findChildren(QLineEdit)
-            if edits and edits_found < len(self._ranges):
-                self._ranges[edits_found].name = edits[0].text()
-                edits_found += 1
+            widget = item.widget()
+            name_edit = widget.findChild(QLineEdit, "SplitRangeNameEdit")
+            start_spin = widget.findChild(QSpinBox, "SplitRangeStartSpin")
+            end_spin = widget.findChild(QSpinBox, "SplitRangeEndSpin")
+            if not (name_edit and start_spin and end_spin):
+                continue
+            if row_idx >= len(self._ranges):
+                break
+            rng = self._ranges[row_idx]
+            rng.name = name_edit.text().strip()
+            rng.start = int(start_spin.value())
+            rng.end = int(end_spin.value())
+            count_lbl = widget.findChild(QLabel, "SplitRangeCountLabel")
+            if count_lbl:
+                count_lbl.setText(self._range_count_text(rng))
+            row_idx += 1
+
+    def _sync_preview_ranges(self) -> None:
+        if not hasattr(self, "_preview_panel"):
+            return
+        if (
+            self._selected_range_idx is not None
+            and self._selected_range_idx >= len(self._ranges)
+        ):
+            self._selected_range_idx = None
+        self._preview_panel.set_ranges(list(self._ranges), self._selected_range_idx)
 
     def _rebuild_ranges_ui(self) -> None:
         if self._ranges_layout is None:
             return
-        while self._ranges_layout.count():
-            item = self._ranges_layout.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self._rebuilding_ranges_ui = True
+        try:
+            while self._ranges_layout.count():
+                item = self._ranges_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
 
-        for i, rng in enumerate(self._ranges):
-            row = self._make_range_row(i, rng)
-            self._ranges_layout.addWidget(row)
-        self._ranges_layout.addStretch()
+            for i, rng in enumerate(self._ranges):
+                row = self._make_range_row(i, rng)
+                self._ranges_layout.addWidget(row)
+            self._ranges_layout.addStretch()
+        finally:
+            self._rebuilding_ranges_ui = False
 
         n = len(self._ranges)
         self._tramo_count_lbl.setText(f"{n} tramo{'s' if n != 1 else ''}")
         self._update_validation_display()
         self._sync_run_enabled()
+        self._sync_preview_ranges()
 
     def _make_range_row(self, idx: int, rng: SplitRange) -> QFrame:
         row = QFrame()
         row.setProperty("class", "TrayItemRow")
-        h = QHBoxLayout(row)
-        h.setContentsMargins(12, 8, 12, 8)
-        h.setSpacing(10)
+        if idx == self._selected_range_idx:
+            row.setStyleSheet(
+                "QFrame {"
+                "background-color: rgba(245, 166, 35, 0.10);"
+                "border: 1px solid rgba(245, 166, 35, 0.70);"
+                "border-radius: 6px;"
+                "}"
+            )
 
-        # Índice
+        v = QVBoxLayout(row)
+        v.setContentsMargins(10, 8, 10, 8)
+        v.setSpacing(7)
+
+        top = QHBoxLayout()
+        top.setSpacing(6)
+
         num_lbl = QLabel(f"#{idx + 1}")
-        num_lbl.setFixedWidth(28)
+        num_lbl.setFixedWidth(24)
         num_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
-        h.addWidget(num_lbl)
+        top.addWidget(num_lbl)
 
-        # Nombre editable
         name_edit = QLineEdit(rng.name)
+        name_edit.setObjectName("SplitRangeNameEdit")
         name_edit.setPlaceholderText("nombre-salida")
-        name_edit.setFixedWidth(160)
-        h.addWidget(name_edit)
+        name_edit.setMinimumWidth(90)
+        name_edit.textChanged.connect(self._on_range_controls_changed)
+        top.addWidget(name_edit, 1)
 
-        # Rango de páginas
-        n_pags = rng.page_count
-        pages_txt = (
-            f"Págs {rng.start}–{rng.end}  ·  "
-            f"{n_pags} pág{'s' if n_pags != 1 else ''}"
-        )
-        pages_lbl = QLabel(pages_txt)
-        pages_lbl.setStyleSheet("color: #9094A0;")
-        h.addWidget(pages_lbl, 1)
+        view_btn = QPushButton()
+        view_btn.setProperty("class", "IconBtn")
+        view_btn.setFixedSize(28, 28)
+        view_btn.setToolTip("Ver este tramo en la previsualización")
+        set_button_icon(view_btn, "maximize", size=14, icon_only=True)
+        view_btn.clicked.connect(lambda _, i=idx: self._preview_range(i))
+        top.addWidget(view_btn)
 
-        # Botones de reordenado
+        del_btn = QPushButton()
+        del_btn.setProperty("class", "IconBtn")
+        del_btn.setFixedSize(28, 28)
+        del_btn.setToolTip("Eliminar tramo")
+        set_button_icon(del_btn, "x", size=14, icon_only=True)
+        del_btn.clicked.connect(lambda _, i=idx: self._delete_range(i))
+        top.addWidget(del_btn)
+
+        v.addLayout(top)
+
+        range_row = QHBoxLayout()
+        range_row.setSpacing(6)
+
+        start_lbl = QLabel("Ini")
+        start_lbl.setProperty("class", "CardHint")
+        start_lbl.setToolTip("Página inicial")
+        range_row.addWidget(start_lbl)
+
+        spin_max = max(1, self._total_pages or 9999, rng.start, rng.end)
+
+        start_spin = QSpinBox()
+        start_spin.setObjectName("SplitRangeStartSpin")
+        start_spin.setRange(1, spin_max)
+        start_spin.setValue(max(1, rng.start))
+        start_spin.setFixedWidth(62)
+        start_spin.valueChanged.connect(self._on_range_controls_changed)
+        range_row.addWidget(start_spin)
+
+        end_lbl = QLabel("Fin")
+        end_lbl.setProperty("class", "CardHint")
+        end_lbl.setToolTip("Página final")
+        range_row.addWidget(end_lbl)
+
+        end_spin = QSpinBox()
+        end_spin.setObjectName("SplitRangeEndSpin")
+        end_spin.setRange(1, spin_max)
+        end_spin.setValue(max(1, rng.end))
+        end_spin.setFixedWidth(62)
+        end_spin.valueChanged.connect(self._on_range_controls_changed)
+        range_row.addWidget(end_spin)
+        range_row.addStretch()
+
+        v.addLayout(range_row)
+
+        meta_row = QHBoxLayout()
+        meta_row.setSpacing(6)
+
+        count_lbl = QLabel(self._range_count_text(rng))
+        count_lbl.setObjectName("SplitRangeCountLabel")
+        count_lbl.setMinimumWidth(72)
+        count_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
+        meta_row.addWidget(count_lbl)
+        meta_row.addStretch()
+
         up_btn = QPushButton()
         up_btn.setProperty("class", "IconBtn")
         up_btn.setFixedSize(28, 28)
+        up_btn.setToolTip("Subir tramo")
         set_button_icon(up_btn, "chevron-up", size=14, icon_only=True)
         up_btn.setEnabled(idx > 0)
         up_btn.clicked.connect(lambda _, i=idx: self._move_range(i, -1))
-        h.addWidget(up_btn)
+        meta_row.addWidget(up_btn)
 
         down_btn = QPushButton()
         down_btn.setProperty("class", "IconBtn")
         down_btn.setFixedSize(28, 28)
+        down_btn.setToolTip("Bajar tramo")
         set_button_icon(down_btn, "chevron-down", size=14, icon_only=True)
         down_btn.setEnabled(idx < len(self._ranges) - 1)
         down_btn.clicked.connect(lambda _, i=idx: self._move_range(i, +1))
-        h.addWidget(down_btn)
+        meta_row.addWidget(down_btn)
 
-        # Botón eliminar
-        del_btn = QPushButton()
-        del_btn.setProperty("class", "IconBtn")
-        del_btn.setFixedSize(28, 28)
-        set_button_icon(del_btn, "x", size=14, icon_only=True)
-        del_btn.clicked.connect(lambda _, i=idx: self._delete_range(i))
-        h.addWidget(del_btn)
+        v.addLayout(meta_row)
 
         return row
+
+    def _range_count_text(self, rng: SplitRange) -> str:
+        if rng.start > rng.end:
+            return "inválido"
+        n_pags = rng.page_count
+        return f"{n_pags} pág{'s' if n_pags != 1 else ''}"
+
+    def _on_range_controls_changed(self, *_) -> None:
+        if self._rebuilding_ranges_ui:
+            return
+        self._sync_ranges_from_ui()
+        self._update_validation_display()
+        self._sync_run_enabled()
+        self._sync_preview_ranges()
 
     def _update_validation_display(self) -> None:
         if not self._ranges:
             self._validation_lbl.setText("Sin tramos configurados")
             self._validation_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
+            self._sync_preview_ranges()
             return
 
         issues = validate_ranges(self._ranges, self._total_pages)
         errors = [i for i in issues if i.kind == "error"]
         warnings = [i for i in issues if i.kind == "warning"]
-        covered = sum(r.page_count for r in self._ranges)
+        covered = self._covered_page_count()
 
         if errors:
             self._validation_lbl.setText(f"Error: {errors[0].message}")
@@ -681,38 +868,73 @@ class SeparadorWindow(PipelineWindow):
             )
             self._validation_lbl.setStyleSheet("color: #3BD37C; font-size: 12px;")
 
+    def _covered_page_count(self) -> int:
+        if self._total_pages <= 0:
+            return sum(max(0, r.page_count) for r in self._ranges)
+        covered: set[int] = set()
+        for rng in self._ranges:
+            start = max(1, rng.start)
+            end = min(self._total_pages, rng.end)
+            if start <= end:
+                covered.update(range(start, end + 1))
+        return len(covered)
+
     # ---- Acciones del editor ----
 
     def _on_add_range(self) -> None:
         text = self._range_input.text()
-        result = parse_range_text(text)
+        result = parse_range_list_text(text, self._total_pages)
         if isinstance(result, str):
             self._add_error_lbl.setText(result)
             return
 
-        start, end = result
-        if self._total_pages > 0 and end > self._total_pages:
-            self._add_error_lbl.setText(
-                f"La página {end} excede el total del documento ({self._total_pages})"
-            )
-            return
-
         self._add_error_lbl.setText("")
-        name = self._name_input.text().strip()
-        if not name:
-            name = f"parte-{len(self._ranges) + 1:02d}"
+        base_name = self._name_input.text().strip()
 
         self._sync_names()
-        self._ranges.append(SplitRange(start=start, end=end, name=name))
+        first_new_idx = len(self._ranges)
+        total_new = len(result)
+        for offset, (start, end) in enumerate(result):
+            self._ranges.append(SplitRange(
+                start=start,
+                end=end,
+                name=self._default_range_name(
+                    base_name,
+                    absolute_idx=first_new_idx + offset,
+                    offset=offset,
+                    total_new=total_new,
+                ),
+            ))
+        self._selected_range_idx = first_new_idx if total_new else None
         self._range_input.clear()
         self._name_input.clear()
         self._range_input.setFocus()
         self._rebuild_ranges_ui()
+        if self._selected_range_idx is not None:
+            self._preview_range(self._selected_range_idx)
+
+    def _default_range_name(
+        self,
+        base_name: str,
+        *,
+        absolute_idx: int,
+        offset: int,
+        total_new: int,
+    ) -> str:
+        if base_name:
+            if total_new == 1:
+                return base_name
+            return f"{base_name}-{offset + 1:02d}"
+        return f"parte-{absolute_idx + 1:02d}"
 
     def _delete_range(self, idx: int) -> None:
         self._sync_names()
         if 0 <= idx < len(self._ranges):
             self._ranges.pop(idx)
+            if self._selected_range_idx == idx:
+                self._selected_range_idx = None
+            elif self._selected_range_idx is not None and self._selected_range_idx > idx:
+                self._selected_range_idx -= 1
         self._rebuild_ranges_ui()
 
     def _move_range(self, idx: int, direction: int) -> None:
@@ -722,10 +944,16 @@ class SeparadorWindow(PipelineWindow):
             self._ranges[idx], self._ranges[new_idx] = (
                 self._ranges[new_idx], self._ranges[idx]
             )
+            if self._selected_range_idx == idx:
+                self._selected_range_idx = new_idx
+            elif self._selected_range_idx == new_idx:
+                self._selected_range_idx = idx
         self._rebuild_ranges_ui()
 
     def _on_clear_ranges(self) -> None:
+        self._sync_names()
         self._ranges.clear()
+        self._selected_range_idx = None
         self._rebuild_ranges_ui()
 
     def _on_divide_equal(self) -> None:
@@ -739,6 +967,23 @@ class SeparadorWindow(PipelineWindow):
         if ok and n >= 2:
             self._sync_names()
             self._ranges = generate_equal_ranges(self._total_pages, n)
+            self._selected_range_idx = 0 if self._ranges else None
+            self._rebuild_ranges_ui()
+
+    def _on_chunk_by_size(self) -> None:
+        if self._total_pages == 0:
+            show_info(self, "Sin documento", "Carga primero un PDF.")
+            return
+        n, ok = ask_int(
+            self, "Cada N páginas", "¿Cuántas páginas debe tener cada archivo?",
+            value=min(10, self._total_pages),
+            minimum=1,
+            maximum=min(self._total_pages, 500),
+        )
+        if ok and n >= 1:
+            self._sync_names()
+            self._ranges = generate_fixed_size_ranges(self._total_pages, n)
+            self._selected_range_idx = 0 if self._ranges else None
             self._rebuild_ranges_ui()
 
     def _on_one_per_page(self) -> None:
@@ -756,6 +1001,45 @@ class SeparadorWindow(PipelineWindow):
                 return
         self._sync_names()
         self._ranges = generate_one_per_page(self._total_pages)
+        self._selected_range_idx = 0 if self._ranges else None
+        self._rebuild_ranges_ui()
+
+    def _on_fill_missing_ranges(self) -> None:
+        if self._total_pages == 0:
+            show_info(self, "Sin documento", "Carga primero un PDF.")
+            return
+        self._sync_names()
+        missing = generate_missing_ranges(self._ranges, self._total_pages)
+        if not missing:
+            show_info(self, "Sin faltantes", "Todas las páginas ya tienen un tramo asignado.")
+            return
+        first_new_idx = len(self._ranges)
+        self._ranges.extend(missing)
+        self._selected_range_idx = first_new_idx
+        self._rebuild_ranges_ui()
+        self._preview_range(first_new_idx)
+
+    def _on_add_visible_page(self, page_number: int) -> None:
+        if self._total_pages == 0:
+            return
+        self._sync_names()
+        page_number = max(1, min(page_number, self._total_pages))
+        self._ranges.append(SplitRange(
+            start=page_number,
+            end=page_number,
+            name=f"pag-{page_number:03d}",
+        ))
+        self._selected_range_idx = len(self._ranges) - 1
+        self._rebuild_ranges_ui()
+        self._preview_range(self._selected_range_idx)
+
+    def _preview_range(self, idx: int) -> None:
+        self._sync_names()
+        if not (0 <= idx < len(self._ranges)):
+            return
+        self._selected_range_idx = idx
+        self._sync_preview_ranges()
+        self._preview_panel.preview_range(idx, self._ranges[idx])
         self._rebuild_ranges_ui()
 
     # ------------------------------------------------------------------ #
@@ -910,6 +1194,18 @@ class SeparadorWindow(PipelineWindow):
     def _reset_session(self) -> None:
         self._document_workspace.clear()
         self._switch_section(0)
+
+    def _close_preview_document(self) -> None:
+        if hasattr(self, "_preview_panel"):
+            self._preview_panel.close_document()
+
+    def closeEvent(self, event) -> None:
+        self._close_preview_document()
+        super().closeEvent(event)
+
+    def deleteLater(self) -> None:  # type: ignore[override]
+        self._close_preview_document()
+        super().deleteLater()
 
     # ------------------------------------------------------------------ #
     # Drag & drop

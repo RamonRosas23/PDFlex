@@ -100,6 +100,11 @@ def _make_pdf_to_imgs():
     return PdfToImgsWindow
 
 
+def _make_scan_simulator():
+    from ui.scan_simulator.window import ScanSimulatorWindow
+    return ScanSimulatorWindow
+
+
 def _make_extraer_imagenes():
     from ui.extraer_imagenes.window import ExtraerImagenesWindow
     return ExtraerImagenesWindow
@@ -423,6 +428,27 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_pdf_to_imgs()(ctx),
         icon_letter="I",
         icon_name="tool-pdf-to-imgs",
+    ),
+    ToolDescriptor(
+        id="scan_simulator",
+        title="Simular escaneo",
+        tagline="Convierte PDFs limpios en escaneos realistas",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Rasteriza cada pagina y genera una copia PDF con apariencia de "
+            "escaneo fisico: borde de hoja, sombra, textura de papel, ruido, "
+            "bandas sutiles, rotacion y perspectiva controlada.\n\n"
+            "**Características:**\n"
+            "- Presets de escaner limpio, oficina, copia gris, archivo envejecido y hoja movida\n"
+            "- DPI, tono, compresion, margen, rotacion y perspectiva ajustables\n"
+            "- Variacion deterministica por semilla para lotes reproducibles\n"
+            "- Validacion posterior del PDF generado antes de mostrar resultados"
+        ),
+        accent_color="#38BDF8",
+        enabled=True,
+        window_factory=lambda ctx: _make_scan_simulator()(ctx),
+        icon_letter="E",
+        icon_name="tool-scan-simulator",
     ),
     ToolDescriptor(
         id="extraer_imagenes",

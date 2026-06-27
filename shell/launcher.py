@@ -59,6 +59,7 @@ EDITORIAL_ORDER: tuple[str, ...] = (
     "word_a_pdf",
     "pdf_to_word",
     "pdf_to_imgs",
+    "scan_simulator",
     "imgs_a_pdf",
     "extraer_imagenes",
     "quitar_fondo",
@@ -84,7 +85,7 @@ BASE_SECTIONS: tuple[ToolSection, ...] = (
         id="conversion",
         title="Conversion e imagen",
         subtitle="Word, imagenes, OCR, extraccion y clasificacion",
-        tool_ids=("word_a_pdf", "pdf_to_word", "pdf_to_imgs", "imgs_a_pdf", "extraer_imagenes", "quitar_fondo", "ocr", "clasificador"),
+        tool_ids=("word_a_pdf", "pdf_to_word", "pdf_to_imgs", "scan_simulator", "imgs_a_pdf", "extraer_imagenes", "quitar_fondo", "ocr", "clasificador"),
     ),
 )
 

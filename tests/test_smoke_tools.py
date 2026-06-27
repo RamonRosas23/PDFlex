@@ -62,6 +62,7 @@ TOOLS = [
     ("quitar_logos",    "ui.quitar_logos.window",    "QuitarLogosWindow"),
     ("redactor",        "ui.redactor.window",        "RedactorWindow"),
     ("reparador",       "ui.reparador.window",       "ReparadorWindow"),
+    ("scan_simulator",  "ui.scan_simulator.window",  "ScanSimulatorWindow"),
     ("separador",       "ui.separador.window",       "SeparadorWindow"),
     ("unir",            "ui.unir.window",            "UnirWindow"),
     ("word_a_pdf",      "ui.word_a_pdf.window",      "WordAPdfWindow"),

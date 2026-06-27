@@ -14,6 +14,8 @@ Ejemplos de uso:
 """
 from __future__ import annotations
 from dataclasses import dataclass
+import re
+import unicodedata
 from typing import List, Literal, Tuple
 
 
@@ -71,6 +73,64 @@ def parse_range_text(text: str) -> Tuple[int, int] | str:
         if n < 1:
             return "La página debe ser un número positivo (≥ 1)"
         return (n, n)
+
+
+def parse_range_list_text(text: str, total_pages: int = 0) -> List[Tuple[int, int]] | str:
+    """Parsea varios rangos separados por coma, punto y coma o espacios.
+
+    Acepta tokens como: ``1-3, 7, 10-final``, ``pares``, ``impares`` y
+    ``todo``. Retorna rangos 1-based inclusivos, conservando el orden de entrada.
+    """
+    raw = _normalize_token(text)
+    if not raw:
+        return "Ingresa al menos un rango: 1-11, 15 o 20-final"
+
+    raw = raw.replace(";", ",")
+    raw = re.sub(r"\s*-\s*", "-", raw)
+    parts = [part for part in re.split(r"[,\s]+", raw) if part]
+
+    if not parts:
+        return "Ingresa al menos un rango válido."
+
+    ranges: list[Tuple[int, int]] = []
+    for part in parts:
+        if part in {"todo", "todos", "todas", "all"}:
+            if total_pages <= 0:
+                return "Carga un documento para usar 'todo'."
+            ranges.append((1, total_pages))
+            continue
+        if part in {"pares", "par"}:
+            if total_pages <= 0:
+                return "Carga un documento para usar 'pares'."
+            ranges.extend((page, page) for page in range(2, total_pages + 1, 2))
+            continue
+        if part in {"impares", "impar"}:
+            if total_pages <= 0:
+                return "Carga un documento para usar 'impares'."
+            ranges.extend((page, page) for page in range(1, total_pages + 1, 2))
+            continue
+
+        if "-" in part:
+            start_raw, end_raw = [value.strip() for value in part.split("-", 1)]
+            if not start_raw or not end_raw:
+                return f"Completa el rango '{part}'."
+            start = _page_token_to_number(start_raw, total_pages)
+            end = _page_token_to_number(end_raw, total_pages)
+            if isinstance(start, str):
+                return start
+            if isinstance(end, str):
+                return end
+            if end < start:
+                return f"El fin ({end}) debe ser mayor o igual al inicio ({start})"
+            ranges.append((start, end))
+            continue
+
+        page = _page_token_to_number(part, total_pages)
+        if isinstance(page, str):
+            return page
+        ranges.append((page, page))
+
+    return ranges
 
 
 # ====================================================================== #
@@ -166,3 +226,78 @@ def generate_one_per_page(total_pages: int) -> List[SplitRange]:
         SplitRange(start=i + 1, end=i + 1, name=f"pag-{i+1:03d}")
         for i in range(total_pages)
     ]
+
+
+def generate_fixed_size_ranges(total_pages: int, chunk_size: int) -> List[SplitRange]:
+    """Crea tramos consecutivos de N páginas."""
+    if total_pages <= 0 or chunk_size <= 0:
+        return []
+    ranges: list[SplitRange] = []
+    start = 1
+    idx = 1
+    while start <= total_pages:
+        end = min(total_pages, start + chunk_size - 1)
+        ranges.append(SplitRange(start=start, end=end, name=f"bloque-{idx:02d}"))
+        start = end + 1
+        idx += 1
+    return ranges
+
+
+def generate_missing_ranges(
+    ranges: List[SplitRange],
+    total_pages: int,
+) -> List[SplitRange]:
+    """Devuelve tramos para las páginas que ningún rango cubre."""
+    if total_pages <= 0:
+        return []
+    covered: set[int] = set()
+    for rng in ranges:
+        start = max(1, rng.start)
+        end = min(total_pages, rng.end)
+        if start <= end:
+            covered.update(range(start, end + 1))
+
+    missing = sorted(set(range(1, total_pages + 1)) - covered)
+    if not missing:
+        return []
+
+    result: list[SplitRange] = []
+    start = prev = missing[0]
+    for page in missing[1:]:
+        if page == prev + 1:
+            prev = page
+            continue
+        result.append(SplitRange(start=start, end=prev, name=_missing_name(start, prev)))
+        start = prev = page
+    result.append(SplitRange(start=start, end=prev, name=_missing_name(start, prev)))
+    return result
+
+
+def _missing_name(start: int, end: int) -> str:
+    if start == end:
+        return f"faltante-{start:03d}"
+    return f"faltante-{start:03d}-{end:03d}"
+
+
+def _normalize_token(text: str) -> str:
+    text = text.strip().lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.replace("–", "-").replace("—", "-")
+
+
+def _page_token_to_number(token: str, total_pages: int) -> int | str:
+    token = _normalize_token(token)
+    if token in {"ultima", "ultimo", "final", "fin", "last", "$"}:
+        if total_pages <= 0:
+            return "Carga un documento para usar 'final'."
+        return total_pages
+    try:
+        page = int(token)
+    except ValueError:
+        return f"'{token}' no es una página válida."
+    if page < 1:
+        return "Las páginas deben ser números positivos (≥ 1)"
+    if total_pages > 0 and page > total_pages:
+        return f"La página {page} excede el total del documento ({total_pages})"
+    return page

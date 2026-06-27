@@ -3,8 +3,16 @@ from __future__ import annotations
 import fitz
 from PIL import Image, ImageDraw
 
-from core.signature_engine import SigPlacement, SignJob, SignatureEngine
-from core.signature_review import build_review_documents, export_review_documents
+from core.safe_zone import Placement
+from core.signature_engine import JobResult, SigPlacement, SignJob, SignatureEngine
+from core.signature_review import (
+    ReviewDocument,
+    ReviewSignatureInstance,
+    build_review_documents,
+    export_review_documents,
+    validate_review_document,
+    validate_review_page,
+)
 from core.variation import VariationConfig
 
 
@@ -57,10 +65,59 @@ def test_review_export_can_remove_generated_signature(tmp_path) -> None:
     assert _image_count(out_path) == 0
 
 
+def test_validate_review_page_only_updates_target_page(tmp_path) -> None:
+    pdf_path = _make_two_page_pdf(tmp_path / "source.pdf")
+    job = SignJob(pdf_path=str(pdf_path), output_path=str(pdf_path), signatures=[])
+    source_result = JobResult(job=job, output_path=str(pdf_path), success=True)
+    review = ReviewDocument(
+        source_path=str(pdf_path),
+        draft_path=str(pdf_path),
+        final_path=str(pdf_path),
+        source_result=source_result,
+        instances=[
+            ReviewSignatureInstance.from_page_result(
+                signature_path="firma-a.png",
+                signature_uid="sig-a",
+                signature_label="Firma A",
+                page_index=0,
+                placement=Placement(x=70, y=80, width=90, height=30, angle=0),
+                order=0,
+            ),
+            ReviewSignatureInstance.from_page_result(
+                signature_path="firma-b.png",
+                signature_uid="sig-b",
+                signature_label="Firma B",
+                page_index=1,
+                placement=Placement(x=70, y=80, width=90, height=30, angle=0),
+                order=0,
+            ),
+        ],
+    )
+
+    validate_review_page(review, 0)
+
+    assert "revisar texto" in review.instances[0].warnings
+    assert review.instances[1].warnings == ()
+
+    validate_review_document(review)
+
+    assert "revisar texto" in review.instances[1].warnings
+
+
 def _make_pdf(path):
     doc = fitz.open()
     page = doc.new_page(width=300, height=420)
     page.insert_text((40, 80), "Contrato base")
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _make_two_page_pdf(path):
+    doc = fitz.open()
+    for index in range(2):
+        page = doc.new_page(width=300, height=420)
+        page.insert_text((40, 80), f"Texto ocupado {index + 1}")
     doc.save(path)
     doc.close()
     return path

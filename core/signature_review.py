@@ -305,25 +305,47 @@ def validate_review_document(review: ReviewDocument) -> None:
         for page_index in sorted({inst.page_index for inst in review.instances}):
             if page_index < 0 or page_index >= doc.page_count:
                 continue
-            page = doc[page_index]
-            analysis = analyzer.analyze_page(doc, page_index)
-            occupied: list[fitz.Rect] = []
-            for inst in review.page_instances(page_index):
-                placement = fit_placement_inside_page(
-                    inst.to_placement(), page.rect.width, page.rect.height, margin=0.0
-                )
-                bbox = placement.rotated_bbox
-                collides = analysis.intersects_text(bbox, padding=4.0)
-                overlaps = _intersects_any(bbox, occupied, padding=4.0)
-                inst.collides_with_text = collides
-                inst.overlaps_signature = overlaps
-                inst.clean = not collides and not overlaps
-                inst.adjusted_to_page = inst.adjusted_to_page or placement.adjusted_to_page
-                inst.scaled_to_fit = inst.scaled_to_fit or placement.scaled_to_fit
-                inst.warnings = warnings_from_placement(inst.to_placement())
-                occupied.append(bbox)
+            _validate_review_page_with_doc(review, doc, page_index, analyzer)
     finally:
         doc.close()
+
+
+def validate_review_page(review: ReviewDocument, page_index: int) -> None:
+    try:
+        doc = _open_pdf_safe(review.source_path)
+    except Exception:
+        return
+
+    try:
+        if 0 <= page_index < doc.page_count:
+            _validate_review_page_with_doc(review, doc, page_index, PdfAnalyzer())
+    finally:
+        doc.close()
+
+
+def _validate_review_page_with_doc(
+    review: ReviewDocument,
+    doc: fitz.Document,
+    page_index: int,
+    analyzer: PdfAnalyzer,
+) -> None:
+    page = doc[page_index]
+    analysis = analyzer.analyze_page(doc, page_index)
+    occupied: list[fitz.Rect] = []
+    for inst in review.page_instances(page_index):
+        placement = fit_placement_inside_page(
+            inst.to_placement(), page.rect.width, page.rect.height, margin=0.0
+        )
+        bbox = placement.rotated_bbox
+        collides = analysis.intersects_text(bbox, padding=4.0)
+        overlaps = _intersects_any(bbox, occupied, padding=4.0)
+        inst.collides_with_text = collides
+        inst.overlaps_signature = overlaps
+        inst.clean = not collides and not overlaps
+        inst.adjusted_to_page = inst.adjusted_to_page or placement.adjusted_to_page
+        inst.scaled_to_fit = inst.scaled_to_fit or placement.scaled_to_fit
+        inst.warnings = warnings_from_placement(inst.to_placement())
+        occupied.append(bbox)
 
 
 def review_document_to_job_result(

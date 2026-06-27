@@ -58,6 +58,7 @@ from core.signature_review import (
     build_review_documents,
     export_review_documents,
     validate_review_document,
+    validate_review_page,
 )
 from core.output_paths import make_run_dir
 from core.output_naming import unique_output_path_for_source
@@ -490,6 +491,13 @@ class FirmadorWindow(PipelineWindow):
         self._review_worker: Optional[ReviewExportWorker] = None
         self._review_preview_pixmaps: Dict[Tuple[str, str, int, float], QPixmap] = {}
         self._last_variation_config: Optional[VariationConfig] = None
+        self._review_pending_validation_page: Optional[int] = None
+        self._review_validation_timer = QTimer(self)
+        self._review_validation_timer.setSingleShot(True)
+        self._review_validation_timer.setInterval(140)
+        self._review_validation_timer.timeout.connect(
+            self._validate_pending_review_page
+        )
 
         self._build_pages()
         self._refresh_saved_signature_list()
@@ -1421,6 +1429,7 @@ class FirmadorWindow(PipelineWindow):
         self._review_preview.pageChanged.connect(
             self._on_review_preview_page_changed
         )
+        self._review_preview.drag_finished.connect(self._flush_review_validation)
         center_l.addWidget(self._review_preview, 1)
 
         footer = QFrame()
@@ -3805,15 +3814,39 @@ class FirmadorWindow(PipelineWindow):
             page_width=page_w,
             page_height=page_h,
         )
-        validate_review_document(review)
+        self._schedule_review_page_validation(self._review_preview.current_page())
+        self._refresh_review_selection_label()
+        self._refresh_review_actions()
+
+    def _schedule_review_page_validation(self, page_index: int) -> None:
+        self._review_pending_validation_page = page_index
+        self._review_validation_timer.start()
+
+    def _flush_review_validation(self) -> None:
+        if self._review_validation_timer.isActive():
+            self._review_validation_timer.stop()
+        self._validate_pending_review_page()
+
+    def _validate_pending_review_page(self) -> None:
+        page_index = self._review_pending_validation_page
+        self._review_pending_validation_page = None
+        review = self._current_review_document()
+        if review is None or page_index is None:
+            return
+
+        validate_review_page(review, page_index)
+        current_page = self._review_preview.current_page()
         self._refresh_review_doc_item()
-        self._populate_review_pages(selected_page=self._review_preview.current_page())
-        self._refresh_review_page_signature_list()
+        self._populate_review_pages(selected_page=current_page)
+        if page_index == current_page:
+            self._refresh_review_page_signature_list()
         self._refresh_review_summary()
+        self._refresh_review_actions()
 
     def _on_review_preview_page_changed(self, cur: int, total: int) -> None:
         if self._review_loading:
             return
+        self._flush_review_validation()
         self._review_page_list.blockSignals(True)
         try:
             self._review_page_list.setCurrentRow(cur)
@@ -3892,12 +3925,13 @@ class FirmadorWindow(PipelineWindow):
 
     def _after_review_instance_change(self, *, reload_page: bool) -> None:
         review = self._current_review_document()
+        page_index = self._review_preview.current_page()
         if review is not None:
-            validate_review_document(review)
+            validate_review_page(review, page_index)
         self._refresh_review_doc_item()
-        self._populate_review_pages(selected_page=self._review_preview.current_page())
+        self._populate_review_pages(selected_page=page_index)
         if reload_page:
-            self._load_review_page(self._review_preview.current_page())
+            self._load_review_page(page_index)
         else:
             self._refresh_review_page_signature_list()
             self._refresh_review_summary()
@@ -3964,6 +3998,7 @@ class FirmadorWindow(PipelineWindow):
     def _on_review_finalize(self) -> None:
         if not self._review_documents or self._review_running:
             return
+        self._flush_review_validation()
         for review in self._review_documents:
             validate_review_document(review)
         warning_count = sum(review.warning_count for review in self._review_documents)
@@ -4050,6 +4085,7 @@ class FirmadorWindow(PipelineWindow):
 
     def _reset_session(self) -> None:
         self._stop_review_worker()
+        self._review_validation_timer.stop()
         self.results_viewer.clear_results()
         self._send_btn.set_output_paths([])
         self._draft_results = []
@@ -4057,6 +4093,7 @@ class FirmadorWindow(PipelineWindow):
         self._review_documents.clear()
         self._review_doc_idx = -1
         self._review_active_instance_id = None
+        self._review_pending_validation_page = None
         self._review_preview_pixmaps.clear()
         self._last_variation_config = None
         if hasattr(self, "_review_doc_list"):

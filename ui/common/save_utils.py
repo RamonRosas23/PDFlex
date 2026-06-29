@@ -1,8 +1,10 @@
 """Helpers for saving generated results outside PDFlex temp folders."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import shutil
+import uuid
 from typing import Iterable, Sequence
 
 from PyQt6.QtWidgets import QWidget
@@ -15,7 +17,36 @@ from ui.common.dialogs import (
     show_success,
     show_warning,
 )
-from ui.common.file_dialogs import get_existing_directory
+from ui.common.file_dialogs import get_existing_directory, get_save_file_name
+
+
+def save_file_as(
+    parent: QWidget,
+    source: str | Path,
+    *,
+    title: str = "Guardar como",
+    suggested_path: str | Path | None = None,
+    file_filter: str = "Todos los archivos (*)",
+    success_message: bool = False,
+) -> bool:
+    src = Path(source)
+    if not src.exists():
+        show_info(parent, title, "No hay archivo disponible para guardar.")
+        return False
+
+    start = Path(suggested_path) if suggested_path is not None else Path.home() / src.name
+    dest, _ = get_save_file_name(parent, title, str(start), file_filter)
+    if not dest:
+        return False
+
+    ok, error = _copy_file_safely(src, Path(dest))
+    if not ok:
+        show_warning(parent, title, _save_error_message(Path(dest)), details=error)
+        return False
+
+    if success_message:
+        show_success(parent, title, f"Archivo guardado:\n{Path(dest)}")
+    return True
 
 
 def save_files_as_batch(
@@ -61,11 +92,11 @@ def save_files_as_batch(
         if dest.exists() and not replace_existing:
             skipped += 1
             continue
-        try:
-            shutil.copy2(str(src), str(dest))
+        ok, error = _copy_file_safely(src, dest)
+        if ok:
             copied += 1
-        except Exception as exc:
-            errors.append(f"{src.name}: {exc}")
+        else:
+            errors.append(f"{src.name}: {error}")
 
     if errors:
         preview = "\n".join(errors[:5])
@@ -150,11 +181,11 @@ def save_grouped_files_as_batch(
             if dest.exists() and not replace_existing:
                 skipped += 1
                 continue
-            try:
-                shutil.copy2(str(src), str(dest))
+            ok, error = _copy_file_safely(src, dest)
+            if ok:
                 copied += 1
-            except Exception as exc:
-                errors.append(f"{src.name}: {exc}")
+            else:
+                errors.append(f"{src.name}: {error}")
 
     folder_word = "subcarpeta" if n_folders == 1 else "subcarpetas"
     msg = f"Se guardaron {copied} imagen(es) en {n_folders} {folder_word}."
@@ -195,4 +226,43 @@ def _ask_conflict_strategy(parent: QWidget, count: int) -> str:
         tone="question",
         default_key="replace",
         cancel_key="cancel",
+    )
+
+
+def _copy_file_safely(src: Path, dest: Path) -> tuple[bool, str]:
+    try:
+        src_resolved = src.resolve()
+        dest_resolved = dest.resolve()
+        if src_resolved == dest_resolved:
+            return True, ""
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(
+            f".{dest.name}.pdflex-{uuid.uuid4().hex[:8]}.tmp"
+        )
+        try:
+            shutil.copy2(str(src), str(tmp))
+            os.replace(str(tmp), str(dest))
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except Exception:
+                pass
+        return True, ""
+    except PermissionError as exc:
+        return False, (
+            "No se pudo reemplazar el archivo. Puede estar abierto en otra "
+            f"aplicacion o no tienes permisos de escritura.\n{exc}"
+        )
+    except OSError as exc:
+        return False, str(exc)
+
+
+def _save_error_message(dest: Path) -> str:
+    return (
+        "No se pudo guardar el archivo.\n\n"
+        "Si estas reemplazando un archivo abierto, cierralo e intenta de nuevo, "
+        "o elige otro nombre."
+        f"\n\nDestino:\n{dest}"
     )

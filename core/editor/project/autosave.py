@@ -22,6 +22,7 @@ class Autosaver:
         self._dir = directory or autosave_dir()
         self._last_save = 0.0
         self._dirty = False
+        self.last_error = ""
 
     def mark_dirty(self) -> None:
         self._dirty = True
@@ -34,7 +35,13 @@ class Autosaver:
         if not self._dirty or (time.monotonic() - self._last_save) < self._interval:
             return None
         path = self.autosave_path(doc)
-        ProjectStore().save(doc, path)
+        try:
+            ProjectStore().save(doc, path)
+        except Exception as exc:
+            self.last_error = str(exc)
+            self._last_save = time.monotonic()
+            return None
+        self.last_error = ""
         self._last_save = time.monotonic()
         self._dirty = False
         return path

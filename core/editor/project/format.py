@@ -2,6 +2,7 @@
 from __future__ import annotations
 import json
 import os
+import uuid
 import zipfile
 from dataclasses import asdict
 from pathlib import Path
@@ -18,22 +19,30 @@ SCHEMA_VERSION = 1
 class ProjectStore:
     def save(self, doc: EditorDocument, path: Path) -> None:
         path = Path(path)
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
-            z.writestr("manifest.json", json.dumps({
-                "schema_version": SCHEMA_VERSION, "app": "PDFlex Studio"}))
-            z.writestr("document.json", json.dumps({
-                "source_path": doc.source_path,
-                "source_sha256": doc.source_sha256,
-                "pages": [asdict(g) for g in doc.page_geometries]}))
-            z.writestr("elements.json", json.dumps({
-                str(page): [el.to_dict() for el in els]
-                for page, els in doc.elements_by_page.items()}))
-            z.writestr("rules.json", json.dumps([r.to_dict() for r in doc.rules]))
-            z.writestr("layers.json", json.dumps(doc.layers.to_dict()))
-            for asset_id, data in doc.assets.items():
-                z.writestr(f"assets/{asset_id}", data)
-        os.replace(tmp, path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.pdflex-{uuid.uuid4().hex[:8]}.tmp")
+        try:
+            with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as z:
+                z.writestr("manifest.json", json.dumps({
+                    "schema_version": SCHEMA_VERSION, "app": "PDFlex Studio"}))
+                z.writestr("document.json", json.dumps({
+                    "source_path": doc.source_path,
+                    "source_sha256": doc.source_sha256,
+                    "pages": [asdict(g) for g in doc.page_geometries]}))
+                z.writestr("elements.json", json.dumps({
+                    str(page): [el.to_dict() for el in els]
+                    for page, els in doc.elements_by_page.items()}))
+                z.writestr("rules.json", json.dumps([r.to_dict() for r in doc.rules]))
+                z.writestr("layers.json", json.dumps(doc.layers.to_dict()))
+                for asset_id, data in doc.assets.items():
+                    z.writestr(f"assets/{asset_id}", data)
+            os.replace(tmp, path)
+        finally:
+            try:
+                if tmp.exists():
+                    tmp.unlink()
+            except OSError:
+                pass
 
     def load(self, path: Path) -> EditorDocument:
         with zipfile.ZipFile(path) as z:

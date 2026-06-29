@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
 )
 from PIL import Image, ImageDraw
 
-from ui.common.file_dialogs import get_save_file_name
 from ui.common.clipboard_utils import copy_files_to_clipboard
 from ui.common.icons import icon, set_button_icon
 from ui.common.result_ui import (
@@ -23,7 +22,7 @@ from ui.common.result_ui import (
     format_file_size,
     make_result_list_item,
 )
-from ui.common.save_utils import save_files_as_batch, save_grouped_files_as_batch
+from ui.common.save_utils import save_file_as, save_files_as_batch, save_grouped_files_as_batch
 
 
 @dataclass
@@ -583,15 +582,13 @@ class ImageResultsViewer(QWidget):
             ".webp": "WebP (*.webp)",
         }
         file_filter = filter_map.get(suffix, f"Imagen (*{suffix})")
-        new_path, _ = get_save_file_name(
+        save_file_as(
             self,
-            "Guardar como",
-            str(Path(src_dir) / Path(out).name),
-            file_filter,
+            out,
+            title="Guardar como",
+            suggested_path=Path(src_dir) / Path(out).name,
+            file_filter=file_filter,
         )
-        if new_path:
-            import shutil
-            shutil.copy2(out, new_path)
 
     def _on_save_all(self) -> None:
         if self._grouped:

@@ -4,6 +4,7 @@ import zipfile
 
 import pytest
 
+from core.editor.project import format as project_format
 from core.editor.geometry import PageGeometry
 from core.editor.model.document_state import EditorDocument
 from core.editor.model.elements import ImageElement, TextElement
@@ -86,6 +87,21 @@ def test_atomic_save_never_leaves_partial_file(tmp_path):
     assert not list(tmp_path.glob("*.tmp*"))
 
 
+def test_project_save_cleans_temp_when_replace_fails(tmp_path, monkeypatch):
+    path = tmp_path / "p.flexproj"
+    ProjectStore().save(_doc("uno.pdf"), path)
+
+    def fail_replace(_src, _dst):
+        raise PermissionError("archivo abierto")
+
+    monkeypatch.setattr(project_format.os, "replace", fail_replace)
+    with pytest.raises(PermissionError):
+        ProjectStore().save(_doc("dos.pdf"), path)
+
+    assert ProjectStore().load(path).source_path == "uno.pdf"
+    assert not list(tmp_path.glob("*.pdflex-*.tmp"))
+
+
 def test_autosaver_respects_dirty_and_interval(tmp_path):
     from core.editor.project.autosave import Autosaver
     doc = _doc()
@@ -98,3 +114,19 @@ def test_autosaver_respects_dirty_and_interval(tmp_path):
     saver.mark_dirty()
     saver.discard(doc)
     assert saver.pending_recoveries() == []
+
+
+def test_autosaver_keeps_dirty_when_save_fails(tmp_path, monkeypatch):
+    from core.editor.project.autosave import Autosaver
+    doc = _doc()
+    saver = Autosaver(interval_s=0.0, directory=tmp_path)
+
+    def fail_save(self, doc, path):
+        raise PermissionError("sin permisos")
+
+    monkeypatch.setattr(ProjectStore, "save", fail_save)
+    saver.mark_dirty()
+
+    assert saver.maybe_autosave(doc) is None
+    assert saver.last_error == "sin permisos"
+    assert saver._dirty

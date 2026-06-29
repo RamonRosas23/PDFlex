@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
 from ui.styles import COLORS as _COLORS
 
 from ui.common.clipboard_utils import copy_files_to_clipboard
-from ui.common.save_utils import save_files_as_batch
+from ui.common.save_utils import save_file_as, save_files_as_batch
 from ui.common.result_ui import (
     ElidedLabel,
     ResultsStatBar,
@@ -33,7 +33,6 @@ from ui.common.result_ui import (
     format_file_size,
     make_result_list_item,
 )
-from ui.common.file_dialogs import get_save_file_name
 from ui.common.icons import icon, set_button_icon
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog
 
@@ -394,14 +393,13 @@ class GenericPdfViewer(QWidget):
             return
         row = self.doc_list.currentRow()
         src_dir = self._source_dirs.get(row) or self._source_dir_from(self._current_result)
-        new_path, _ = get_save_file_name(
-            self, "Guardar como",
-            str(Path(src_dir) / Path(out).name),
-            "PDF (*.pdf)",
+        save_file_as(
+            self,
+            out,
+            title="Guardar como",
+            suggested_path=Path(src_dir) / Path(out).name,
+            file_filter="PDF (*.pdf)",
         )
-        if new_path:
-            import shutil
-            shutil.copy2(out, new_path)
 
     def _on_save_all(self) -> None:
         start_dir = Path.home()

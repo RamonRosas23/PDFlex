@@ -34,12 +34,11 @@ from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
-from ui.common.save_utils import save_files_as_batch
+from ui.common.save_utils import save_file_as, save_files_as_batch
 from ui.common.result_ui import ElidedLabel, configure_result_list, format_file_size
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import show_error, show_info, show_success, show_warning
-from ui.common.file_dialogs import get_save_file_name
 from ui.common.icons import icon, set_button_icon
 
 
@@ -561,13 +560,13 @@ class TextResultsViewer(QWidget):
         if not src.exists():
             return
         start_dir = str(Path(self._current.job.pdf_path).parent)
-        dest, _ = get_save_file_name(
-            self, "Guardar DOCX como",
-            str(Path(start_dir) / src.name),
-            "Word (*.docx)",
+        save_file_as(
+            self,
+            src,
+            title="Guardar DOCX como",
+            suggested_path=Path(start_dir) / src.name,
+            file_filter="Word (*.docx)",
         )
-        if dest:
-            shutil.copy2(str(src), dest)
 
     def _save_txt_as(self) -> None:
         if not (self._current and self._current.txt_path):
@@ -576,13 +575,13 @@ class TextResultsViewer(QWidget):
         if not src.exists():
             return
         start_dir = str(Path(self._current.job.pdf_path).parent)
-        dest, _ = get_save_file_name(
-            self, "Guardar TXT como",
-            str(Path(start_dir) / src.name),
-            "Texto (*.txt)",
+        save_file_as(
+            self,
+            src,
+            title="Guardar TXT como",
+            suggested_path=Path(start_dir) / src.name,
+            file_filter="Texto (*.txt)",
         )
-        if dest:
-            shutil.copy2(str(src), dest)
 
     def _save_all_as(self) -> None:
         start_dir = Path.home()

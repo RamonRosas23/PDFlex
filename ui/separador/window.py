@@ -29,6 +29,7 @@ from core.split_ranges import (
 from core.splitter_engine import SplitterJob, SplitterEngine, SplitterJobResult
 from core.output_paths import make_run_dir
 from core.output_naming import output_filename_for_source
+from core.media_conversion import DOCUMENT_IMPORT_EXTENSIONS, DOCUMENT_IMPORT_FILTER
 from shell.context import ShellContext
 from shell.transfer import ToolTransfer
 from ui.common.cards import make_card, card_layout, make_page_header
@@ -89,7 +90,7 @@ class SplitterWorker(QObject):
 
 class SeparadorWindow(PipelineWindow):
 
-    SUPPORTED_EXTS = (".pdf", ".doc", ".docx")
+    SUPPORTED_EXTS = tuple(DOCUMENT_IMPORT_EXTENSIONS)
 
     SECTIONS = [
         ("01", "Documento",  "Carga el PDF a separar"),
@@ -154,11 +155,7 @@ class SeparadorWindow(PipelineWindow):
             self.ctx,
             single_file=True,
             show_thumbnails=False,
-            file_filter=(
-                "PDF y Word (*.pdf *.doc *.docx);;"
-                "PDF (*.pdf);;"
-                "Word (*.doc *.docx)"
-            ),
+            file_filter=DOCUMENT_IMPORT_FILTER,
         )
         self._document_workspace.files_changed.connect(self._on_workspace_files_changed)
         outer.addWidget(self._document_workspace)
@@ -530,7 +527,7 @@ class SeparadorWindow(PipelineWindow):
             show_info(
                 self,
                 "Archivo no compatible",
-                "Selecciona un archivo PDF, DOC o DOCX.",
+                "Selecciona un archivo PDF, Word o una imagen.",
             )
 
     def _on_workspace_files_changed(self, paths: List[str]) -> None:

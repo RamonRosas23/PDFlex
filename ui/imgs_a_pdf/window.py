@@ -3,7 +3,7 @@
 Pipeline:
     01 Imágenes  →  02 Opciones  →  03 Procesar  →  04 Resultados
 
-Formatos soportados: PNG, JPG/JPEG, WEBP, BMP, TIFF, GIF (primer fotograma).
+Formatos soportados: imágenes, PDF y Word (Word requiere Microsoft Office).
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -13,7 +13,7 @@ from typing import List, Optional, Tuple
 import fitz
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from PyQt6.QtCore import (
-    Qt, QObject, QThread, pyqtSignal, QSize, QEvent,
+    Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent,
 )
 from PyQt6.QtGui import (
     QPixmap, QImage, QIcon, QColor,
@@ -28,13 +28,22 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QUrl
 
 from shell.context import ShellContext
+from core.media_conversion import (
+    IMAGE_EXTENSIONS as SHARED_IMAGE_EXTENSIONS,
+    IMAGE_IMPORT_FILTER,
+    accepted_image_paths,
+    image_paths,
+    pdf_paths,
+    pdfs_to_images_exact,
+    word_paths,
+)
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.process_step import ProcessStep
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.send_to_tool import SendToToolButton
-from ui.common.dialogs import show_error, show_warning
+from ui.common.dialogs import show_error, show_info, show_warning
 from ui.common.file_workspace import FileWorkspace
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
@@ -43,14 +52,8 @@ from ui.common.result_ui import format_file_size
 
 # ── Constantes ───────────────────────────────────────────────────────── #
 
-IMAGE_FILTER = (
-    "Imágenes (*.png *.jpg *.jpeg *.webp *.bmp *.tiff *.tif *.gif);;"
-    "PNG (*.png);;"
-    "JPEG (*.jpg *.jpeg);;"
-    "WebP (*.webp);;"
-    "Todos los archivos (*)"
-)
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif"}
+IMAGE_FILTER = IMAGE_IMPORT_FILTER + ";;Todos los archivos (*)"
+IMAGE_EXTS = set(SHARED_IMAGE_EXTENSIONS)
 
 # Tamaños de página en puntos (72 pt = 1 pulgada)
 PAGE_SIZES: dict[str, Tuple[float, float]] = {
@@ -438,13 +441,24 @@ class ImageListCard(QFrame):
 
     files_changed = pyqtSignal(list)   # list[str]
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent=None, *, accepted_exts=None, ctx=None) -> None:
         super().__init__(parent)
         self.setProperty("class", "Card")
+        self._ctx = ctx
+        self._accepted_exts = {
+            ext.lower() for ext in (accepted_exts or IMAGE_EXTS)
+        }
         self._paths: List[str] = []
         self._path_set: set = set()
         self._thumb_threads: list = []
+        self._thumb_workers: dict = {}
+        self._conv_thread: Optional[QThread] = None
+        self._conv_worker = None
+        self._conv_dlg = None
         self._build()
+
+    def set_conversion_context(self, ctx) -> None:
+        self._ctx = ctx
 
     def _build(self) -> None:
         layout = QVBoxLayout(self)
@@ -455,7 +469,7 @@ class ImageListCard(QFrame):
         row = QHBoxLayout()
         row.setSpacing(8)
 
-        add_btn = QPushButton("Agregar imágenes")
+        add_btn = QPushButton("Agregar archivos")
         add_btn.setProperty("class", "Primary")
         add_btn.clicked.connect(self._on_browse)
         row.addWidget(add_btn)
@@ -562,10 +576,20 @@ class ImageListCard(QFrame):
         return result
 
     def add_paths(self, raw_paths: List[str]) -> None:
+        accepted = accepted_image_paths(raw_paths)
+        self._add_image_paths(image_paths(accepted))
+        pdfs = pdf_paths(accepted)
+        if pdfs:
+            self._handle_pdf_files(pdfs)
+        words = word_paths(accepted)
+        if words:
+            self._handle_word_files(words)
+
+    def _add_image_paths(self, raw_paths: List[str]) -> None:
         changed = False
         for p in raw_paths:
             path = Path(p)
-            if path.suffix.lower() not in IMAGE_EXTS or not path.is_file():
+            if path.suffix.lower() not in self._accepted_exts or not path.is_file():
                 continue
             if p not in self._path_set:
                 self._path_set.add(p)
@@ -582,6 +606,60 @@ class ImageListCard(QFrame):
             self._update_count()
             self._update_remove_btn()
             self.files_changed.emit(self.paths())
+
+    def _handle_pdf_files(self, paths: List[str]) -> None:
+        try:
+            converted = pdfs_to_images_exact(paths)
+        except Exception as exc:
+            show_error(
+                self.window(),
+                "No se pudieron convertir los PDFs",
+                str(exc),
+            )
+            return
+        if converted:
+            self._add_image_paths(converted)
+
+    def _handle_word_files(self, paths: List[str]) -> None:
+        ctx = self._ctx
+        converter = getattr(ctx, "word_converter", None)
+        if converter is None or not converter.is_available():
+            show_info(
+                self.window(),
+                "Microsoft Office requerido",
+                "Para convertir archivos Word a imágenes se necesita Microsoft Office.\n"
+                "Los archivos .doc/.docx han sido omitidos.",
+            )
+            return
+
+        from shell.word_to_pdf import WordConvertWorker
+        from ui.common.word_convert_dialog import WordConvertDialog
+
+        self._conv_dlg = WordConvertDialog(self.window(), paths)
+        worker = WordConvertWorker(converter, paths, make_run_dir("converted"))
+        self._conv_thread = RunnerThread(worker.run, self.window())
+        self._conv_worker = worker
+        worker.progress.connect(self._conv_dlg.on_progress)
+        worker.finished.connect(self._on_word_done)
+        worker.finished.connect(self._conv_dlg.on_finished)
+        worker.error.connect(self._on_word_error)
+        worker.error.connect(self._conv_dlg.on_error)
+        worker.finished.connect(self._conv_thread.quit)
+        worker.error.connect(self._conv_thread.quit)
+        self._conv_thread.finished.connect(worker.deleteLater)
+        self._conv_thread.finished.connect(self._conv_thread.deleteLater)
+        self._conv_dlg.cancel_requested.connect(worker.cancel)
+        QTimer.singleShot(0, self._conv_thread.start)
+        self._conv_dlg.exec()
+
+    def _on_word_done(self, converted_pdfs: List[str]) -> None:
+        self._conv_thread = None
+        self._conv_worker = None
+        self._handle_pdf_files(converted_pdfs)
+
+    def _on_word_error(self, msg: str) -> None:
+        self._conv_thread = None
+        self._conv_worker = None
 
     def clear(self) -> None:
         self._paths.clear()
@@ -600,7 +678,7 @@ class ImageListCard(QFrame):
 
     def _on_browse(self) -> None:
         files, _ = get_open_file_names(
-            self.window(), "Seleccionar imágenes", "", IMAGE_FILTER
+            self.window(), "Seleccionar imágenes, PDF o Word", "", IMAGE_FILTER
         )
         if files:
             self.add_paths(files)
@@ -614,6 +692,7 @@ class ImageListCard(QFrame):
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda t=thread: self._cleanup_img_thumb_job(t))
         self._thumb_threads.append(thread)
+        self._thumb_workers[thread] = loader
         thread.start()
 
     def _apply_img_thumb(self, item: "QListWidgetItem", qimage) -> None:
@@ -627,10 +706,21 @@ class ImageListCard(QFrame):
             pass  # Item eliminado mientras cargaba
 
     def _cleanup_img_thumb_job(self, thread: "QThread") -> None:
+        self._thumb_workers.pop(thread, None)
         try:
             self._thumb_threads.remove(thread)
         except ValueError:
             pass
+
+    def _wait_for_img_thumb_jobs(self) -> None:
+        for thread in list(self._thumb_threads):
+            if thread.isRunning():
+                thread.wait(3000)
+            self._cleanup_img_thumb_job(thread)
+
+    def deleteLater(self) -> None:  # type: ignore[override]
+        self._wait_for_img_thumb_jobs()
+        super().deleteLater()
 
 
 # ====================================================================== #
@@ -685,7 +775,7 @@ class ImgsAPdfWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Imágenes",
-            "Agrega las imágenes que quieres convertir a PDF. "
+            "Agrega imágenes, PDF o Word; los documentos se convertirán a imágenes. "
             "El orden aquí es el orden de las páginas. "
             "Puedes reordenar arrastrando filas o eliminar con Supr.",
         ))
@@ -1019,15 +1109,11 @@ class ImgsAPdfWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def set_inputs(self, paths: List[str]) -> None:
-        imgs = [p for p in paths if Path(p).suffix.lower() in IMAGE_EXTS]
-        if imgs:
-            self._img_card.add_paths(imgs)
+        self._img_card.add_paths(paths)
         self._switch_section(0)
 
     def handle_drop(self, paths: List[str]) -> None:
-        imgs = [p for p in paths if Path(p).suffix.lower() in IMAGE_EXTS]
-        if imgs:
-            self._img_card.add_paths(imgs)
+        self._img_card.add_paths(paths)
 
     # ------------------------------------------------------------------ #
     # Eventos de lista
@@ -1218,6 +1304,4 @@ class ImgsAPdfWindow(PipelineWindow):
 
     def dropEvent(self, event: QDropEvent) -> None:
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
-        imgs = [p for p in paths if Path(p).suffix.lower() in IMAGE_EXTS]
-        if imgs:
-            self._img_card.add_paths(imgs)
+        self._img_card.add_paths(paths)

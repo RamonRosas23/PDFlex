@@ -8,6 +8,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
+from PIL import Image
 from PyQt6.QtWidgets import QApplication
 
 from core.membrete_library import add_letterhead_to_library
@@ -135,6 +136,24 @@ class MembretadoWindowTests(unittest.TestCase):
         finally:
             window.deleteLater()
             self.app.processEvents()
+
+    def test_image_letterhead_is_converted_to_exact_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "membrete.png"
+            Image.new("RGB", (160, 90), "white").save(image_path)
+            window = MembretadoWindow(self._make_ctx())
+            try:
+                window._load_membrete_input(str(image_path))
+                self._wait_for_membrete_load(window)
+
+                self.assertIsNotNone(window._lh_path)
+                self.assertEqual(window._lh_source_name, "membrete.png")
+                self.assertEqual(round(window._lh_page_w_pt), 160)
+                self.assertEqual(round(window._lh_page_h_pt), 90)
+                self.assertEqual(Path(window._lh_path).suffix.lower(), ".pdf")
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
 
     def test_drop_on_letterhead_step_uses_first_pdf_as_letterhead(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

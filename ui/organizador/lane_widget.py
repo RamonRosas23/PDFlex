@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 )
 
 from core.page_organizer_engine import PageRef
+from core.media_conversion import DOCUMENT_IMPORT_EXTENSIONS, DOCUMENT_IMPORT_FILTER
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
 from ui.organizador.page_mime import MIME_TYPE, decode_drag, encode_drag
@@ -27,8 +28,8 @@ from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailKey, ThumbnailWo
 THUMB_W = 116
 THUMB_H = 150
 STRIP_HEIGHT = 206
-PDF_WORD_FILTER = "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)"
-ACCEPTED_EXTS = {".pdf", ".doc", ".docx"}
+PDF_WORD_FILTER = DOCUMENT_IMPORT_FILTER
+ACCEPTED_EXTS = set(DOCUMENT_IMPORT_EXTENSIONS)
 
 LANE_COLORS: List[QColor] = [
     QColor(94, 106, 210),   # índigo
@@ -504,7 +505,7 @@ class DocLane(QFrame):
         add_btn = QPushButton("+ Agregar")
         add_btn.setProperty("class", "Ghost")
         add_btn.setFixedHeight(26)
-        add_btn.setToolTip("Agregar páginas de PDF o Word después de la selección")
+        add_btn.setToolTip("Agregar páginas de PDF, Word o imágenes después de la selección")
         add_btn.clicked.connect(self._on_add_pages)
         h.addWidget(add_btn)
         h.addSpacing(4)
@@ -1061,7 +1062,7 @@ class DocLane(QFrame):
     def _on_add_pages(self) -> None:
         files, _ = get_open_file_names(
             self.window(),
-            "Agregar PDF o Word",
+            "Agregar PDF, Word o imágenes",
             "",
             PDF_WORD_FILTER,
         )

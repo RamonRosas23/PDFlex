@@ -9,6 +9,7 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
+from PIL import Image
 from PyQt6.QtCore import QThread
 from PyQt6.QtWidgets import QApplication
 
@@ -46,6 +47,7 @@ class OrganizadorWindowTests(unittest.TestCase):
         self.assertEqual(tool.title, "Organizador visual")
         self.assertIn(".pdf", tool.input_extensions)
         self.assertIn(".docx", tool.input_extensions)
+        self.assertIn(".png", tool.input_extensions)
 
     def test_window_loads_pdfs_into_separate_lanes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -61,6 +63,29 @@ class OrganizadorWindowTests(unittest.TestCase):
                 window.set_inputs([str(pdf_path)])
                 self.assertEqual(window._lane_container.total_lanes(), 1)
                 self.assertEqual(window._lane_container.total_pages(), 2)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_window_converts_images_into_pdf_lanes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = Path(tmp) / "scan.png"
+            Image.new("RGB", (90, 45), "white").save(image_path)
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window.set_inputs([str(image_path)])
+
+                self.assertEqual(window._lane_container.total_lanes(), 1)
+                self.assertEqual(window._lane_container.total_pages(), 1)
+                ref = window._lane_container.ordered_page_refs()[0]
+                self.assertEqual(Path(ref.source_path).suffix.lower(), ".pdf")
+                doc = fitz.open(ref.source_path)
+                try:
+                    self.assertEqual(round(doc[0].rect.width), 90)
+                    self.assertEqual(round(doc[0].rect.height), 45)
+                finally:
+                    doc.close()
             finally:
                 window.deleteLater()
                 self.app.processEvents()

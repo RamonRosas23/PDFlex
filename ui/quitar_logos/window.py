@@ -29,6 +29,7 @@ from core.logo_removal_engine import (
     SUPPORTED_LOGO_EXTENSIONS,
     parse_page_selection,
 )
+from core.media_conversion import DOCUMENT_EXTENSIONS
 from core.output_naming import unique_output_path_for_source
 from core.output_paths import make_run_dir
 from shell.context import ShellContext
@@ -47,7 +48,10 @@ from ui.imgs_a_pdf.window import ImageListCard
 
 
 LOGO_FILTER = (
+    "Logos, PDF y Word (*.png *.jpg *.jpeg *.webp *.pdf *.doc *.docx);;"
     "Logos (*.png *.jpg *.jpeg *.webp);;"
+    "PDF (*.pdf);;"
+    "Word (*.doc *.docx);;"
     "PNG (*.png);;"
     "JPEG (*.jpg *.jpeg);;"
     "WebP (*.webp)"
@@ -57,19 +61,17 @@ LOGO_FILTER = (
 class LogoListCard(ImageListCard):
     """Image list restricted to logo formats supported by the engine."""
 
-    def add_paths(self, raw_paths: List[str]) -> None:
-        super().add_paths(
-            [
-                path
-                for path in raw_paths
-                if Path(path).suffix.lower() in SUPPORTED_LOGO_EXTENSIONS
-            ]
+    def __init__(self, parent=None, *, ctx=None) -> None:
+        super().__init__(
+            parent,
+            accepted_exts=SUPPORTED_LOGO_EXTENSIONS,
+            ctx=ctx,
         )
 
     def _on_browse(self) -> None:
         files, _ = get_open_file_names(
             self.window(),
-            "Seleccionar imágenes de logo",
+            "Seleccionar logos, PDF o Word",
             "",
             LOGO_FILTER,
         )
@@ -156,7 +158,7 @@ class LogoPreviewWorker(QObject):
 class QuitarLogosWindow(PipelineWindow):
     SECTIONS = [
         ("01", "Documentos", "Carga los PDFs a limpiar"),
-        ("02", "Logos", "Agrega PNG, JPG o WebP de referencia"),
+        ("02", "Logos", "Agrega logos desde imagen, PDF o Word"),
         ("03", "Detección", "Configura y revisa coincidencias"),
         ("04", "Procesar", "Elimina logos por lote"),
         ("05", "Resultados", "Revisa los PDFs generados"),
@@ -224,11 +226,11 @@ class QuitarLogosWindow(PipelineWindow):
         outer.addLayout(
             make_page_header(
                 "Logos de referencia",
-                "Agrega cada imagen que quieras localizar. Se aceptan PNG, JPG/JPEG y WebP.",
+                "Agrega cada logo que quieras localizar. Se aceptan imágenes, PDF y Word.",
             )
         )
 
-        self._logo_card = LogoListCard()
+        self._logo_card = LogoListCard(ctx=self.ctx)
         self._logo_card.files_changed.connect(self._on_logos_changed)
         outer.addWidget(self._logo_card, 1)
 
@@ -479,18 +481,39 @@ class QuitarLogosWindow(PipelineWindow):
             self._refresh_summary()
 
     def set_inputs(self, paths: List[str]) -> None:
-        self._docs_card.add_paths([path for path in paths if path.lower().endswith(".pdf")])
-        self._switch_section(0)
-
-    def handle_drop(self, paths: List[str]) -> None:
-        pdfs = [path for path in paths if path.lower().endswith(".pdf")]
+        docs = [
+            path
+            for path in paths
+            if Path(path).suffix.lower() in DOCUMENT_EXTENSIONS
+        ]
         logos = [
             path
             for path in paths
             if Path(path).suffix.lower() in SUPPORTED_LOGO_EXTENSIONS
         ]
-        if pdfs:
-            self._docs_card.add_paths(pdfs)
+        if docs:
+            self._docs_card.add_paths(docs)
+        if logos:
+            self._logo_card.add_paths(logos)
+        self._switch_section(0)
+
+    def handle_drop(self, paths: List[str]) -> None:
+        if self.stack.currentIndex() == 1:
+            self._logo_card.add_paths(paths)
+            return
+
+        docs = [
+            path
+            for path in paths
+            if Path(path).suffix.lower() in DOCUMENT_EXTENSIONS
+        ]
+        logos = [
+            path
+            for path in paths
+            if Path(path).suffix.lower() in SUPPORTED_LOGO_EXTENSIONS
+        ]
+        if docs:
+            self._docs_card.add_paths(docs)
         if logos:
             self._logo_card.add_paths(logos)
 
@@ -569,7 +592,7 @@ class QuitarLogosWindow(PipelineWindow):
         if self._docs_card.is_empty():
             return "Agrega al menos un PDF."
         if self._logo_card.count() == 0:
-            return "Agrega al menos una imagen de logo PNG, JPG o WebP."
+            return "Agrega al menos un logo desde imagen, PDF o Word."
         if self._max_size_spin.value() < self._min_size_spin.value():
             return "El tamaño máximo debe ser mayor o igual al mínimo."
         if self._scope_combo.currentData() == "custom":

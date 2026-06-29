@@ -11,9 +11,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Callable, List, TYPE_CHECKING
 
+from core.media_conversion import (
+    DOCUMENT_IMPORT_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    IMAGE_IMPORT_EXTENSIONS,
+    WORD_EXTENSIONS,
+)
+
 if TYPE_CHECKING:
     from shell.context import ShellContext
     from PyQt6.QtWidgets import QWidget
+
+
+DEFAULT_DOCUMENT_INPUT_EXTENSIONS = tuple(sorted(DOCUMENT_IMPORT_EXTENSIONS))
+DEFAULT_IMAGE_INPUT_EXTENSIONS = tuple(sorted(IMAGE_IMPORT_EXTENSIONS))
+WORD_TO_PDF_INPUT_EXTENSIONS = tuple(sorted(WORD_EXTENSIONS | IMAGE_EXTENSIONS))
 
 
 @dataclass
@@ -27,7 +39,7 @@ class ToolDescriptor:
     window_factory: Callable[["ShellContext"], "QWidget"]
     icon_letter: str = ""            # legado — se mantiene para compatibilidad
     icon_name: str = ""              # nombre en TOOL_ICON_MAP de icons.py
-    input_extensions: tuple[str, ...] = (".pdf",)
+    input_extensions: tuple[str, ...] = DEFAULT_DOCUMENT_INPUT_EXTENSIONS
 
 
 def _make_firmador():
@@ -170,7 +182,7 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_organizador()(ctx),
         icon_letter="O",
         icon_name="tool-organizador",
-        input_extensions=(".pdf", ".doc", ".docx"),
+        input_extensions=DEFAULT_DOCUMENT_INPUT_EXTENSIONS,
     ),
     ToolDescriptor(
         id="firmador",
@@ -538,9 +550,7 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_imgs_a_pdf()(ctx),
         icon_letter="P",
         icon_name="tool-imgs-a-pdf",
-        input_extensions=(
-            ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif",
-        ),
+        input_extensions=DEFAULT_IMAGE_INPUT_EXTENSIONS,
     ),
     ToolDescriptor(
         id="word_a_pdf",
@@ -561,7 +571,7 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_word_a_pdf()(ctx),
         icon_letter="W",
         icon_name="tool-word-a-pdf",
-        input_extensions=(".doc", ".docx"),
+        input_extensions=WORD_TO_PDF_INPUT_EXTENSIONS,
     ),
     ToolDescriptor(
         id="pdf_to_word",
@@ -644,9 +654,7 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_quitar_fondo()(ctx),
         icon_letter="B",
         icon_name="tool-quitar-fondo",
-        input_extensions=(
-            ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif",
-        ),
+        input_extensions=DEFAULT_IMAGE_INPUT_EXTENSIONS,
     ),
 ]
 

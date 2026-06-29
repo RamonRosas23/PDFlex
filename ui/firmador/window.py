@@ -61,6 +61,13 @@ from core.signature_review import (
     validate_review_page,
 )
 from core.output_paths import make_run_dir
+from core.media_conversion import (
+    IMAGE_EXTENSIONS,
+    IMAGE_IMPORT_FILTER,
+    WORD_EXTENSIONS,
+    pdfs_to_images_exact,
+    suffix_for,
+)
 from core.output_naming import unique_output_path_for_source
 from core.variation import VariationConfig
 from shell.context import ShellContext
@@ -71,7 +78,7 @@ from ui.common.send_to_tool import SendToToolButton
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.output_settings import add_tool_suffix_enabled
-from ui.common.dialogs import ask_question, show_error, show_success, show_warning
+from ui.common.dialogs import ask_question, show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import make_icon_label, set_button_icon
 from ui.pdf_preview import PdfPreviewView, pil_to_qpixmap
@@ -462,6 +469,9 @@ class FirmadorWindow(PipelineWindow):
         self._updating_sig_list: bool = False
         self._updating_options: bool = False
         self._sig_temp_files: Dict[str, str] = {}   # uid → ruta PNG temporal
+        self._sig_conv_thread: Optional[QThread] = None
+        self._sig_conv_worker = None
+        self._sig_conv_dlg = None
         self._saved_sigs: List[_SavedSignature] = []
         self._saved_sig_by_hash: Dict[str, _SavedSignature] = {}
         self._signature_library_error: str = ""
@@ -622,7 +632,7 @@ class FirmadorWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Firma y posición",
-            "Agrega firmas PNG y arrástralas sobre la página. "
+            "Agrega firmas desde imagen, PDF o Word y arrástralas sobre la página. "
             "Haz click en una firma para seleccionarla y ajustar su posición.",
         ))
 
@@ -1679,6 +1689,14 @@ class FirmadorWindow(PipelineWindow):
         self._switch_section(0)
 
     def handle_drop(self, paths: List[str]) -> None:
+        if self.stack.currentIndex() == 1:
+            handled = False
+            for path in paths:
+                if suffix_for(path) in (IMAGE_EXTENSIONS | {".pdf"} | WORD_EXTENSIONS):
+                    self._add_sig_from_path(path)
+                    handled = True
+            if handled:
+                return
         self._docs_card.add_paths(paths)
         self._switch_section(0)
 
@@ -2378,6 +2396,27 @@ class FirmadorWindow(PipelineWindow):
         self._sig_list_hint.setVisible(True)
 
     def _add_sig_from_path(self, path: str) -> Optional[_SigEntry]:
+        suffix = suffix_for(path)
+        if suffix == ".pdf":
+            return self._add_sig_from_pdf(path)
+        if suffix in WORD_EXTENSIONS:
+            self._convert_word_signature(path)
+            return None
+        if suffix not in IMAGE_EXTENSIONS:
+            show_warning(
+                self,
+                "Archivo no compatible",
+                "Selecciona una imagen, PDF o Word para usarlo como firma.",
+            )
+            return None
+        return self._add_sig_image_from_path(path)
+
+    def _add_sig_image_from_path(
+        self,
+        path: str,
+        *,
+        source_name: str = "",
+    ) -> Optional[_SigEntry]:
         try:
             img = Image.open(path).convert("RGBA")
         except Exception as e:
@@ -2391,13 +2430,65 @@ class FirmadorWindow(PipelineWindow):
             saved.path,
             img,
             fingerprint,
-            source_name=saved.source_name,
+            source_name=source_name or saved.source_name,
             remove_bg=saved.remove_bg,
             colorize_blue=saved.colorize_blue,
         )
         if entry and created:
             self._set_signature_notice("Firma guardada y lista para reutilizar.")
         return entry
+
+    def _add_sig_from_pdf(self, path: str) -> Optional[_SigEntry]:
+        try:
+            images = pdfs_to_images_exact([path], out_dir=make_run_dir("converted"))
+        except Exception as exc:
+            show_warning(self, "Error", f"No se pudo convertir el PDF a imagen: {exc}")
+            return None
+        if not images:
+            show_warning(self, "Error", "No se generó ninguna imagen desde el PDF.")
+            return None
+        return self._add_sig_image_from_path(images[0], source_name=Path(path).name)
+
+    def _convert_word_signature(self, path: str) -> None:
+        converter = getattr(self.ctx, "word_converter", None)
+        if converter is None or not converter.is_available():
+            show_info(
+                self,
+                "Microsoft Office requerido",
+                "Para convertir archivos Word a imagen de firma se necesita Microsoft Office.",
+            )
+            return
+
+        from shell.word_to_pdf import WordConvertWorker
+        from ui.common.word_convert_dialog import WordConvertDialog
+
+        paths = [path]
+        self._sig_conv_dlg = WordConvertDialog(self, paths)
+        worker = WordConvertWorker(converter, paths, make_run_dir("converted"))
+        self._sig_conv_thread = RunnerThread(worker.run, self)
+        self._sig_conv_worker = worker
+        worker.progress.connect(self._sig_conv_dlg.on_progress)
+        worker.finished.connect(self._on_sig_word_done)
+        worker.finished.connect(self._sig_conv_dlg.on_finished)
+        worker.error.connect(self._on_sig_word_error)
+        worker.error.connect(self._sig_conv_dlg.on_error)
+        worker.finished.connect(self._sig_conv_thread.quit)
+        worker.error.connect(self._sig_conv_thread.quit)
+        self._sig_conv_thread.finished.connect(worker.deleteLater)
+        self._sig_conv_thread.finished.connect(self._sig_conv_thread.deleteLater)
+        self._sig_conv_dlg.cancel_requested.connect(worker.cancel)
+        QTimer.singleShot(0, self._sig_conv_thread.start)
+        self._sig_conv_dlg.exec()
+
+    def _on_sig_word_done(self, converted_pdfs: List[str]) -> None:
+        self._sig_conv_thread = None
+        self._sig_conv_worker = None
+        if converted_pdfs:
+            self._add_sig_from_pdf(converted_pdfs[0])
+
+    def _on_sig_word_error(self, msg: str) -> None:
+        self._sig_conv_thread = None
+        self._sig_conv_worker = None
 
     def _add_sig_entry_from_image(
         self,
@@ -2479,8 +2570,8 @@ class FirmadorWindow(PipelineWindow):
 
     def _on_add_sig(self) -> None:
         path, _ = get_open_file_name(
-            self, "Cargar firma PNG", "",
-            "Imágenes (*.png *.jpg *.jpeg *.webp)",
+            self, "Cargar firma", "",
+            IMAGE_IMPORT_FILTER,
         )
         if not path:
             return
@@ -3188,7 +3279,7 @@ class FirmadorWindow(PipelineWindow):
             self.preview.set_page(target)
 
         if not self._active_uid:
-            hint = "Sin firma — agrega una con «+ Agregar PNG»" if not self._sigs else "Sin firma seleccionada"
+            hint = "Sin firma — agrega una con «Importar»" if not self._sigs else "Sin firma seleccionada"
             self._sb_sig_info.setText(hint)
             return
         p = self.preview.placement_of(self._active_uid)
@@ -4200,8 +4291,7 @@ class FirmadorWindow(PipelineWindow):
 
     def dropEvent(self, event: QDropEvent) -> None:
         paths = [u.toLocalFile() for u in event.mimeData().urls()]
-        self._docs_card.add_paths(paths)
-        self._switch_section(0)
+        self.handle_drop(paths)
 
 
 # ====================================================================== #

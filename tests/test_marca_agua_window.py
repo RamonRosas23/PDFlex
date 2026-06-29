@@ -8,6 +8,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
+from PIL import Image
 from PyQt6.QtWidgets import QApplication
 
 from shell.context import ShellContext
@@ -128,6 +129,28 @@ class MarcaAguaWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_pdf_stamp_input_is_rendered_to_image(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "stamp.pdf")
+            window = MarcaAguaWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._load_stamp_image_input(str(pdf_path))
+
+                stamp_path = Path(window._image_edit.text())
+                self.assertEqual(stamp_path.suffix.lower(), ".png")
+                self.assertTrue(stamp_path.exists())
+                with Image.open(stamp_path) as image:
+                    self.assertEqual(image.size, (1250, 834))
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_tool_registry_exposes_watermark_for_pdfs(self) -> None:
         tool = get_tool("marca_agua")
 
@@ -135,6 +158,7 @@ class MarcaAguaWindowTests(unittest.TestCase):
         self.assertTrue(tool.enabled)
         self.assertEqual(tool.title, "Marca de agua")
         self.assertIn(".pdf", tool.input_extensions)
+        self.assertIn(".png", tool.input_extensions)
 
     @staticmethod
     def _make_pdf(path: Path) -> Path:

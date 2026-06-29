@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from shell.transfer import ToolTransfer
+from core.media_conversion import IMAGE_EXTENSIONS, IMAGE_IMPORT_EXTENSIONS
 from ui.common.icons import icon, set_button_icon
 from ui.styles import COLORS
 
@@ -42,7 +43,13 @@ class FileWorkspace(QFrame):
         self._ctx = ctx
         self._work_card = work_card
         self._accepted_exts = {ext.lower() for ext in accepted_exts}
+        self._compatible_exts = set(self._accepted_exts)
+        if self._accepted_exts and self._accepted_exts.issubset(IMAGE_EXTENSIONS):
+            self._compatible_exts = set(IMAGE_IMPORT_EXTENSIONS)
         self._tray_title = tray_title
+        set_context = getattr(self._work_card, "set_conversion_context", None)
+        if callable(set_context):
+            set_context(ctx)
         self._build()
         files_changed = getattr(self._work_card, "files_changed", None)
         if files_changed is not None:
@@ -165,7 +172,7 @@ class FileWorkspace(QFrame):
     def _accepted_paths(self, paths: List[str]) -> List[str]:
         return [
             path for path in paths
-            if Path(path).suffix.lower() in self._accepted_exts
+            if Path(path).suffix.lower() in self._compatible_exts
         ]
 
     def _selected_tray_paths(self) -> List[str]:
@@ -202,7 +209,7 @@ class FileWorkspace(QFrame):
 
         items = [
             item for item in self._ctx.tray.items
-            if Path(item.path).suffix.lower() in self._accepted_exts
+            if Path(item.path).suffix.lower() in self._compatible_exts
         ]
         for tray_item in items:
             list_item = QListWidgetItem(self._tray_text(tray_item))

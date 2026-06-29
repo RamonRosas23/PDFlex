@@ -20,6 +20,13 @@ from PyQt6.QtWidgets import (
 )
 
 from core.output_paths import make_run_dir, unique_output_path
+from core.media_conversion import (
+    DOCUMENT_IMPORT_EXTENSIONS,
+    image_paths,
+    images_to_pdf_exact,
+    pdf_paths,
+    word_paths,
+)
 from core.page_organizer_engine import (
     MultiOrganizerJob,
     MultiOrganizerResult,
@@ -38,7 +45,7 @@ from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.organizador.lane_container import LaneContainer
 from ui.organizador.page_preview_dialog import OrganizerPagePreviewDialog
 
-_ACCEPTED_IMPORT_EXTS = {".pdf", ".doc", ".docx"}
+_ACCEPTED_IMPORT_EXTS = set(DOCUMENT_IMPORT_EXTENSIONS)
 
 
 class _MultiWorker(QObject):
@@ -279,8 +286,17 @@ class OrganizadorWindow(PipelineWindow):
         if not accepted:
             return
 
-        pdfs = [p for p in accepted if Path(p).suffix.lower() == ".pdf"]
-        words = [p for p in accepted if Path(p).suffix.lower() in {".doc", ".docx"}]
+        pdfs = pdf_paths(accepted)
+        images = image_paths(accepted)
+        words = word_paths(accepted)
+        if images:
+            try:
+                converted = images_to_pdf_exact(images)
+            except Exception as exc:
+                show_error(self, "No se pudieron convertir las imágenes", str(exc))
+                converted = ""
+            if converted:
+                pdfs.append(converted)
         if words:
             self._convert_words_then_add(
                 words,

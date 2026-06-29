@@ -17,6 +17,12 @@ from PIL import Image
 
 from core.output_naming import unique_output_path_for_source
 from core.output_paths import make_run_dir
+from core.media_conversion import (
+    IMAGE_EXTENSIONS,
+    IMAGE_IMPORT_FILTER,
+    pdfs_to_images_exact,
+    suffix_for,
+)
 from core.watermark_engine import (
     COLOR_CHOICES,
     POSITIONS,
@@ -30,7 +36,7 @@ from core.watermark_engine import (
 )
 from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
-from ui.common.dialogs import show_error, show_success, show_warning
+from ui.common.dialogs import show_error, show_info, show_success, show_warning
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
@@ -141,6 +147,9 @@ class MarcaAguaWindow(PipelineWindow):
         self._pdf_page_cache: dict[str, int] = {}
         self._preview_worker: Optional[WatermarkPreviewWorker] = None
         self._preview_thread: Optional[QThread] = None
+        self._stamp_conv_thread: Optional[QThread] = None
+        self._stamp_conv_worker = None
+        self._stamp_conv_dlg = None
 
         self._build_pages()
         self._build_action_buttons()
@@ -265,10 +274,10 @@ class MarcaAguaWindow(PipelineWindow):
         card_layout(self._text_card).addWidget(self._font_size_spin)
         grid.addWidget(self._text_card, 0, 1)
 
-        self._image_card = make_card("Imagen", "PNG, JPG, WebP, BMP o TIFF.")
+        self._image_card = make_card("Imagen", "Imagen, PDF o Word.")
         image_row = QHBoxLayout()
         self._image_edit = QLineEdit()
-        self._image_edit.setPlaceholderText("Selecciona una imagen")
+        self._image_edit.setPlaceholderText("Selecciona una imagen, PDF o Word")
         image_row.addWidget(self._image_edit, 1)
         browse_img = QPushButton("Examinar")
         browse_img.setProperty("class", "Ghost")
@@ -451,13 +460,83 @@ class MarcaAguaWindow(PipelineWindow):
     def _browse_image(self) -> None:
         path, _ = get_open_file_name(
             self,
-            "Seleccionar imagen de sello",
+            "Seleccionar imagen, PDF o Word para sello",
             str(Path.home()),
-            "Imagenes (*.png *.jpg *.jpeg *.webp *.bmp *.tiff *.tif);;Todos los archivos (*)",
+            IMAGE_IMPORT_FILTER + ";;Todos los archivos (*)",
         )
         if path:
-            self._image_edit.setText(path)
-            self._mark_preview_stale()
+            self._load_stamp_image_input(path)
+
+    def _load_stamp_image_input(self, path: str) -> None:
+        suffix = suffix_for(path)
+        if suffix in IMAGE_EXTENSIONS:
+            self._set_stamp_image_path(path)
+        elif suffix == ".pdf":
+            self._set_stamp_image_from_pdf(path)
+        elif suffix in {".doc", ".docx"}:
+            self._convert_word_stamp_to_image(path)
+        else:
+            show_warning(
+                self,
+                "Archivo no compatible",
+                "Selecciona una imagen, PDF o Word para usarlo como sello.",
+            )
+
+    def _set_stamp_image_path(self, path: str) -> None:
+        self._image_edit.setText(path)
+        self._mark_preview_stale()
+
+    def _set_stamp_image_from_pdf(self, path: str) -> None:
+        try:
+            images = pdfs_to_images_exact([path], out_dir=make_run_dir("converted"))
+        except Exception as exc:
+            show_error(self, "No se pudo convertir el PDF", str(exc))
+            return
+        if images:
+            self._set_stamp_image_path(images[0])
+
+    def _convert_word_stamp_to_image(self, path: str) -> None:
+        converter = getattr(self.ctx, "word_converter", None)
+        if converter is None or not converter.is_available():
+            show_info(
+                self,
+                "Microsoft Office requerido",
+                "Para convertir archivos Word a imagen se necesita Microsoft Office.",
+            )
+            return
+
+        from shell.word_to_pdf import WordConvertWorker
+        from ui.common.word_convert_dialog import WordConvertDialog
+
+        paths = [path]
+        self._stamp_conv_dlg = WordConvertDialog(self, paths)
+        worker = WordConvertWorker(converter, paths, make_run_dir("converted"))
+        self._stamp_conv_thread = RunnerThread(worker.run, self)
+        self._stamp_conv_worker = worker
+        worker.progress.connect(self._stamp_conv_dlg.on_progress)
+        worker.finished.connect(self._on_stamp_word_done)
+        worker.finished.connect(self._stamp_conv_dlg.on_finished)
+        worker.error.connect(self._on_stamp_word_error)
+        worker.error.connect(self._stamp_conv_dlg.on_error)
+        worker.finished.connect(self._stamp_conv_thread.quit)
+        worker.error.connect(self._stamp_conv_thread.quit)
+        self._stamp_conv_thread.finished.connect(worker.deleteLater)
+        self._stamp_conv_thread.finished.connect(self._stamp_conv_thread.deleteLater)
+        self._stamp_conv_dlg.cancel_requested.connect(worker.cancel)
+        from PyQt6.QtCore import QTimer
+
+        QTimer.singleShot(0, self._stamp_conv_thread.start)
+        self._stamp_conv_dlg.exec()
+
+    def _on_stamp_word_done(self, converted_pdfs: List[str]) -> None:
+        self._stamp_conv_thread = None
+        self._stamp_conv_worker = None
+        if converted_pdfs:
+            self._set_stamp_image_from_pdf(converted_pdfs[0])
+
+    def _on_stamp_word_error(self, msg: str) -> None:
+        self._stamp_conv_thread = None
+        self._stamp_conv_worker = None
 
     def _mode(self) -> str:
         return str(self._mode_combo.currentData() or "text")

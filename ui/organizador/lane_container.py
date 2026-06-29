@@ -15,12 +15,13 @@ from PyQt6.QtWidgets import (
 )
 
 from core.page_organizer_engine import PageRef
+from core.media_conversion import DOCUMENT_IMPORT_FILTER
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
 from ui.organizador.lane_widget import LANE_COLORS, DocLane
 from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailWorker
 
-PDF_WORD_FILTER = "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)"
+PDF_WORD_FILTER = DOCUMENT_IMPORT_FILTER
 _MAX_UNDO = 50
 
 
@@ -365,7 +366,7 @@ class LaneContainer(QWidget):
     def _on_add_pdfs(self) -> None:
         files, _ = get_open_file_names(
             self.window(),
-            "Agregar PDF o Word",
+            "Agregar PDF, Word o imágenes",
             "",
             PDF_WORD_FILTER,
         )

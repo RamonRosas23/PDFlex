@@ -22,6 +22,7 @@ from ui.imgs_a_pdf.window import (
     _image_detail,
     crop_light_borders,
     enhance_document_contrast,
+    ImageListCard,
     preprocess_document_image,
 )
 
@@ -166,6 +167,29 @@ class ImgsAPdfWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_image_list_card_converts_pdf_pages_to_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            pdf_path = root / "doc.pdf"
+            doc = fitz.open()
+            doc.new_page(width=72, height=36)
+            doc.save(pdf_path)
+            doc.close()
+
+            card = ImageListCard()
+            try:
+                card.add_paths([str(pdf_path)])
+                self.app.processEvents()
+
+                self.assertEqual(card.count(), 1)
+                output = Path(card.paths()[0])
+                self.assertEqual(output.suffix.lower(), ".png")
+                with Image.open(output) as image:
+                    self.assertEqual(image.size, (300, 150))
+            finally:
+                card.deleteLater()
+                self.app.processEvents()
+
     def test_tool_registry_exposes_images_to_pdf_for_images(self) -> None:
         tool = get_tool("imgs_a_pdf")
 
@@ -173,6 +197,8 @@ class ImgsAPdfWindowTests(unittest.TestCase):
         self.assertTrue(tool.enabled)
         self.assertEqual(tool.title, "Imágenes a PDF")
         self.assertIn(".png", tool.input_extensions)
+        self.assertIn(".pdf", tool.input_extensions)
+        self.assertIn(".docx", tool.input_extensions)
 
     @staticmethod
     def _make_scan_photo(path: Path) -> Path:

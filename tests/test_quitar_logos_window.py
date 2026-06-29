@@ -75,6 +75,19 @@ class QuitarLogosWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_set_inputs_routes_images_to_logo_references(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logo = self._make_logo(Path(tmp) / "logo.png")
+            window = QuitarLogosWindow(self._context())
+            try:
+                window.set_inputs([str(logo)])
+
+                self.assertEqual(window._docs_card.count(), 0)
+                self.assertEqual(window._logo_card.count(), 1)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_tool_registry_exposes_logo_removal(self) -> None:
         tool = get_tool("quitar_logos")
 
@@ -82,6 +95,7 @@ class QuitarLogosWindowTests(unittest.TestCase):
         self.assertTrue(tool.enabled)
         self.assertEqual(tool.title, "Quitar logos")
         self.assertIn(".pdf", tool.input_extensions)
+        self.assertIn(".png", tool.input_extensions)
 
     @staticmethod
     def _context() -> ShellContext:

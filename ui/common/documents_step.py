@@ -4,6 +4,7 @@ Consolida el paso "Documentos" que era idéntico en los 5 herramientas:
   - Botones Agregar / Quitar selección / Vaciar / Cargar desde bandeja
   - Lista con miniaturas PDF, drag-reorder opcional, Delete key
   - Conversión automática Word→PDF en segundo plano
+  - Conversión automática Imagen→PDF sin márgenes
   - Señal files_changed emitida en cada cambio
 
 Uso:
@@ -34,7 +35,16 @@ from PyQt6.QtWidgets import (
 from ui.common.thumb_utils import make_pdf_thumb, ThumbnailLoader, make_placeholder_pixmap
 from ui.common.clipboard_utils import clipboard_file_paths, copy_files_to_clipboard
 from ui.common.icons import icon_pixmap, make_icon_label, set_button_icon
-from ui.common.dialogs import show_info
+from core.media_conversion import (
+    DOCUMENT_IMPORT_EXTENSIONS,
+    accepted_document_paths,
+    expand_document_filter,
+    image_paths,
+    images_to_pdf_exact,
+    pdf_paths,
+    word_paths,
+)
+from ui.common.dialogs import show_error, show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
 from ui.common.result_ui import ElidedLabel, format_file_size
 from ui.styles import COLORS
@@ -78,7 +88,7 @@ class DocumentsCard(QFrame):
         self._show_thumbnails = show_thumbnails
         self._show_preview = show_preview
         self._thumb_w, self._thumb_h = thumb_size
-        self._file_filter = file_filter
+        self._file_filter = expand_document_filter(file_filter)
         self._accent: str = "#5E6AD2"
         self._drop_icon_name = "folder-open"
         self._drop_icon_size = 28
@@ -581,7 +591,9 @@ class DocumentsCard(QFrame):
         selected = self.selected_paths()
         current = self.list_widget.currentItem()
         current_path = current.data(Qt.ItemDataRole.UserRole) if current else ""
-        has_clipboard_docs = bool(clipboard_file_paths(suffixes=(".pdf", ".doc", ".docx")))
+        has_clipboard_docs = bool(
+            clipboard_file_paths(suffixes=tuple(DOCUMENT_IMPORT_EXTENSIONS))
+        )
 
         menu = QMenu(self)
         add_tray = menu.addAction("Agregar a bandeja")
@@ -742,7 +754,7 @@ class DocumentsCard(QFrame):
         return ok
 
     def paste_from_clipboard(self) -> bool:
-        paths = clipboard_file_paths(suffixes=(".pdf", ".doc", ".docx"))
+        paths = clipboard_file_paths(suffixes=tuple(DOCUMENT_IMPORT_EXTENSIONS))
         if not paths:
             self._show_feedback("No hay documentos compatibles en el portapapeles")
             return False
@@ -777,11 +789,15 @@ class DocumentsCard(QFrame):
         self._refresh_drop_icon(self._drop_icon_size)
 
     def add_paths(self, raw_paths: List[str]) -> None:
-        """Agrega paths, convirtiendo Word si es necesario."""
-        pdfs = [p for p in raw_paths if p.lower().endswith(".pdf")]
-        words = [p for p in raw_paths if p.lower().endswith((".doc", ".docx"))]
+        """Agrega paths, convirtiendo Word o imágenes si es necesario."""
+        accepted = accepted_document_paths(raw_paths)
+        pdfs = pdf_paths(accepted)
+        images = image_paths(accepted)
+        words = word_paths(accepted)
         if pdfs:
             self._add_pdf_paths(pdfs)
+        if images:
+            self._handle_image_files(images)
         if words:
             self._handle_word_files(words)
 
@@ -886,6 +902,19 @@ class DocumentsCard(QFrame):
             self._update_count()
             self._update_remove_btn()
             self.files_changed.emit(self.paths())
+
+    def _handle_image_files(self, paths: List[str]) -> None:
+        try:
+            converted = images_to_pdf_exact(paths)
+        except Exception as exc:
+            show_error(
+                self.window(),
+                "No se pudieron convertir las imágenes",
+                str(exc),
+            )
+            return
+        if converted:
+            self._add_pdf_paths([converted])
 
     def _update_count(self) -> None:
         n = self.list_widget.count()

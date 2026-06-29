@@ -92,6 +92,8 @@ class QuitarFondoWindowTests(unittest.TestCase):
         self.assertTrue(tool.enabled)
         self.assertEqual(tool.title, "Quitar fondo")
         self.assertIn(".png", tool.input_extensions)
+        self.assertIn(".pdf", tool.input_extensions)
+        self.assertIn(".docx", tool.input_extensions)
 
     @staticmethod
     def _make_logo(path: Path) -> Path:

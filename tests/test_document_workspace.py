@@ -5,6 +5,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
+from PIL import Image
 
 
 _QAPP = None
@@ -194,6 +195,34 @@ def test_documents_card_copies_selected_files_to_clipboard(tmp_path):
     finally:
         card.deleteLater()
         app.processEvents()
+
+
+def test_documents_card_converts_images_to_marginless_pdf(tmp_path):
+    _app()
+
+    import fitz
+    from shell.tray import PdfTray
+    from ui.common.documents_step import DocumentsCard
+
+    image_path = tmp_path / "photo.png"
+    Image.new("RGB", (80, 40), "navy").save(image_path)
+    card = DocumentsCard(_ctx(PdfTray()), show_thumbnails=False)
+    try:
+        card.add_paths([str(image_path)])
+
+        assert card.count() == 1
+        output = Path(card.paths()[0])
+        assert output.suffix.lower() == ".pdf"
+        doc = fitz.open(str(output))
+        try:
+            assert doc.page_count == 1
+            assert round(doc[0].rect.width) == 80
+            assert round(doc[0].rect.height) == 40
+        finally:
+            doc.close()
+    finally:
+        card.deleteLater()
+        _app().processEvents()
 
 
 def test_document_workspace_uses_preview_panel(tmp_path):

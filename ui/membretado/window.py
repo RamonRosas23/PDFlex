@@ -38,6 +38,12 @@ from core.membrete_engine import (
 )
 from core.output_paths import make_run_dir
 from core.output_naming import unique_output_path_for_source
+from core.media_conversion import (
+    DOCUMENT_IMPORT_EXTENSIONS,
+    DOCUMENT_IMPORT_FILTER,
+    IMAGE_EXTENSIONS,
+    images_to_pdf_exact,
+)
 from shell.context import ShellContext
 from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_card, card_layout, make_page_header
@@ -328,7 +334,7 @@ class MarginPreviewWidget(QWidget):
 
 class MembretadoWindow(PipelineWindow):
 
-    LETTERHEAD_EXTS = (".pdf", ".doc", ".docx")
+    LETTERHEAD_EXTS = tuple(DOCUMENT_IMPORT_EXTENSIONS)
 
     SECTIONS = [
         ("01", "Membrete",   "Carga la hoja membretada"),
@@ -401,7 +407,7 @@ class MembretadoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Hoja membretada",
-            "Carga un PDF o Word que contiene tu membrete (encabezado/pie). "
+            "Carga un PDF, Word o imagen que contiene tu membrete (encabezado/pie). "
             "Se usará siempre la primera página.",
         ))
 
@@ -410,7 +416,7 @@ class MembretadoWindow(PipelineWindow):
 
         active_card = make_card(
             "Membrete activo",
-            "PDF, DOC o DOCX. Los archivos Word se convierten a PDF de forma temporal.",
+            "PDF, Word o imagen. Word e imágenes se convierten a PDF de forma temporal.",
         )
         active_l = card_layout(active_card)
         active_l.setSpacing(14)
@@ -447,7 +453,7 @@ class MembretadoWindow(PipelineWindow):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
-        open_btn = QPushButton("Seleccionar PDF/Word")
+        open_btn = QPushButton("Seleccionar archivo")
         open_btn.setProperty("class", "Primary")
         set_button_icon(open_btn, "folder-open")
         open_btn.clicked.connect(self._on_open_membrete)
@@ -535,7 +541,7 @@ class MembretadoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Documentos a membretar",
-            "Carga PDFs o Word; los Word se convierten a PDF antes de pegarse sobre el membrete.",
+            "Carga PDF, Word o imágenes; todo se normaliza a PDF antes de pegarse sobre el membrete.",
         ))
 
         self._docs_card = DocumentsCard(
@@ -917,7 +923,7 @@ class MembretadoWindow(PipelineWindow):
     def _on_open_membrete(self) -> None:
         path, _ = get_open_file_name(
             self, "Seleccionar membrete", "",
-            "PDF y Word (*.pdf *.doc *.docx);;PDF (*.pdf);;Word (*.doc *.docx)",
+            DOCUMENT_IMPORT_FILTER,
         )
         if path:
             self._load_membrete_input(path)
@@ -933,7 +939,7 @@ class MembretadoWindow(PipelineWindow):
             show_info(
                 self,
                 "Sin archivos compatibles",
-                "La bandeja no contiene un PDF, DOC o DOCX para usar como membrete.",
+                "La bandeja no contiene un PDF, Word o imagen para usar como membrete.",
             )
 
     def _load_membrete_input(self, path: str) -> None:
@@ -942,8 +948,19 @@ class MembretadoWindow(PipelineWindow):
             self._load_membrete(path, source_name=Path(path).name)
         elif suffix in (".doc", ".docx"):
             self._handle_word_membrete([path])
+        elif suffix in IMAGE_EXTENSIONS:
+            try:
+                converted = images_to_pdf_exact(
+                    [path],
+                    output_name=f"{Path(path).stem}_membrete.pdf",
+                )
+            except Exception as exc:
+                show_error(self, "No se pudo convertir la imagen", str(exc))
+                return
+            if converted:
+                self._load_membrete(converted, source_name=Path(path).name)
         else:
-            show_info(self, "Archivo no compatible", "Selecciona un PDF, DOC o DOCX.")
+            show_info(self, "Archivo no compatible", "Selecciona un PDF, Word o imagen.")
 
     def _load_membrete(
         self,

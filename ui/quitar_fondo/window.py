@@ -96,7 +96,7 @@ class QuitarFondoWindow(PipelineWindow):
 
         outer.addLayout(make_page_header(
             "Imágenes",
-            "Carga imágenes con fondo blanco o uniforme. La salida será PNG con transparencia.",
+            "Carga imágenes, PDF o Word; los documentos se convertirán a imágenes. La salida será PNG con transparencia.",
         ))
 
         self._img_card = FileWorkspace(
@@ -265,11 +265,11 @@ class QuitarFondoWindow(PipelineWindow):
             self._refresh_summary()
 
     def set_inputs(self, paths: List[str]) -> None:
-        self._img_card.add_paths(self._image_paths(paths))
+        self._img_card.add_paths(paths)
         self._switch_section(0)
 
     def handle_drop(self, paths: List[str]) -> None:
-        self._img_card.add_paths(self._image_paths(paths))
+        self._img_card.add_paths(paths)
         self._switch_section(0)
 
     def _on_files_changed(self, paths: List[str]) -> None:
@@ -409,10 +409,6 @@ class QuitarFondoWindow(PipelineWindow):
         self._imgs_summary_lbl.setText("Sin imágenes cargadas.")
         self._proc_step.reset()
         self._switch_section(0)
-
-    @staticmethod
-    def _image_paths(paths: List[str]) -> List[str]:
-        return [path for path in paths if Path(path).suffix.lower() in IMAGE_EXTS]
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():

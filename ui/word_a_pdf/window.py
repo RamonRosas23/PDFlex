@@ -13,6 +13,12 @@ from PyQt6.QtWidgets import (
 )
 
 from core.output_paths import make_run_dir
+from core.media_conversion import (
+    IMAGE_EXTENSIONS,
+    image_paths,
+    images_to_pdf_exact,
+    word_paths,
+)
 from shell.context import ShellContext
 from shell.word_to_pdf import WordConvertWorker
 from ui.common.cards import make_page_header
@@ -27,7 +33,13 @@ from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 WORD_EXTS = {".doc", ".docx"}
-WORD_FILTER = "Word (*.doc *.docx);;Todos los archivos (*)"
+WORD_PDF_INPUT_EXTS = WORD_EXTS | IMAGE_EXTENSIONS
+WORD_FILTER = (
+    "Word e imágenes (*.doc *.docx *.png *.jpg *.jpeg *.webp *.bmp *.tiff *.tif *.gif);;"
+    "Word (*.doc *.docx);;"
+    "Imágenes (*.png *.jpg *.jpeg *.webp *.bmp *.tiff *.tif *.gif);;"
+    "Todos los archivos (*)"
+)
 
 
 @dataclass
@@ -115,13 +127,13 @@ class WordListCard(QFrame):
         ez.addWidget(icon_box, 0, Qt.AlignmentFlag.AlignCenter)
         ez.addSpacing(16)
 
-        drop_title = QLabel("Arrastra documentos Word aquí")
+        drop_title = QLabel("Arrastra Word o imágenes aquí")
         drop_title.setObjectName("DropZoneTitle")
         drop_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ez.addWidget(drop_title)
 
         ez.addSpacing(6)
-        drop_sub = QLabel("Acepta archivos .doc y .docx")
+        drop_sub = QLabel("Acepta Word e imágenes")
         drop_sub.setObjectName("DropZoneHint")
         drop_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ez.addWidget(drop_sub)
@@ -181,7 +193,8 @@ class WordListCard(QFrame):
         changed = False
         for raw in raw_paths:
             path = Path(raw)
-            if path.suffix.lower() not in WORD_EXTS or not path.is_file():
+            suffix = path.suffix.lower()
+            if suffix not in WORD_PDF_INPUT_EXTS or not path.is_file():
                 continue
             value = str(path)
             key = value.casefold()
@@ -190,6 +203,8 @@ class WordListCard(QFrame):
             self._path_set.add(key)
             size = format_file_size(path)
             detail = path.suffix.upper().lstrip(".")
+            if suffix in IMAGE_EXTENSIONS:
+                detail = "IMAGEN"
             if size:
                 detail += f" · {size}"
             item = QListWidgetItem(f"{path.name}\n{detail}")
@@ -253,7 +268,7 @@ class WordListCard(QFrame):
     def _on_browse(self) -> None:
         files, _ = get_open_file_names(
             self.window(),
-            "Seleccionar documentos Word",
+            "Seleccionar Word o imágenes",
             "",
             WORD_FILTER,
         )
@@ -276,6 +291,9 @@ class WordAPdfWindow(PipelineWindow):
         self.last_results: List[WordPdfResult] = []
         self._worker_thread: Optional[QThread] = None
         self._worker: Optional[QObject] = None
+        self._pending_sources: List[str] = []
+        self._pending_word_sources: List[str] = []
+        self._pending_image_results: dict[str, WordPdfResult] = {}
 
         self._build_pages()
         self._build_action_buttons()
@@ -302,7 +320,7 @@ class WordAPdfWindow(PipelineWindow):
         self._word_card = FileWorkspace(
             self.ctx,
             WordListCard(),
-            WORD_EXTS,
+            WORD_PDF_INPUT_EXTS,
             tray_title="Bandeja Word",
         )
         outer.addWidget(self._word_card, 1)
@@ -399,13 +417,17 @@ class WordAPdfWindow(PipelineWindow):
     def _refresh_summary(self) -> None:
         count = self._word_card.count()
         converter = getattr(self.ctx, "word_converter", None)
+        words = word_paths(self._word_card.paths())
+        images = image_paths(self._word_card.paths())
         word_ready = bool(converter and converter.is_available())
         rows = [
             f"<b>Documentos:</b>&nbsp;&nbsp;{count}",
             "<b>Salida:</b>&nbsp;&nbsp;PDF temporal por cada documento Word",
+            f"<b>Word:</b>&nbsp;&nbsp;{len(words)}",
+            f"<b>Imágenes:</b>&nbsp;&nbsp;{len(images)}",
             f"<b>Microsoft Word:</b>&nbsp;&nbsp;{'Disponible' if word_ready else 'No detectado'}",
         ]
-        if not word_ready:
+        if words and not word_ready:
             rows.append(
                 "<span style='color:#E5484D;'>Se requiere Microsoft Office para convertir.</span>"
             )
@@ -415,9 +437,11 @@ class WordAPdfWindow(PipelineWindow):
 
     def _validate_ready(self) -> Optional[str]:
         if self._word_card.is_empty():
-            return "Agrega al menos un documento Word."
+            return "Agrega al menos un documento Word o una imagen."
         converter = getattr(self.ctx, "word_converter", None)
-        if converter is None or not converter.is_available():
+        if word_paths(self._word_card.paths()) and (
+            converter is None or not converter.is_available()
+        ):
             return "Para convertir Word a PDF se necesita Microsoft Office instalado."
         return None
 
@@ -435,12 +459,41 @@ class WordAPdfWindow(PipelineWindow):
         self.last_results = []
 
         self._proc_step.set_running(True)
-        self._proc_step.set_progress(0, "Iniciando Microsoft Word...")
+        self._proc_step.set_progress(0, "Preparando conversión...")
 
+        source_paths = self._word_card.paths()
+        self._pending_sources = list(source_paths)
+        self._pending_word_sources = word_paths(source_paths)
+        self._pending_image_results = {}
+        out_dir = make_run_dir("WordPDF")
+
+        for path in image_paths(source_paths):
+            try:
+                output = images_to_pdf_exact([path], out_dir=out_dir)
+            except Exception as exc:
+                self._pending_image_results[path] = WordPdfResult(
+                    source_path=path,
+                    output_path="",
+                    success=False,
+                    error=str(exc),
+                )
+                continue
+            self._pending_image_results[path] = WordPdfResult(
+                source_path=path,
+                output_path=output,
+                success=bool(output),
+                error="" if output else "No se generó PDF.",
+            )
+
+        if not self._pending_word_sources:
+            self._finish_results([])
+            return
+
+        self._proc_step.set_progress(5, "Iniciando Microsoft Word...")
         worker = WordConvertWorker(
             self.ctx.word_converter,
-            self._word_card.paths(),
-            make_run_dir("WordPDF"),
+            self._pending_word_sources,
+            out_dir,
         )
         self._worker = worker
         self._worker_thread = RunnerThread(worker.run, self)
@@ -469,15 +522,19 @@ class WordAPdfWindow(PipelineWindow):
         self._proc_step.set_progress(int(current / max(1, total) * 100), message)
 
     def _on_finished(self, output_paths: list) -> None:
-        source_paths = self._word_card.paths()
-        self.last_results = [
-            WordPdfResult(
-                source_path=source_paths[idx] if idx < len(source_paths) else "",
-                output_path=path,
-                success=True,
-            )
-            for idx, path in enumerate(output_paths)
-        ]
+        self._finish_results(output_paths)
+
+    def _finish_results(self, word_output_paths: list) -> None:
+        word_results = {
+            source: WordPdfResult(source_path=source, output_path=path, success=True)
+            for source, path in zip(self._pending_word_sources, word_output_paths)
+        }
+        self.last_results = []
+        for source in self._pending_sources:
+            if source in self._pending_image_results:
+                self.last_results.append(self._pending_image_results[source])
+            elif source in word_results:
+                self.last_results.append(word_results[source])
 
         self._proc_step.set_running(False)
         self._proc_step.set_progress(100, "Conversión completada")
@@ -493,6 +550,11 @@ class WordAPdfWindow(PipelineWindow):
             ]
         )
 
+        output_paths = [
+            result.output_path
+            for result in self.last_results
+            if result.success and result.output_path
+        ]
         self.ctx.tray.add_items(list(output_paths), "Word a PDF")
         self._send_btn.set_output_paths(list(output_paths))
         self.outputs_ready.emit(list(output_paths))

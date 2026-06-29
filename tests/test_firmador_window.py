@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -191,6 +192,29 @@ def test_signature_position_left_panel_stays_accessible_in_narrow_window(
                 continue
             geometry = child.geometry()
             assert geometry.x() + geometry.width() <= left_scroll.widget().width() + 1
+    finally:
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_pdf_signature_input_is_rendered_to_image(
+    app,
+    ctx,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PDFLEX_SIGNATURE_LIBRARY_DIR", str(tmp_path / "siglib"))
+    pdf_sig = _make_pdf(tmp_path / "firma.pdf")
+
+    window = FirmadorWindow(ctx)
+    try:
+        entry = window._add_sig_from_path(str(pdf_sig))
+
+        assert entry is not None
+        assert entry.source_name == "firma.pdf"
+        assert entry.original_img.width > 0
+        assert entry.original_img.height > 0
+        assert Path(entry.path).suffix.lower() == ".png"
     finally:
         window.deleteLater()
         app.processEvents()

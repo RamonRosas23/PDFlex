@@ -118,6 +118,45 @@ class ImgsAPdfWindowTests(unittest.TestCase):
             finally:
                 doc.close()
 
+    def test_worker_flattens_transparent_sources_on_white_background(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            image_path = root / "transparent.png"
+            image = Image.new("RGBA", (80, 40), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.rectangle((20, 10, 60, 30), fill=(0, 0, 0, 255))
+            image.save(image_path)
+            output = root / "salida.pdf"
+
+            worker = ImgsToPdfWorker(
+                image_paths=[str(image_path)],
+                output_path=str(output),
+                page_size_key="Adaptado a la imagen",
+                orientation="Vertical",
+                margin_mm=0.0,
+                fit_mode="Ajustar (mantener proporción)",
+                auto_rotate=True,
+                one_per_page=True,
+                dpi=72,
+                scan_options=ScanProcessingOptions(),
+            )
+            results = []
+            errors = []
+            worker.finished.connect(lambda result: results.append(result))
+            worker.error.connect(lambda msg: errors.append(msg))
+
+            worker.run()
+
+            self.assertFalse(errors)
+            self.assertTrue(results and results[0].success)
+            doc = fitz.open(str(output))
+            try:
+                pix = doc[0].get_pixmap(alpha=False)
+                self.assertEqual((pix.width, pix.height), (80, 40))
+                self.assertEqual(tuple(pix.samples[:3]), (255, 255, 255))
+            finally:
+                doc.close()
+
     def test_window_exposes_scan_profile_in_worker_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             image_path = self._make_scan_photo(Path(tmp) / "scan.png")

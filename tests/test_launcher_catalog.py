@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import unittest
 
+from core.media_conversion import (
+    DOCUMENT_IMPORT_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    WORD_EXTENSIONS,
+)
 from shell.launcher import EDITORIAL_ORDER, catalog_sections, _section_tool_ids
 from shell.tool_registry import TOOLS
 from shell.tool_usage import ToolUsageStat, rank_tool_ids
@@ -46,6 +51,20 @@ class LauncherCatalogTests(unittest.TestCase):
         self.assertNotIn("firmador", visible_ids)
         self.assertNotIn("unir", visible_ids)
         self.assertIn("foleador", visible_ids)
+
+    def test_tools_advertise_import_extensions_for_auto_conversion(self) -> None:
+        document_imports = set(DOCUMENT_IMPORT_EXTENSIONS)
+        word_to_pdf_imports = set(WORD_EXTENSIONS | IMAGE_EXTENSIONS)
+
+        for tool in TOOLS:
+            exts = set(tool.input_extensions)
+            if tool.id == "word_a_pdf":
+                self.assertEqual(exts, word_to_pdf_imports)
+            else:
+                self.assertTrue(
+                    document_imports.issubset(exts),
+                    f"{tool.id} does not expose every auto-convertible import type",
+                )
 
 
 if __name__ == "__main__":

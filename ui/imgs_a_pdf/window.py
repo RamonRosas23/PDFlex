@@ -339,9 +339,7 @@ class ImgsToPdfWorker(QObject):
                 self.progress.emit(i + 1, total, f"Procesando {name}…")
 
                 try:
-                    img = Image.open(img_path)
-                    img.load()  # fuerza lectura del GIF/TIFF animado
-                    img = img.convert("RGB")
+                    img = _open_image_for_pdf_page(img_path)
                     img = preprocess_document_image(img, self.scan_options)
                 except Exception as exc:
                     out_doc.close()
@@ -379,6 +377,19 @@ class ImgsToPdfWorker(QObject):
             ))
         except Exception as exc:
             self.error.emit(str(exc))
+
+
+def _open_image_for_pdf_page(path: str) -> Image.Image:
+    with Image.open(path) as opened:
+        opened.seek(0)  # first frame for GIF/TIFF sequences
+        image = ImageOps.exif_transpose(opened)
+        image.load()
+        if image.mode in {"RGBA", "LA"} or "transparency" in image.info:
+            rgba = image.convert("RGBA")
+            background = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+            background.alpha_composite(rgba)
+            return background.convert("RGB")
+        return image.convert("RGB")
 
 
 # ====================================================================== #

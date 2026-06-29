@@ -905,7 +905,13 @@ class DocumentsCard(QFrame):
 
     def _handle_image_files(self, paths: List[str]) -> None:
         try:
-            converted = images_to_pdf_exact(paths)
+            source_paths = paths[:1] if self._single_file else paths
+            out_dir = make_run_dir("converted")
+            converted = [
+                result
+                for path in source_paths
+                if (result := images_to_pdf_exact([path], out_dir=out_dir))
+            ]
         except Exception as exc:
             show_error(
                 self.window(),
@@ -914,7 +920,7 @@ class DocumentsCard(QFrame):
             )
             return
         if converted:
-            self._add_pdf_paths([converted])
+            self._add_pdf_paths(converted)
 
     def _update_count(self) -> None:
         n = self.list_widget.count()

@@ -225,6 +225,36 @@ def test_documents_card_converts_images_to_marginless_pdf(tmp_path):
         _app().processEvents()
 
 
+def test_documents_card_converts_each_image_to_its_own_pdf(tmp_path):
+    _app()
+
+    import fitz
+    from shell.tray import PdfTray
+    from ui.common.documents_step import DocumentsCard
+
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("RGB", (80, 40), "navy").save(first)
+    Image.new("RGB", (60, 30), "white").save(second)
+    card = DocumentsCard(_ctx(PdfTray()), show_thumbnails=False)
+    try:
+        card.add_paths([str(first), str(second)])
+
+        outputs = [Path(path) for path in card.paths()]
+        assert len(outputs) == 2
+        assert [path.stem for path in outputs] == ["first", "second"]
+        for output, size in zip(outputs, [(80, 40), (60, 30)]):
+            doc = fitz.open(str(output))
+            try:
+                assert doc.page_count == 1
+                assert (round(doc[0].rect.width), round(doc[0].rect.height)) == size
+            finally:
+                doc.close()
+    finally:
+        card.deleteLater()
+        _app().processEvents()
+
+
 def test_document_workspace_uses_preview_panel(tmp_path):
     _app()
 

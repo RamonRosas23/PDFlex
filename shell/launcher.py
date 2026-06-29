@@ -50,6 +50,7 @@ EDITORIAL_ORDER: tuple[str, ...] = (
     "organizador",
     "compresor",
     "marca_agua",
+    "subrayador",
     "quitar_logos",
     "redactor",
     "protector",
@@ -78,8 +79,8 @@ BASE_SECTIONS: tuple[ToolSection, ...] = (
     ToolSection(
         id="preparar",
         title="Preparar y proteger",
-        subtitle="Optimiza, sella, limpia, redacta, protege, valida y repara",
-        tool_ids=("compresor", "marca_agua", "quitar_logos", "redactor", "protector", "formularios", "comparador", "reparador"),
+        subtitle="Optimiza, sella, subraya, limpia, redacta, protege, valida y repara",
+        tool_ids=("compresor", "marca_agua", "subrayador", "quitar_logos", "redactor", "protector", "formularios", "comparador", "reparador"),
     ),
     ToolSection(
         id="conversion",

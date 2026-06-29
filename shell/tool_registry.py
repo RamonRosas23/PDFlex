@@ -50,6 +50,11 @@ def _make_marca_agua():
     return MarcaAguaWindow
 
 
+def _make_subrayador():
+    from ui.subrayador.window import SubrayadorWindow
+    return SubrayadorWindow
+
+
 def _make_redactor():
     from ui.redactor.window import RedactorWindow
     return RedactorWindow
@@ -227,6 +232,27 @@ TOOLS: List[ToolDescriptor] = [
         window_factory=lambda ctx: _make_marca_agua()(ctx),
         icon_letter="A",
         icon_name="tool-marca-agua",
+    ),
+    ToolDescriptor(
+        id="subrayador",
+        title="Subrayador realista",
+        tagline="Marcatexto natural con textura fisica",
+        description_md=(
+            "**¿Qué hace?**\n"
+            "Permite dibujar subrayados y resaltados sobre un PDF con apariencia "
+            "realista de marcatexto.\n\n"
+            "**Características:**\n"
+            "- Perfiles de marcador nuevo, oficina real, seco, revision suave y neon\n"
+            "- Configuracion manual de opacidad, rugosidad, presion, vetas, sangrado y rebase\n"
+            "- Trazos no perfectos: bordes irregulares, pasadas leves y textura interna\n"
+            "- Semilla reproducible para conservar variaciones naturales controladas\n"
+            "- Resultado temporal aplanado sin modificar el PDF original"
+        ),
+        accent_color="#FACC15",
+        enabled=True,
+        window_factory=lambda ctx: _make_subrayador()(ctx),
+        icon_letter="S",
+        icon_name="tool-subrayador",
     ),
     ToolDescriptor(
         id="redactor",

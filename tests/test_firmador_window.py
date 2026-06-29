@@ -8,7 +8,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import fitz
 import pytest
 from PIL import Image, ImageDraw
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QScrollArea, QWidget
 
 from shell.context import ShellContext
 from shell.tray import PdfTray
@@ -140,6 +140,57 @@ def test_disabled_review_publishes_processed_outputs_directly(
         assert window._review_documents == []
         assert window.stack.currentIndex() == 6
         assert ctx.tray.paths() == [str(output_pdf)]
+    finally:
+        window.deleteLater()
+        app.processEvents()
+
+
+def test_signature_position_left_panel_stays_accessible_in_narrow_window(
+    app,
+    ctx,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PDFLEX_SIGNATURE_LIBRARY_DIR", str(tmp_path / "siglib"))
+    pdf_path = _make_pdf(
+        tmp_path / "documento_con_nombre_muy_largo_para_panel_izquierdo.pdf"
+    )
+    sig_path, sig_img = _make_signature(
+        tmp_path / "firma_con_nombre_extremadamente_largo_para_layout.png"
+    )
+
+    window = FirmadorWindow(ctx)
+    try:
+        window.resize(1000, 620)
+        window.show()
+        window.set_inputs([str(pdf_path)])
+        window._switch_section(1)
+        entry = window._add_sig_entry_from_image(
+            str(sig_path),
+            sig_img,
+            _signature_fingerprint(sig_img),
+            source_name=sig_path.name,
+        )
+        window.sigs_list.setCurrentRow(0)
+        app.processEvents()
+
+        assert entry is not None
+        assert window.width() <= 1020
+
+        left_scroll = next(
+            scroll
+            for scroll in window.findChildren(QScrollArea)
+            if scroll.objectName() == "LeftPanelScroll"
+        )
+        assert left_scroll.horizontalScrollBar().maximum() == 0
+        assert left_scroll.verticalScrollBar().maximum() > 0
+        assert left_scroll.widget().width() <= left_scroll.viewport().width()
+
+        for child in left_scroll.widget().findChildren(QWidget):
+            if not child.isVisible():
+                continue
+            geometry = child.geometry()
+            assert geometry.x() + geometry.width() <= left_scroll.widget().width() + 1
     finally:
         window.deleteLater()
         app.processEvents()

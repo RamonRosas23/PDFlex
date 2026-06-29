@@ -42,7 +42,7 @@ from PyQt6.QtWidgets import (
     QSpinBox, QCheckBox, QProgressBar,
     QGridLayout, QComboBox, QScrollArea, QLineEdit,
     QRadioButton, QButtonGroup, QAbstractItemView,
-    QMenu, QDialog,
+    QMenu, QDialog, QSizePolicy,
 )
 
 from core.signature_engine import (
@@ -500,6 +500,7 @@ class FirmadorWindow(PipelineWindow):
         )
 
         self._build_pages()
+        self._relax_stacked_page_size_hints()
         self._refresh_saved_signature_list()
         self._update_signature_run_summary()
         self._build_action_buttons()
@@ -523,6 +524,16 @@ class FirmadorWindow(PipelineWindow):
         self.stack.addWidget(self._build_process_section())
         self.stack.addWidget(self._build_validation_section())
         self.stack.addWidget(self._build_results_section())
+
+    def _relax_stacked_page_size_hints(self) -> None:
+        for index in range(self.stack.count()):
+            page = self.stack.widget(index)
+            if page is not None:
+                page.setMinimumSize(0, 0)
+                page.setSizePolicy(
+                    QSizePolicy.Policy.Ignored,
+                    QSizePolicy.Policy.Ignored,
+                )
 
     def _switch_section(self, idx: int) -> None:
         super()._switch_section(idx)
@@ -625,8 +636,14 @@ class FirmadorWindow(PipelineWindow):
         left_col.setSpacing(10)
         left_col.setAlignment(Qt.AlignmentFlag.AlignTop)
 
+        def _fit_left_width(widget: QWidget) -> None:
+            widget.setMinimumWidth(0)
+            policy = widget.sizePolicy()
+            widget.setSizePolicy(QSizePolicy.Policy.Ignored, policy.verticalPolicy())
+
         # Card: firmas activas en esta corrida
         sig_card = make_card("Firmas en esta corrida")
+        _fit_left_width(sig_card)
         sl = card_layout(sig_card)
         sl.setContentsMargins(16, 14, 16, 14)
         sl.setSpacing(8)
@@ -635,6 +652,8 @@ class FirmadorWindow(PipelineWindow):
         sig_head.setSpacing(8)
         self._sig_count_lbl = QLabel("0 firmas")
         self._sig_count_lbl.setProperty("class", "CardHint")
+        self._sig_count_lbl.setMinimumWidth(0)
+        _fit_left_width(self._sig_count_lbl)
         sig_head.addWidget(self._sig_count_lbl)
         sig_head.addStretch()
         sl.addLayout(sig_head)
@@ -643,15 +662,16 @@ class FirmadorWindow(PipelineWindow):
         sig_actions.setSpacing(8)
         add_sig_btn = QPushButton("Importar")
         add_sig_btn.setProperty("class", "Primary")
+        add_sig_btn.setMinimumWidth(0)
         set_button_icon(add_sig_btn, "plus")
         add_sig_btn.clicked.connect(self._on_add_sig)
         rm_sig_btn = QPushButton("Quitar")
         rm_sig_btn.setProperty("class", "Ghost")
+        rm_sig_btn.setMinimumWidth(0)
         set_button_icon(rm_sig_btn, "trash-2")
         rm_sig_btn.clicked.connect(self._on_remove_sig)
-        sig_actions.addWidget(add_sig_btn)
-        sig_actions.addWidget(rm_sig_btn)
-        sig_actions.addStretch()
+        sig_actions.addWidget(add_sig_btn, 1)
+        sig_actions.addWidget(rm_sig_btn, 1)
         sl.addLayout(sig_actions)
 
         self.sigs_list = QListWidget()
@@ -664,6 +684,7 @@ class FirmadorWindow(PipelineWindow):
         self.sigs_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.sigs_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.sigs_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.sigs_list.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.sigs_list.currentRowChanged.connect(self._on_sig_list_row_changed)
         self.sigs_list.itemChanged.connect(self._on_sig_item_check_changed)
         sl.addWidget(self.sigs_list)
@@ -673,10 +694,14 @@ class FirmadorWindow(PipelineWindow):
         )
         self._sig_hint.setProperty("class", "CardHint")
         self._sig_hint.setWordWrap(True)
+        _fit_left_width(self._sig_hint)
         sl.addWidget(self._sig_hint)
 
         self._sig_list_hint = QLabel("Marcada: aplicar en este documento")
         self._sig_list_hint.setProperty("class", "CardHint")
+        self._sig_list_hint.setWordWrap(True)
+        self._sig_list_hint.setMinimumWidth(0)
+        _fit_left_width(self._sig_list_hint)
         self._sig_list_hint.setVisible(False)
         sl.addWidget(self._sig_list_hint)
 
@@ -684,6 +709,7 @@ class FirmadorWindow(PipelineWindow):
 
         # Card: biblioteca persistente
         saved_card = make_card("Biblioteca guardada")
+        _fit_left_width(saved_card)
         bl = card_layout(saved_card)
         bl.setContentsMargins(16, 14, 16, 14)
         bl.setSpacing(8)
@@ -692,6 +718,8 @@ class FirmadorWindow(PipelineWindow):
         saved_head.setSpacing(8)
         self._saved_count_lbl = QLabel("0 guardadas")
         self._saved_count_lbl.setProperty("class", "CardHint")
+        self._saved_count_lbl.setMinimumWidth(0)
+        _fit_left_width(self._saved_count_lbl)
         saved_head.addWidget(self._saved_count_lbl)
         saved_head.addStretch()
         bl.addLayout(saved_head)
@@ -706,6 +734,7 @@ class FirmadorWindow(PipelineWindow):
         self.saved_sigs_list.setTextElideMode(Qt.TextElideMode.ElideMiddle)
         self.saved_sigs_list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
         self.saved_sigs_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.saved_sigs_list.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self.saved_sigs_list.currentRowChanged.connect(
             self._on_saved_sig_list_row_changed
         )
@@ -723,26 +752,30 @@ class FirmadorWindow(PipelineWindow):
         saved_actions.setSpacing(8)
         self._use_saved_btn = QPushButton("Usar")
         self._use_saved_btn.setProperty("class", "Primary")
+        self._use_saved_btn.setMinimumWidth(0)
         set_button_icon(self._use_saved_btn, "plus")
         self._use_saved_btn.clicked.connect(self._on_use_saved_sig)
         self._forget_saved_btn = QPushButton("Olvidar")
         self._forget_saved_btn.setProperty("class", "Ghost")
+        self._forget_saved_btn.setMinimumWidth(0)
         set_button_icon(self._forget_saved_btn, "trash-2")
         self._forget_saved_btn.clicked.connect(self._on_forget_saved_sig)
-        saved_actions.addWidget(self._use_saved_btn)
-        saved_actions.addWidget(self._forget_saved_btn)
-        saved_actions.addStretch()
+        saved_actions.addWidget(self._use_saved_btn, 1)
+        saved_actions.addWidget(self._forget_saved_btn, 1)
         bl.addLayout(saved_actions)
 
         self._saved_hint = QLabel("Sin firmas guardadas.")
         self._saved_hint.setProperty("class", "CardHint")
         self._saved_hint.setWordWrap(True)
+        self._saved_hint.setMinimumWidth(0)
+        _fit_left_width(self._saved_hint)
         bl.addWidget(self._saved_hint)
 
         left_col.addWidget(saved_card)
 
         # Card: opciones de imagen de firma ──────────────────────────────
         opts_card = make_card("Opciones de imagen")
+        _fit_left_width(opts_card)
         ol = card_layout(opts_card)
         ol.setContentsMargins(16, 14, 16, 14)
         ol.setSpacing(8)
@@ -750,6 +783,8 @@ class FirmadorWindow(PipelineWindow):
         self._opts_scope_lbl = QLabel("Sin firma seleccionada")
         self._opts_scope_lbl.setObjectName("SignatureOptionsScope")
         self._opts_scope_lbl.setWordWrap(True)
+        self._opts_scope_lbl.setMinimumWidth(0)
+        _fit_left_width(self._opts_scope_lbl)
         ol.addWidget(self._opts_scope_lbl)
 
         self._opt_removebg = QCheckBox("Quitar fondo")
@@ -771,6 +806,8 @@ class FirmadorWindow(PipelineWindow):
         )
         self._opts_hint.setProperty("class", "CardHint")
         self._opts_hint.setWordWrap(True)
+        self._opts_hint.setMinimumWidth(0)
+        _fit_left_width(self._opts_hint)
         ol.addWidget(self._opts_hint)
 
         self._opt_removebg.stateChanged.connect(lambda _: self._on_sig_options_changed())
@@ -781,6 +818,7 @@ class FirmadorWindow(PipelineWindow):
 
         # Card: documento activo
         doc_card = make_card("Documento activo")
+        _fit_left_width(doc_card)
         dl = card_layout(doc_card)
         dl.setContentsMargins(16, 14, 16, 14)
         dl.setSpacing(8)
@@ -796,6 +834,8 @@ class FirmadorWindow(PipelineWindow):
             lambda: self._go_to_doc(self._active_doc_idx - 1)
         )
         self._doc_name_lbl = QLabel("Sin documento")
+        self._doc_name_lbl.setMinimumWidth(0)
+        _fit_left_width(self._doc_name_lbl)
         self._doc_name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._doc_name_lbl.setStyleSheet("color:#ECEDEE; font-size:12px;")
         self._doc_counter_lbl = QLabel("—")
@@ -825,6 +865,11 @@ class FirmadorWindow(PipelineWindow):
         mode_lbl.setStyleSheet("color:#9094A0; font-size:12px;")
         self._pos_mode_combo = QComboBox()
         self._pos_mode_combo.addItems(["Misma para todos", "Por documento"])
+        self._pos_mode_combo.setMinimumWidth(0)
+        self._pos_mode_combo.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._pos_mode_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
         self._pos_mode_combo.currentIndexChanged.connect(
             lambda i: self._set_per_doc_mode(i == 1)
         )
@@ -844,13 +889,16 @@ class FirmadorWindow(PipelineWindow):
         # Contenedor desplazable para el panel izquierdo
         left_widget = QWidget()
         left_widget.setLayout(left_col)
+        left_widget.setMinimumWidth(0)
+        left_widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
 
         left_scroll = QScrollArea()
         left_scroll.setObjectName("LeftPanelScroll")
-        left_scroll.setFixedWidth(400)
+        left_scroll.setFixedWidth(376)
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_scroll.setWidget(left_widget)
         body.addWidget(left_scroll)
 

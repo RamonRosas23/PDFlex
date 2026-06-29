@@ -140,6 +140,13 @@ _ICONS = {
         '<path d="M7 16.3c2.2 0 4-1.83 4-4.05 0-1.16-.57-2.26-1.71-3.19S7.29 6.75 7 5.3c-.29 1.45-1.14 2.84-2.29 3.76S3 11.1 3 12.25c0 2.22 1.8 4.05 4 4.05z"/>'
         '<path d="M12.56 6.6A10.97 10.97 0 0 0 14 3.02c.5 2.5 2 4.9 4 6.5s3 3.5 3 5.5a6.98 6.98 0 0 1-11.91 4.97"/>'
     ),
+    "tool-subrayador": (
+        '<path d="m4 18 11.5-11.5a2.1 2.1 0 0 1 3 0l1 1a2.1 2.1 0 0 1 0 3L8 22H4v-4Z"/>'
+        '<path d="m13.5 8.5 2 2"/>'
+        '<path d="M3 14h7"/>'
+        '<path d="M3 10h4"/>'
+        '<path d="M3 6h8"/>'
+    ),
     "tool-redactor": (
         '<path d="M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696a10.747 10.747 0 0 1-1.444 2.49"/>'
         '<path d="M14.084 14.158a3 3 0 0 1-4.242-4.242"/>'
@@ -244,6 +251,7 @@ TOOL_ICON_MAP: dict[str, str] = {
     "organizador":       "tool-organizador",
     "compresor":         "tool-compresor",
     "marca_agua":        "tool-marca-agua",
+    "subrayador":        "tool-subrayador",
     "redactor":          "tool-redactor",
     "quitar_logos":      "tool-quitar-logos",
     "protector":         "tool-protector",

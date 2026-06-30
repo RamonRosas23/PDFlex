@@ -162,6 +162,9 @@ class ReviewDocument:
     final_path: str
     source_result: JobResult
     instances: list[ReviewSignatureInstance] = field(default_factory=list)
+    _validated_page_keys: dict[int, tuple[tuple[object, ...], ...]] = field(
+        default_factory=dict, repr=False, compare=False
+    )
 
     def page_instances(
         self,
@@ -182,6 +185,28 @@ class ReviewDocument:
     @property
     def warning_count(self) -> int:
         return sum(1 for inst in self.instances if not inst.deleted and inst.warnings)
+
+    def validation_key(self, page_index: int) -> tuple[tuple[object, ...], ...]:
+        return tuple(
+            (
+                inst.instance_id,
+                bool(inst.deleted),
+                round(float(inst.x), 4),
+                round(float(inst.y), 4),
+                round(float(inst.width), 4),
+                round(float(inst.height), 4),
+                round(float(inst.angle), 4),
+                round(float(inst.opacity), 4),
+                int(inst.order),
+            )
+            for inst in self.page_instances(page_index, include_deleted=True)
+        )
+
+    def is_page_validation_current(self, page_index: int) -> bool:
+        return self._validated_page_keys.get(page_index) == self.validation_key(page_index)
+
+    def mark_page_validated(self, page_index: int) -> None:
+        self._validated_page_keys[page_index] = self.validation_key(page_index)
 
 
 def build_review_documents(results: Iterable[JobResult]) -> list[ReviewDocument]:
@@ -220,6 +245,8 @@ def build_review_documents(results: Iterable[JobResult]) -> list[ReviewDocument]
                         order=order,
                     )
                 )
+        for page_index in {inst.page_index for inst in review.instances}:
+            review.mark_page_validated(page_index)
         documents.append(review)
     return documents
 
@@ -229,6 +256,8 @@ def export_review_documents(
     variation: VariationConfig,
     progress: Optional[ProgressCallback] = None,
     should_cancel: Optional[CancelCallback] = None,
+    *,
+    force_validation: bool = True,
 ) -> list[JobResult]:
     engine = SignatureEngine(variation)
     total_pages = _total_source_pages(review_documents)
@@ -240,7 +269,7 @@ def export_review_documents(
             results.append(_failed_result(review, "Exportacion cancelada por el usuario"))
             break
 
-        validate_review_document(review)
+        validate_review_document(review, force=force_validation)
         out_path = Path(review.final_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = out_path.with_name(f"{out_path.stem}.review.tmp.pdf")
@@ -249,6 +278,7 @@ def export_review_documents(
         try:
             doc = _open_pdf_safe(review.source_path)
             image_xrefs: dict[tuple, int] = {}
+            instances_by_page = _instances_by_page(review)
             for page_index in range(doc.page_count):
                 if should_cancel and should_cancel():
                     raise RuntimeError("Exportacion cancelada por el usuario")
@@ -256,10 +286,10 @@ def export_review_documents(
                     progress(
                         done_pages,
                         max(1, total_pages),
-                        f"Validando pagina {page_index + 1}/{doc.page_count}",
+                        f"Generando pagina {page_index + 1}/{doc.page_count}",
                     )
                 page = doc[page_index]
-                for inst in review.page_instances(page_index):
+                for inst in instances_by_page.get(page_index, ()):
                     engine.apply_signature_instance(
                         page,
                         inst.signature_path,
@@ -294,7 +324,20 @@ def export_review_documents(
     return results
 
 
-def validate_review_document(review: ReviewDocument) -> None:
+def validate_review_document(
+    review: ReviewDocument,
+    *,
+    force: bool = True,
+) -> None:
+    page_indices = sorted({inst.page_index for inst in review.instances})
+    if not force:
+        page_indices = [
+            page_index for page_index in page_indices
+            if not review.is_page_validation_current(page_index)
+        ]
+        if not page_indices:
+            return
+
     try:
         doc = _open_pdf_safe(review.source_path)
     except Exception:
@@ -302,7 +345,7 @@ def validate_review_document(review: ReviewDocument) -> None:
 
     analyzer = PdfAnalyzer()
     try:
-        for page_index in sorted({inst.page_index for inst in review.instances}):
+        for page_index in page_indices:
             if page_index < 0 or page_index >= doc.page_count:
                 continue
             _validate_review_page_with_doc(review, doc, page_index, analyzer)
@@ -310,7 +353,14 @@ def validate_review_document(review: ReviewDocument) -> None:
         doc.close()
 
 
-def validate_review_page(review: ReviewDocument, page_index: int) -> None:
+def validate_review_page(
+    review: ReviewDocument,
+    page_index: int,
+    *,
+    force: bool = True,
+) -> None:
+    if not force and review.is_page_validation_current(page_index):
+        return
     try:
         doc = _open_pdf_safe(review.source_path)
     except Exception:
@@ -346,6 +396,7 @@ def _validate_review_page_with_doc(
         inst.scaled_to_fit = inst.scaled_to_fit or placement.scaled_to_fit
         inst.warnings = warnings_from_placement(inst.to_placement())
         occupied.append(bbox)
+    review.mark_page_validated(page_index)
 
 
 def review_document_to_job_result(
@@ -355,9 +406,10 @@ def review_document_to_job_result(
     error: str = "",
 ) -> JobResult:
     page_results: list[PageResult] = []
-    for page_index in sorted({inst.page_index for inst in review.instances if not inst.deleted}):
+    instances_by_page = _instances_by_page(review)
+    for page_index in sorted(instances_by_page):
         signature_results: list[SignaturePageResult] = []
-        for inst in review.page_instances(page_index):
+        for inst in instances_by_page[page_index]:
             signature_results.append(
                 SignaturePageResult(
                     signature_path=inst.signature_path,
@@ -414,6 +466,19 @@ def _intersects_any(rect: fitz.Rect, others: Iterable[fitz.Rect], padding: float
         rect.y1 + padding,
     )
     return any(expanded.intersects(other) for other in others)
+
+
+def _instances_by_page(
+    review: ReviewDocument,
+) -> dict[int, list[ReviewSignatureInstance]]:
+    grouped: dict[int, list[ReviewSignatureInstance]] = {}
+    for inst in review.instances:
+        if inst.deleted:
+            continue
+        grouped.setdefault(inst.page_index, []).append(inst)
+    for items in grouped.values():
+        items.sort(key=lambda inst: inst.order)
+    return grouped
 
 
 def _total_source_pages(review_documents: list[ReviewDocument]) -> int:

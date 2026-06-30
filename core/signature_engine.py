@@ -172,62 +172,14 @@ class SignatureEngine:
                              error=f"No se pudo abrir PDF: {e}")
 
         results: List[PageResult] = []
-        target_pages = (job.pages if job.pages is not None
-                        else list(range(doc.page_count)))
-        total = len(target_pages)
 
         try:
-            image_xrefs: Dict[Tuple, int] = {}
-            for i, page_idx in enumerate(target_pages):
-                if progress:
-                    progress(i, total, f"Página {page_idx + 1}/{doc.page_count}")
-
-                analysis = self.analyzer.analyze_page(doc, page_idx)
-                page = doc[page_idx]
-                primary_placement: Optional[Placement] = None
-                signature_results: List[SignaturePageResult] = []
-                occupied_rects: List[fitz.Rect] = []
-
-                for sig_conf in job.signatures:
-                    if page_idx in sig_conf.excluded_pages:
-                        continue
-                    base_img = self._get_image(sig_conf.signature_path)
-                    placement, variation = self._compute_placement(
-                        sig_conf, analysis, job.pdf_path, page_idx, occupied_rects,
-                        smart=job.smart_placement,
-                    )
-                    placement = self._apply_signature(
-                        page,
-                        placement,
-                        base_img,
-                        sig_conf.signature_path,
-                        variation,
-                        image_xrefs,
-                    )
-                    occupied_rects.append(placement.rotated_bbox)
-                    signature_results.append(SignaturePageResult(
-                        signature_path=sig_conf.signature_path,
-                        placement=placement,
-                        signature_uid=sig_conf.signature_uid,
-                        signature_label=sig_conf.signature_label,
-                    ))
-                    if primary_placement is None:
-                        primary_placement = placement
-
-                if primary_placement is not None:
-                    results.append(PageResult(
-                        page_index=page_idx,
-                        placement=primary_placement,
-                        snapped_to_line=any(
-                            result.placement.snapped_to_line
-                            for result in signature_results
-                        ),
-                        clean=all(
-                            result.placement.clean
-                            for result in signature_results
-                        ),
-                        signature_results=signature_results,
-                    ))
+            results = self._process_job_pages(
+                doc,
+                job,
+                progress=progress,
+                apply_images=True,
+            )
 
             os.makedirs(os.path.dirname(os.path.abspath(job.output_path)), exist_ok=True)
             # Elimina objetos sin referencia y compacta xref, pero evita comparar
@@ -252,6 +204,50 @@ class SignatureEngine:
             success=True,
         )
 
+    def plan_job(
+        self,
+        job: SignJob,
+        progress: Optional[Callable[[int, int, str], None]] = None,
+    ) -> JobResult:
+        """Calcula colocaciones y advertencias sin escribir un PDF borrador.
+
+        La etapa de revision solo necesita metadatos: el visor carga el PDF
+        original y dibuja las firmas encima. Evitar el guardado del borrador
+        ahorra la rasterizacion de firmas y una escritura completa del PDF.
+        """
+        try:
+            doc = _open_pdf_safe(job.pdf_path)
+        except Exception as e:
+            return JobResult(job=job, output_path="", success=False,
+                             error=f"No se pudo abrir PDF: {e}")
+
+        try:
+            results = self._process_job_pages(
+                doc,
+                job,
+                progress=progress,
+                apply_images=False,
+            )
+            target_pages = (job.pages if job.pages is not None
+                            else list(range(doc.page_count)))
+            if progress:
+                progress(len(target_pages), len(target_pages), "Plan listo")
+        except Exception as e:
+            doc.close()
+            return JobResult(job=job, output_path="", success=False, error=str(e))
+        finally:
+            try:
+                doc.close()
+            except Exception:
+                pass
+
+        return JobResult(
+            job=job,
+            output_path=job.output_path,
+            page_results=results,
+            success=True,
+        )
+
     # ------------------------------------------------------------------ #
     # Privados
     # ------------------------------------------------------------------ #
@@ -260,6 +256,76 @@ class SignatureEngine:
         if path not in self._img_cache:
             self._img_cache[path] = Image.open(path).convert("RGBA")
         return self._img_cache[path]
+
+    def _process_job_pages(
+        self,
+        doc: fitz.Document,
+        job: SignJob,
+        *,
+        progress: Optional[Callable[[int, int, str], None]],
+        apply_images: bool,
+    ) -> List[PageResult]:
+        results: List[PageResult] = []
+        target_pages = (job.pages if job.pages is not None
+                        else list(range(doc.page_count)))
+        total = len(target_pages)
+        image_xrefs: Dict[Tuple, int] = {}
+
+        for i, page_idx in enumerate(target_pages):
+            if progress:
+                progress(i, total, f"Página {page_idx + 1}/{doc.page_count}")
+
+            analysis = self.analyzer.analyze_page(doc, page_idx)
+            page = doc[page_idx]
+            primary_placement: Optional[Placement] = None
+            signature_results: List[SignaturePageResult] = []
+            occupied_rects: List[fitz.Rect] = []
+
+            for sig_conf in job.signatures:
+                if page_idx in sig_conf.excluded_pages:
+                    continue
+                placement, variation = self._compute_placement(
+                    sig_conf, analysis, job.pdf_path, page_idx, occupied_rects,
+                    smart=job.smart_placement,
+                )
+                if apply_images:
+                    base_img = self._get_image(sig_conf.signature_path)
+                    placement = self._apply_signature(
+                        page,
+                        placement,
+                        base_img,
+                        sig_conf.signature_path,
+                        variation,
+                        image_xrefs,
+                    )
+                else:
+                    placement = self._fit_placement_for_page(page, placement)
+                occupied_rects.append(placement.rotated_bbox)
+                signature_results.append(SignaturePageResult(
+                    signature_path=sig_conf.signature_path,
+                    placement=placement,
+                    signature_uid=sig_conf.signature_uid,
+                    signature_label=sig_conf.signature_label,
+                ))
+                if primary_placement is None:
+                    primary_placement = placement
+
+            if primary_placement is not None:
+                results.append(PageResult(
+                    page_index=page_idx,
+                    placement=primary_placement,
+                    snapped_to_line=any(
+                        result.placement.snapped_to_line
+                        for result in signature_results
+                    ),
+                    clean=all(
+                        result.placement.clean
+                        for result in signature_results
+                    ),
+                    signature_results=signature_results,
+                ))
+
+        return results
 
     def _compute_placement(
         self,
@@ -363,12 +429,8 @@ class SignatureEngine:
         image_xrefs: Dict[Tuple, int],
     ) -> Placement:
         # Segunda barrera: fit dentro de los límites de display de la página.
-        placement = fit_placement_inside_page(
-            placement, page.rect.width, page.rect.height, margin=0.0
-        )
+        placement = self._fit_placement_for_page(page, placement)
         target = placement.rotated_bbox
-        if not self._inside_physical_page(target, page.rect.width, page.rect.height):
-            raise ValueError("No fue posible encajar la firma dentro de la página.")
 
         rot = int(page.rotation) % 360
 
@@ -421,6 +483,19 @@ class SignatureEngine:
                 xref = page.insert_image(target, stream=img_bytes, overlay=True)
 
         image_xrefs[cache_key] = xref
+        return placement
+
+    def _fit_placement_for_page(
+        self,
+        page: fitz.Page,
+        placement: Placement,
+    ) -> Placement:
+        placement = fit_placement_inside_page(
+            placement, page.rect.width, page.rect.height, margin=0.0
+        )
+        target = placement.rotated_bbox
+        if not self._inside_physical_page(target, page.rect.width, page.rect.height):
+            raise ValueError("No fue posible encajar la firma dentro de la página.")
         return placement
 
     @staticmethod
@@ -542,3 +617,12 @@ def run_job_in_process(job: SignJob, variation: VariationConfig) -> JobResult:
         _PROCESS_ENGINE = SignatureEngine(variation)
         _PROCESS_VARIATION = variation
     return _PROCESS_ENGINE.run_job(job)
+
+
+def plan_job_in_process(job: SignJob, variation: VariationConfig) -> JobResult:
+    """Calcula un borrador editable en un proceso aislado."""
+    global _PROCESS_ENGINE, _PROCESS_VARIATION
+    if _PROCESS_ENGINE is None or _PROCESS_VARIATION != variation:
+        _PROCESS_ENGINE = SignatureEngine(variation)
+        _PROCESS_VARIATION = variation
+    return _PROCESS_ENGINE.plan_job(job)

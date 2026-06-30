@@ -65,6 +65,52 @@ def test_review_export_can_remove_generated_signature(tmp_path) -> None:
     assert _image_count(out_path) == 0
 
 
+def test_review_plan_does_not_write_draft_until_export(tmp_path) -> None:
+    pdf_path = _make_pdf(tmp_path / "source.pdf")
+    sig_path = _make_signature(tmp_path / "firma.png")
+    out_path = tmp_path / "source_firmado.pdf"
+    variation = VariationConfig(
+        angle_deg=0,
+        scale_pct=0,
+        offset_x=0,
+        offset_y=0,
+        opacity_min=1,
+        opacity_max=1,
+        enable_pressure_jitter=False,
+        stroke_mode="exacta",
+    )
+    job = SignJob(
+        pdf_path=str(pdf_path),
+        output_path=str(out_path),
+        signatures=[
+            SigPlacement(
+                signature_path=str(sig_path),
+                base_x_norm=0.5,
+                base_y_norm=0.65,
+                base_width_pt=120,
+                base_height_pt=45,
+                signature_uid="sig-a",
+                signature_label="Firma A",
+            )
+        ],
+        smart_placement=False,
+    )
+
+    result = SignatureEngine(variation).plan_job(job)
+
+    assert result.success
+    assert result.output_path == str(out_path)
+    assert not out_path.exists()
+    review_docs = build_review_documents([result])
+
+    final_results = export_review_documents(review_docs, variation)
+
+    assert len(final_results) == 1
+    assert final_results[0].success
+    assert out_path.exists()
+    assert _image_count(out_path) == 1
+
+
 def test_validate_review_page_only_updates_target_page(tmp_path) -> None:
     pdf_path = _make_two_page_pdf(tmp_path / "source.pdf")
     job = SignJob(pdf_path=str(pdf_path), output_path=str(pdf_path), signatures=[])

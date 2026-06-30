@@ -50,6 +50,7 @@ from core.signature_engine import (
     SigPlacement,
     SignJob,
     SignatureEngine,
+    plan_job_in_process,
     run_job_in_process,
 )
 from core.signature_review import (
@@ -256,10 +257,17 @@ class SignWorker(QObject):
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
 
-    def __init__(self, jobs: List[SignJob], variation: VariationConfig) -> None:
+    def __init__(
+        self,
+        jobs: List[SignJob],
+        variation: VariationConfig,
+        *,
+        plan_only: bool = False,
+    ) -> None:
         super().__init__()
         self.jobs = jobs
         self.variation = variation
+        self.plan_only = plan_only
         self._cancel = False
 
     def cancel(self) -> None:
@@ -293,7 +301,10 @@ class SignWorker(QObject):
                 self.progress.emit(done, _n * 100, msg)
 
             try:
-                result = engine.run_job(job, progress=_p)
+                if self.plan_only:
+                    result = engine.plan_job(job, progress=_p)
+                else:
+                    result = engine.run_job(job, progress=_p)
             except Exception as e:
                 result = JobResult(job=job, output_path="", success=False, error=str(e))
 
@@ -326,7 +337,8 @@ class SignWorker(QObject):
                     job = self.jobs[idx]
                     next_idx += 1
                     self.doc_started.emit(job.pdf_path)
-                    future = pool.submit(run_job_in_process, job, self.variation)
+                    fn = plan_job_in_process if self.plan_only else run_job_in_process
+                    future = pool.submit(fn, job, self.variation)
                     pending[future] = (idx, job)
 
             _submit_available()
@@ -390,10 +402,13 @@ class ReviewExportWorker(QObject):
         self,
         review_documents: List[ReviewDocument],
         variation: VariationConfig,
+        *,
+        force_validation: bool = True,
     ) -> None:
         super().__init__()
         self.review_documents = review_documents
         self.variation = variation
+        self.force_validation = force_validation
         self._cancel = False
 
     def cancel(self) -> None:
@@ -406,6 +421,7 @@ class ReviewExportWorker(QObject):
                 self.variation,
                 progress=lambda cur, total, msg: self.progress.emit(cur, total, msg),
                 should_cancel=lambda: self._cancel,
+                force_validation=self.force_validation,
             )
         except Exception as exc:
             self.error.emit(str(exc))
@@ -3565,6 +3581,7 @@ class FirmadorWindow(PipelineWindow):
 
         variation = self._build_variation_config()
         self._last_variation_config = variation
+        review_enabled = self._is_review_enabled()
         preflight = SignatureEngine(variation).preflight_bounds(jobs)
         if preflight.adjusted_to_page:
             msg = (
@@ -3591,7 +3608,7 @@ class FirmadorWindow(PipelineWindow):
         self._proc_step.set_running(True)
         self._proc_step.set_progress(0, "Iniciando…")
 
-        self._worker = SignWorker(jobs, variation)
+        self._worker = SignWorker(jobs, variation, plan_only=review_enabled)
         self._worker_thread = RunnerThread(self._worker.run, self)
         self._worker.progress.connect(self._on_progress)
         self._worker.doc_started.connect(
@@ -3619,7 +3636,10 @@ class FirmadorWindow(PipelineWindow):
         self._draft_results = list(results)
         self.last_results = []
         self._proc_step.set_running(False)
-        self._proc_step.set_progress(100, "Borrador listo")
+        self._proc_step.set_progress(
+            100,
+            "Plan listo para revisión" if self._is_review_enabled() else "Firmado listo",
+        )
         self._worker_thread = None
         self._worker = None
 
@@ -3644,7 +3664,7 @@ class FirmadorWindow(PipelineWindow):
 
         if self._review_documents:
             show_success(
-                self, "Borrador listo",
+                self, "Revisión lista",
                 f"Se procesaron {len(self._draft_results)} documentos.\n\n"
                 f"Listos para validar: {ok}" + (f"\nCon error: {fail}" if fail else ""),
             )
@@ -3742,7 +3762,7 @@ class FirmadorWindow(PipelineWindow):
         self._review_doc_idx = row
         self._review_active_instance_id = None
         review = self._review_documents[row]
-        validate_review_document(review)
+        validate_review_document(review, force=False)
         self._review_loading = True
         try:
             self._review_preview.load_pdf(review.source_path)
@@ -4139,7 +4159,7 @@ class FirmadorWindow(PipelineWindow):
             return
         self._flush_review_validation()
         for review in self._review_documents:
-            validate_review_document(review)
+            validate_review_document(review, force=False)
         warning_count = sum(review.warning_count for review in self._review_documents)
         if warning_count:
             if not ask_question(
@@ -4154,7 +4174,11 @@ class FirmadorWindow(PipelineWindow):
                 return
         variation = self._last_variation_config or self._build_variation_config()
         self._set_review_running(True, "Generando PDF final…")
-        self._review_worker = ReviewExportWorker(self._review_documents, variation)
+        self._review_worker = ReviewExportWorker(
+            self._review_documents,
+            variation,
+            force_validation=False,
+        )
         self._review_worker_thread = RunnerThread(self._review_worker.run, self)
         self._review_worker.progress.connect(self._on_review_export_progress)
         self._review_worker.finished.connect(self._on_review_export_finished)

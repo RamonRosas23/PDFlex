@@ -21,6 +21,9 @@ from .signature_naturalizer import naturalize_signature
 from .variation import Variation, VariationGenerator, VariationConfig
 
 
+_SIGNATURE_PROCESS_DPI = 360.0
+
+
 def _open_pdf_safe(path: str) -> fitz.Document:
     """Abre un PDF y repara su xref si es necesario.
 
@@ -37,6 +40,36 @@ def _open_pdf_safe(path: str) -> fitz.Document:
         buf.seek(0)
         doc = fitz.open(stream=buf, filetype="pdf")
     return doc
+
+
+def _process_image_size(
+    base_size: Tuple[int, int],
+    placement: Placement,
+) -> Tuple[int, int]:
+    base_w, base_h = max(1, int(base_size[0])), max(1, int(base_size[1]))
+    target_w = max(
+        1,
+        int((max(1.0, placement.width) * _SIGNATURE_PROCESS_DPI / 72.0) + 0.999),
+    )
+    target_h = max(
+        1,
+        int((max(1.0, placement.height) * _SIGNATURE_PROCESS_DPI / 72.0) + 0.999),
+    )
+    scale = min(1.0, target_w / base_w, target_h / base_h)
+    if scale >= 0.98:
+        return base_w, base_h
+    return max(1, int(base_w * scale)), max(1, int(base_h * scale))
+
+
+def _prepare_image_for_placement(
+    base: Image.Image,
+    placement: Placement,
+) -> Image.Image:
+    target_size = _process_image_size(base.size, placement)
+    if target_size == base.size:
+        return base
+    resampling = getattr(Image, "Resampling", Image).LANCZOS
+    return base.resize(target_size, resampling)
 
 
 @dataclass
@@ -172,6 +205,7 @@ class SignatureEngine:
                              error=f"No se pudo abrir PDF: {e}")
 
         results: List[PageResult] = []
+        total_pages = len(job.pages) if job.pages is not None else doc.page_count
 
         try:
             results = self._process_job_pages(
@@ -186,7 +220,7 @@ class SignatureEngine:
             # todos los streams: garbage=4 domina el tiempo en PDFs con mucho texto.
             doc.save(job.output_path, garbage=2, deflate=True)
             if progress:
-                progress(total, total, "Guardado")
+                progress(total_pages, total_pages, "Guardado")
 
         except Exception as e:
             doc.close()
@@ -454,7 +488,9 @@ class SignatureEngine:
 
         # La clave de caché incluye rot para que imágenes pre-rotadas no se
         # reutilicen en páginas con orientación diferente.
-        base_key = self._transformed_image_key(sig_path, placement, variation)
+        base_key = self._transformed_image_key(
+            sig_path, placement, variation, base_img.size
+        )
         cache_key = (*base_key, rot)
         xref = image_xrefs.get(cache_key, 0)
 
@@ -503,20 +539,29 @@ class SignatureEngine:
         sig_path: str,
         placement: Placement,
         variation: Variation,
+        base_size: Tuple[int, int],
     ) -> Tuple[object, ...]:
+        process_size = _process_image_size(base_size, placement)
+        if variation.has_stroke_variation or abs(float(variation.pressure)) > 1e-9:
+            stroke_fields: Tuple[object, ...] = (
+                round(float(variation.pressure), 6),
+                variation.stroke_seed,
+                variation.stroke_mode,
+                round(float(variation.stroke_strength), 6),
+                round(float(variation.stretch_x), 6),
+                round(float(variation.stretch_y), 6),
+                round(float(variation.stroke_width_delta), 6),
+                round(float(variation.ink_flow), 6),
+                round(float(variation.dryness), 6),
+            )
+        else:
+            stroke_fields = (0.0, 0, "exacta", 0.0, 1.0, 1.0, 0.0, 0.0, 0.0)
         return (
             sig_path,
+            process_size,
             round(float(placement.angle), 6),
             round(float(placement.opacity), 6),
-            round(float(variation.pressure), 6),
-            variation.stroke_seed,
-            variation.stroke_mode,
-            round(float(variation.stroke_strength), 6),
-            round(float(variation.stretch_x), 6),
-            round(float(variation.stretch_y), 6),
-            round(float(variation.stroke_width_delta), 6),
-            round(float(variation.ink_flow), 6),
-            round(float(variation.dryness), 6),
+            *stroke_fields,
         )
 
     def _transformed_png_bytes(
@@ -579,7 +624,10 @@ class SignatureEngine:
         *,
         apply_rotation: bool = True,
     ) -> Image.Image:
-        img = naturalize_signature(base, variation)
+        img = naturalize_signature(
+            _prepare_image_for_placement(base, placement),
+            variation,
+        )
         pressure = variation.pressure
 
         if pressure > 0:

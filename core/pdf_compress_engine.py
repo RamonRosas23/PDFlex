@@ -174,6 +174,36 @@ class _Candidate:
     strategy: str
 
 
+class _VisualSourceCache:
+    """Cachea renders del PDF fuente durante la validacion de candidatos.
+
+    La comparacion visual puede validar varios candidatos contra las mismas
+    paginas. Renderizar esas paginas fuente una sola vez evita repetir el
+    trabajo mas costoso sin relajar los umbrales de fidelidad.
+    """
+
+    def __init__(self, source: Path) -> None:
+        self.source = source
+        self._doc: fitz.Document | None = None
+        self._pages: dict[int, np.ndarray] = {}
+
+    def render(self, page_index: int) -> np.ndarray:
+        cached = self._pages.get(page_index)
+        if cached is not None:
+            return cached
+        if self._doc is None:
+            self._doc = fitz.open(str(self.source))
+        rendered = _render_page_array(self._doc, page_index)
+        self._pages[page_index] = rendered
+        return rendered
+
+    def close(self) -> None:
+        if self._doc is not None:
+            self._doc.close()
+            self._doc = None
+        self._pages.clear()
+
+
 class PdfCompressEngine:
     """Optimizes PDF files with validated candidates and conservative fallback."""
 
@@ -250,6 +280,7 @@ class PdfCompressEngine:
         input_size = source.stat().st_size
         temp_paths: list[Path] = []
         rejected_notes: list[str] = []
+        visual_cache = _VisualSourceCache(source)
 
         try:
             _emit_status(status, 5, "Analizando estructura del PDF...")
@@ -330,11 +361,14 @@ class PdfCompressEngine:
                             options,
                             page_plan,
                             "reglas por pagina",
+                            visual_cache=visual_cache,
                         )
                     )
                 except Exception as exc:
                     rejected_notes.append(f"reglas por pagina rechazadas: {_short_error(exc)}")
             else:
+                should_try_images = _should_try_image_rewrite(analysis)
+
                 qpdf_exe = _find_qpdf()
                 if _engine_allows(options, "qpdf") and qpdf_exe:
                     qpdf_path = _temp_output_path(output, "qpdf")
@@ -351,51 +385,59 @@ class PdfCompressEngine:
                                 validation_pages,
                                 profile,
                                 "qpdf estructural",
+                                visual_validation=False,
                             )
                         )
                     except Exception as exc:
                         rejected_notes.append(f"qpdf rechazado: {_short_error(exc)}")
 
+                image_candidate_useful = False
                 if _engine_allows(options, "pymupdf"):
-                    safe_path = _temp_output_path(output, "seguro")
-                    temp_paths.append(safe_path)
-                    try:
-                        _emit_status(status, 35, "Generando candidato seguro interno...")
-                        _write_safe_candidate(source, safe_path)
-                        _emit_status(status, 43, "Validando candidato seguro...")
-                        candidates.append(
-                            _validate_candidate(
-                                source,
-                                safe_path,
-                                analysis,
-                                validation_pages,
-                                profile,
-                                "optimizacion segura",
-                            )
-                        )
-                    except Exception as exc:
-                        rejected_notes.append(f"modo seguro rechazado: {_short_error(exc)}")
-
-                should_try_images = _should_try_image_rewrite(analysis)
-                if _engine_allows(options, "pymupdf") and should_try_images:
-                    image_path = _temp_output_path(output, "imagenes")
-                    temp_paths.append(image_path)
-                    try:
-                        _emit_status(status, 52, "Recomprimiendo imagenes internas...")
-                        _write_image_candidate(source, image_path, profile)
-                        _emit_status(status, 65, "Validando fidelidad visual interna...")
-                        candidates.append(
-                            _validate_candidate(
+                    if should_try_images:
+                        image_path = _temp_output_path(output, "imagenes")
+                        temp_paths.append(image_path)
+                        try:
+                            _emit_status(status, 35, "Recomprimiendo imagenes internas...")
+                            _write_image_candidate(source, image_path, profile)
+                            _emit_status(status, 58, "Validando fidelidad visual interna...")
+                            image_candidate = _validate_candidate(
                                 source,
                                 image_path,
                                 analysis,
                                 validation_pages,
                                 profile,
                                 "imagenes optimizadas",
+                                visual_cache=visual_cache,
                             )
-                        )
-                    except Exception as exc:
-                        rejected_notes.append(f"recompresion visual rechazada: {_short_error(exc)}")
+                            candidates.append(image_candidate)
+                            image_candidate_useful = _candidate_is_useful(
+                                image_candidate, input_size
+                            )
+                        except Exception as exc:
+                            rejected_notes.append(
+                                f"recompresion visual rechazada: {_short_error(exc)}"
+                            )
+
+                    if not should_try_images or not image_candidate_useful:
+                        safe_path = _temp_output_path(output, "seguro")
+                        temp_paths.append(safe_path)
+                        try:
+                            _emit_status(status, 68, "Generando respaldo seguro interno...")
+                            _write_safe_candidate(source, safe_path)
+                            _emit_status(status, 76, "Validando respaldo seguro...")
+                            candidates.append(
+                                _validate_candidate(
+                                    source,
+                                    safe_path,
+                                    analysis,
+                                    validation_pages,
+                                    profile,
+                                    "optimizacion segura",
+                                    visual_validation=False,
+                                )
+                            )
+                        except Exception as exc:
+                            rejected_notes.append(f"modo seguro rechazado: {_short_error(exc)}")
 
                 ghostscript_exe = _find_ghostscript()
                 if (
@@ -422,6 +464,7 @@ class PdfCompressEngine:
                                 validation_pages,
                                 profile,
                                 "ghostscript pdfwrite",
+                                visual_cache=visual_cache,
                             )
                         )
                     except Exception as exc:
@@ -483,6 +526,7 @@ class PdfCompressEngine:
                 input_bytes=input_size,
             )
         finally:
+            visual_cache.close()
             for temp_path in temp_paths:
                 _remove_file(temp_path)
 
@@ -1030,13 +1074,15 @@ def _write_ghostscript_candidate(
 def _save_optimized(doc: fitz.Document, output: Path) -> None:
     doc.save(
         str(output),
-        garbage=4,
+        # garbage=4 compara streams para deduplicar objetos y puede dominar el
+        # tiempo en PDFs largos de texto. garbage=2 compacta xref y limpia
+        # objetos no referenciados con una reduccion casi igual en la practica.
+        garbage=2,
         clean=False,
         deflate=True,
         deflate_images=True,
         deflate_fonts=True,
         use_objstms=1,
-        compression_effort=75,
         preserve_metadata=1,
         encryption=fitz.PDF_ENCRYPT_NONE,
     )
@@ -1049,6 +1095,9 @@ def _validate_candidate(
     validation_pages: list[int],
     profile: CompressProfile,
     strategy: str,
+    *,
+    visual_cache: _VisualSourceCache | None = None,
+    visual_validation: bool = True,
 ) -> _Candidate:
     if not candidate.exists():
         raise RuntimeError("no se genero archivo")
@@ -1068,8 +1117,42 @@ def _validate_candidate(
     finally:
         doc.close()
 
-    _compare_visual_pages(source, candidate, validation_pages, profile)
+    if visual_validation:
+        _call_compare_visual_pages(
+            source,
+            candidate,
+            validation_pages,
+            profile,
+            source_cache=visual_cache,
+        )
     return _Candidate(candidate, size, strategy)
+
+
+def _call_compare_visual_pages(
+    source: Path,
+    candidate: Path,
+    validation_pages: list[int],
+    profile: CompressProfile,
+    *,
+    source_cache: _VisualSourceCache | None,
+) -> None:
+    if source_cache is not None and _accepts_keyword(_compare_visual_pages, "source_cache"):
+        _compare_visual_pages(
+            source,
+            candidate,
+            validation_pages,
+            profile,
+            source_cache=source_cache,
+        )
+        return
+    _compare_visual_pages(source, candidate, validation_pages, profile)
+
+
+def _accepts_keyword(callback: Callable, name: str) -> bool:
+    code = getattr(callback, "__code__", None)
+    if code is None:
+        return False
+    return name in code.co_varnames
 
 
 def _validate_page_rules_candidate(
@@ -1081,6 +1164,8 @@ def _validate_page_rules_candidate(
     options: CompressOptions,
     page_plan: PageCompressionPlan,
     strategy: str,
+    *,
+    visual_cache: _VisualSourceCache | None = None,
 ) -> _Candidate:
     if not candidate.exists():
         raise RuntimeError("no se genero archivo")
@@ -1107,6 +1192,7 @@ def _validate_page_rules_candidate(
         global_profile_id,
         options,
         page_plan,
+        source_cache=visual_cache,
     )
     return _Candidate(candidate, size, strategy)
 
@@ -1118,27 +1204,34 @@ def _validate_structural_fidelity(
     if source_analysis.has_forms and not bool(getattr(candidate_doc, "is_form_pdf", False)):
         raise RuntimeError("se perdieron campos de formulario")
 
-    candidate_widgets = 0
-    candidate_annots = 0
-    candidate_links = 0
-    for page in candidate_doc:
-        candidate_widgets += _page_widget_count(page)
-        candidate_annots += _page_annotation_count(page)
-        candidate_links += _page_link_count(page)
+    needs_page_scan = (
+        source_analysis.form_widget_count > 0
+        or source_analysis.annotation_count > 0
+        or source_analysis.link_count > 0
+    )
+    if needs_page_scan:
+        candidate_widgets = 0
+        candidate_annots = 0
+        candidate_links = 0
+        for page in candidate_doc:
+            candidate_widgets += _page_widget_count(page)
+            candidate_annots += _page_annotation_count(page)
+            candidate_links += _page_link_count(page)
 
-    if candidate_widgets < source_analysis.form_widget_count:
-        raise RuntimeError("se perdieron campos interactivos")
-    if candidate_annots < source_analysis.annotation_count:
-        raise RuntimeError("se perdieron anotaciones")
-    if candidate_links < source_analysis.link_count:
-        raise RuntimeError("se perdieron enlaces")
+        if candidate_widgets < source_analysis.form_widget_count:
+            raise RuntimeError("se perdieron campos interactivos")
+        if candidate_annots < source_analysis.annotation_count:
+            raise RuntimeError("se perdieron anotaciones")
+        if candidate_links < source_analysis.link_count:
+            raise RuntimeError("se perdieron enlaces")
 
-    try:
-        candidate_outline_count = len(candidate_doc.get_toc(simple=True))
-    except Exception:
-        candidate_outline_count = 0
-    if candidate_outline_count < source_analysis.outline_count:
-        raise RuntimeError("se perdieron marcadores")
+    if source_analysis.outline_count > 0:
+        try:
+            candidate_outline_count = len(candidate_doc.get_toc(simple=True))
+        except Exception:
+            candidate_outline_count = 0
+        if candidate_outline_count < source_analysis.outline_count:
+            raise RuntimeError("se perdieron marcadores")
 
 
 def _compare_visual_pages(
@@ -1146,38 +1239,28 @@ def _compare_visual_pages(
     candidate: Path,
     pages: list[int],
     profile: CompressProfile,
+    *,
+    source_cache: _VisualSourceCache | None = None,
 ) -> None:
     if not pages:
         return
-    source_doc = fitz.open(str(source))
+    source_doc: fitz.Document | None = None
     candidate_doc = fitz.open(str(candidate))
     try:
+        if source_cache is None:
+            source_doc = fitz.open(str(source))
         for page_index in pages:
-            source_img = _render_page_array(source_doc, page_index)
-            candidate_img = _render_page_array(candidate_doc, page_index)
-            if source_img.shape != candidate_img.shape:
-                raise RuntimeError(f"pagina {page_index + 1} cambio de tamano visual")
-            diff = np.abs(
-                source_img.astype(np.int16, copy=False)
-                - candidate_img.astype(np.int16, copy=False)
+            source_img = (
+                source_cache.render(page_index)
+                if source_cache is not None
+                else _render_page_array(source_doc, page_index)
             )
-            mean_delta = float(diff.mean())
-            p95_delta = float(np.percentile(diff, 95))
-            changed_ratio = float((diff.max(axis=2) > 40).mean())
-            if mean_delta > profile.max_visual_mean_delta:
-                raise RuntimeError(
-                    f"pagina {page_index + 1} cambio demasiado ({mean_delta:.1f})"
-                )
-            if (
-                p95_delta > profile.max_visual_p95_delta
-                and changed_ratio > profile.max_changed_pixel_ratio
-            ):
-                raise RuntimeError(
-                    f"pagina {page_index + 1} perdio fidelidad visual ({p95_delta:.1f})"
-                )
+            candidate_img = _render_page_array(candidate_doc, page_index)
+            _assert_visual_arrays_match(source_img, candidate_img, page_index, profile)
     finally:
         candidate_doc.close()
-        source_doc.close()
+        if source_doc is not None:
+            source_doc.close()
 
 
 def _compare_visual_pages_by_rules(
@@ -1187,12 +1270,16 @@ def _compare_visual_pages_by_rules(
     global_profile_id: str,
     options: CompressOptions,
     page_plan: PageCompressionPlan,
+    *,
+    source_cache: _VisualSourceCache | None = None,
 ) -> None:
     if not pages:
         return
-    source_doc = fitz.open(str(source))
+    source_doc: fitz.Document | None = None
     candidate_doc = fitz.open(str(candidate))
     try:
+        if source_cache is None:
+            source_doc = fitz.open(str(source))
         for page_index in pages:
             effective = page_plan.rule_for_page(page_index)
             profile = _profile_for_effective_rule(
@@ -1200,15 +1287,17 @@ def _compare_visual_pages_by_rules(
                 global_profile_id,
                 options,
             )
-            _compare_visual_page_pair(
-                source_doc,
-                candidate_doc,
-                page_index,
-                profile,
+            source_img = (
+                source_cache.render(page_index)
+                if source_cache is not None
+                else _render_page_array(source_doc, page_index)
             )
+            candidate_img = _render_page_array(candidate_doc, page_index)
+            _assert_visual_arrays_match(source_img, candidate_img, page_index, profile)
     finally:
         candidate_doc.close()
-        source_doc.close()
+        if source_doc is not None:
+            source_doc.close()
 
 
 def _compare_visual_page_pair(
@@ -1219,6 +1308,15 @@ def _compare_visual_page_pair(
 ) -> None:
     source_img = _render_page_array(source_doc, page_index)
     candidate_img = _render_page_array(candidate_doc, page_index)
+    _assert_visual_arrays_match(source_img, candidate_img, page_index, profile)
+
+
+def _assert_visual_arrays_match(
+    source_img: np.ndarray,
+    candidate_img: np.ndarray,
+    page_index: int,
+    profile: CompressProfile,
+) -> None:
     if source_img.shape != candidate_img.shape:
         raise RuntimeError(f"pagina {page_index + 1} cambio de tamano visual")
     diff = np.abs(
@@ -1260,10 +1358,14 @@ def _render_page_array(doc: fitz.Document, page_index: int) -> np.ndarray:
 
 
 def _choose_candidate(candidates: list[_Candidate], input_size: int) -> _Candidate | None:
-    valid = [candidate for candidate in candidates if 0 < candidate.size < input_size]
+    valid = [candidate for candidate in candidates if _candidate_is_useful(candidate, input_size)]
     if not valid:
         return None
     return min(valid, key=lambda candidate: candidate.size)
+
+
+def _candidate_is_useful(candidate: _Candidate, input_size: int) -> bool:
+    return 0 < candidate.size < input_size
 
 
 def _shared_image_rule_warnings(

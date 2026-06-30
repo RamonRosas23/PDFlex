@@ -138,6 +138,57 @@ class PdfCompressEngineTests(unittest.TestCase):
             self.assertIn("modo seguro", result.warning)
             self.assertLess(result.output_bytes, result.input_bytes)
 
+    def test_image_candidate_skips_safe_rewrite_when_it_wins(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_image_pdf(root / "scan.pdf")
+            output = root / "out" / "scan_comprimido.pdf"
+            original_write_safe = compress_engine._write_safe_candidate
+
+            def fail_if_called(_source_path, _output_path):
+                raise AssertionError("safe rewrite should not run")
+
+            compress_engine._write_safe_candidate = fail_if_called
+            try:
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="email",
+                    )
+                )
+            finally:
+                compress_engine._write_safe_candidate = original_write_safe
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "imagenes optimizadas")
+            self.assertLess(result.output_bytes, result.input_bytes)
+
+    def test_lossless_safe_candidate_skips_visual_render_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_text_pdf(root / "simple.pdf")
+            output = root / "out" / "simple_comprimido.pdf"
+            original_compare = compress_engine._compare_visual_pages
+
+            def fail_if_called(*_args, **_kwargs):
+                raise AssertionError("lossless candidate should not render pages")
+
+            compress_engine._compare_visual_pages = fail_if_called
+            try:
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                    )
+                )
+            finally:
+                compress_engine._compare_visual_pages = original_compare
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "optimizacion segura")
+
     def test_qpdf_candidate_can_win_when_available(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

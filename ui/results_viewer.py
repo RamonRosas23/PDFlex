@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 from ui.styles import COLORS as _COLORS
 
 from core.signature_engine import JobResult
+from ui.common.open_utils import open_file, open_folder
 from ui.common.save_utils import save_file_as, save_files_as_batch
 from ui.common.result_ui import ElidedLabel, configure_result_list
 from ui.common.icons import icon, set_button_icon
@@ -551,11 +552,7 @@ class ResultsViewer(QWidget):
 
     def _open_file_directly(self) -> None:
         if self._current_result and self._current_result.output_path:
-            path = Path(self._current_result.output_path)
-            if path.exists():
-                from PyQt6.QtCore import QUrl
-                from PyQt6.QtGui import QDesktopServices
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+            open_file(self, self._current_result.output_path, title="Abrir PDF")
 
     def _on_fullview(self) -> None:
         row = self.doc_list.currentRow()
@@ -566,7 +563,7 @@ class ResultsViewer(QWidget):
 
     def _open_in_explorer(self) -> None:
         if self._current_result and self._current_result.output_path:
-            self.openInExplorer.emit(self._current_result.output_path)
+            open_folder(self, self._current_result.output_path, title="Abrir carpeta")
 
     @staticmethod
     def _source_dir_from(result) -> str:

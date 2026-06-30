@@ -89,6 +89,9 @@ class MembretadoWindowTests(unittest.TestCase):
                         "pages": "1",
                         "preserve_unselected": True,
                     },
+                    "content": {
+                        "preserve_source_background": False,
+                    },
                 },
             )
 
@@ -105,6 +108,7 @@ class MembretadoWindowTests(unittest.TestCase):
                 self.assertEqual(window._global_scope_combo.currentData(), "exclude")
                 self.assertEqual(window._global_pages_edit.text(), "1")
                 self.assertTrue(window._preserve_unselected_chk.isChecked())
+                self.assertFalse(window._preserve_source_background_chk.isChecked())
             finally:
                 window.deleteLater()
                 self.app.processEvents()
@@ -193,6 +197,27 @@ class MembretadoWindowTests(unittest.TestCase):
                 self.assertEqual(len(jobs), 1)
                 self.assertEqual(jobs[0].pages_to_letterhead, [1, 2, 3])
                 self.assertTrue(jobs[0].preserve_unselected)
+                self.assertTrue(jobs[0].preserve_source_background)
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_build_jobs_uses_source_background_option(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            letterhead = self._make_pdf(root / "membrete.pdf")
+            document = self._make_pdf(root / "documento.pdf")
+            window = MembretadoWindow(self._make_ctx())
+            try:
+                window._load_membrete(str(letterhead), source_name="Membrete")
+                self._wait_for_membrete_load(window)
+                window._docs_card.add_paths([str(document)])
+                window._preserve_source_background_chk.setChecked(False)
+
+                jobs = window._build_jobs()
+
+                self.assertEqual(len(jobs), 1)
+                self.assertFalse(jobs[0].preserve_source_background)
             finally:
                 window.deleteLater()
                 self.app.processEvents()

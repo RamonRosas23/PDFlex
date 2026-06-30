@@ -36,6 +36,7 @@ class MembreteJob:
     output_path: str
     pages_to_letterhead: Optional[List[int]] = None  # 0-based; None = todas
     preserve_unselected: bool = True
+    preserve_source_background: bool = True
 
 
 @dataclass
@@ -174,12 +175,15 @@ class MembreteEngine:
                 # 2. Superponer página del documento en la zona segura
                 src_page = src[page_idx]
                 target = _fit_rect(safe, src_page.rect.width, src_page.rect.height)
+                if job.preserve_source_background:
+                    _paint_implicit_page_background(new_page, target)
                 _place_page(
                     new_page,
                     placement_src,
                     page_idx,
                     target,
                     force_raster=page_idx in rasterize_annotation_pages,
+                    preserve_raster_background=job.preserve_source_background,
                 )
                 letterheaded += 1
 
@@ -401,6 +405,17 @@ def _parse_page_token(
     return value
 
 
+def _paint_implicit_page_background(dest_page: fitz.Page, target: fitz.Rect) -> None:
+    """Pinta el papel blanco que muchos PDFs dejan implícito en el visor."""
+    dest_page.draw_rect(
+        target,
+        color=None,
+        fill=(1, 1, 1),
+        width=0,
+        overlay=True,
+    )
+
+
 def _place_page(
     dest_page: fitz.Page,
     src_doc: fitz.Document,
@@ -408,6 +423,7 @@ def _place_page(
     target: fitz.Rect,
     render_dpi: float = _RENDER_DPI,
     force_raster: bool = False,
+    preserve_raster_background: bool = True,
 ) -> None:
     """Coloca src_doc[page_idx] en dest_page dentro de target.
 
@@ -434,7 +450,11 @@ def _place_page(
     # El pixmap tiene dimensiones page.rect (display), no del MediaBox.
     scale = render_dpi / 72.0
     mat = fitz.Matrix(scale, scale)
-    pm = src_page.get_pixmap(matrix=mat, alpha=False, annots=True)
+    pm = src_page.get_pixmap(
+        matrix=mat,
+        alpha=not preserve_raster_background,
+        annots=True,
+    )
     try:
         dest_page.insert_image(target, pixmap=pm)
     finally:

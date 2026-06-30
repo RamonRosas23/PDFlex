@@ -599,7 +599,8 @@ class ScanSimulatorWindow(PipelineWindow):
         self._switch_section(0)
 
     def _open_in_explorer(self, path: str) -> None:
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+        from ui.common.open_utils import open_folder
+        open_folder(self, path, title="Abrir carpeta")
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():

@@ -15,6 +15,7 @@ from PIL import Image, ImageDraw
 
 from ui.common.clipboard_utils import copy_files_to_clipboard
 from ui.common.icons import icon, set_button_icon
+from ui.common.open_utils import open_file, open_folder
 from ui.common.result_ui import (
     ElidedLabel,
     ResultsStatBar,
@@ -649,18 +650,14 @@ class ImageResultsViewer(QWidget):
         r = self._result_at_row(row)
         if r is not None:
             out = getattr(r, "output_path", "") or ""
-            if out and Path(out).exists():
-                from PyQt6.QtCore import QUrl
-                from PyQt6.QtGui import QDesktopServices
-                QDesktopServices.openUrl(QUrl.fromLocalFile(out))
+            open_file(self, out, title="Abrir imagen")
 
     def _on_open(self) -> None:
         row = self.file_list.currentRow()
         r = self._result_at_row(row)
         if r is not None:
             out = getattr(r, "output_path", "") or ""
-            if out:
-                self.openInExplorer.emit(out)
+            open_folder(self, out, title="Abrir carpeta")
 
 
 def _transparent_png_on_checkerboard(path: Path, square: int = 18) -> QPixmap:

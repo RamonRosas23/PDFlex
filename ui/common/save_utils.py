@@ -38,14 +38,17 @@ def save_file_as(
     dest, _ = get_save_file_name(parent, title, str(start), file_filter)
     if not dest:
         return False
+    dest_path = Path(dest)
+    if not dest_path.suffix and src.suffix:
+        dest_path = dest_path.with_suffix(src.suffix)
 
-    ok, error = _copy_file_safely(src, Path(dest))
+    ok, error = _copy_file_safely(src, dest_path)
     if not ok:
-        show_warning(parent, title, _save_error_message(Path(dest)), details=error)
+        show_warning(parent, title, _save_error_message(dest_path), details=error)
         return False
 
     if success_message:
-        show_success(parent, title, f"Archivo guardado:\n{Path(dest)}")
+        show_success(parent, title, f"Archivo guardado:\n{dest_path}")
     return True
 
 

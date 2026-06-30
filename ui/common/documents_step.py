@@ -16,10 +16,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent, QUrl
+from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent
 from ui.common.tool_scaffold import RunnerThread
 from PyQt6.QtGui import (
-    QDesktopServices,
     QDragEnterEvent,
     QDropEvent,
     QIcon,
@@ -46,6 +45,7 @@ from core.media_conversion import (
 )
 from ui.common.dialogs import show_error, show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
+from ui.common.open_utils import open_file as open_local_file, open_folder as open_local_folder
 from ui.common.result_ui import ElidedLabel, format_file_size
 from ui.styles import COLORS
 from core.output_paths import make_run_dir
@@ -619,9 +619,9 @@ class DocumentsCard(QFrame):
         elif chosen == paste_files:
             self.paste_from_clipboard()
         elif chosen == open_file:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(current_path))
+            open_local_file(self, current_path, title="Abrir documento")
         elif chosen == open_folder:
-            QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(current_path).parent)))
+            open_local_folder(self, current_path, title="Abrir carpeta")
         elif chosen == remove:
             self.remove_selected()
 

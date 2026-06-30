@@ -1018,8 +1018,8 @@ class MainWindow(QMainWindow):
             self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
-        folder = str(Path(path).parent)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        from ui.common.open_utils import open_folder
+        open_folder(self, path, title="Abrir carpeta")
 
     def _reset_session(self) -> None:
         """Reinicia toda la sesión: limpia documentos, firma y estado, vuelve al paso 1."""

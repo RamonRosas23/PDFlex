@@ -44,6 +44,22 @@ def test_save_file_as_replaces_through_temp_file(tmp_path, monkeypatch):
     assert not list(tmp_path.glob("*.pdflex-*.tmp"))
 
 
+def test_save_file_as_appends_source_suffix_when_dialog_path_has_none(tmp_path, monkeypatch):
+    source = tmp_path / "source.pdf"
+    source.write_bytes(b"contenido")
+    dest_without_suffix = tmp_path / "contrato"
+
+    monkeypatch.setattr(
+        save_utils,
+        "get_save_file_name",
+        lambda *args, **kwargs: (str(dest_without_suffix), ""),
+    )
+
+    assert save_utils.save_file_as(None, source, title="Guardar como")
+    assert (tmp_path / "contrato.pdf").read_bytes() == b"contenido"
+    assert not dest_without_suffix.exists()
+
+
 def test_save_files_as_batch_reports_locked_files_and_continues(tmp_path, monkeypatch):
     first = tmp_path / "first.pdf"
     second = tmp_path / "second.pdf"

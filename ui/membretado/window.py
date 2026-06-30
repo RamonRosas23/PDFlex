@@ -703,6 +703,11 @@ class MembretadoWindow(PipelineWindow):
         self._preserve_unselected_chk.toggled.connect(self._on_global_scope_changed)
         gl.addWidget(self._preserve_unselected_chk)
 
+        self._preserve_source_background_chk = QCheckBox("Conservar fondo del PDF original")
+        self._preserve_source_background_chk.setChecked(True)
+        self._preserve_source_background_chk.toggled.connect(self._on_global_scope_changed)
+        gl.addWidget(self._preserve_source_background_chk)
+
         self._global_scope_status_lbl = QLabel("")
         self._global_scope_status_lbl.setProperty("class", "CardHint")
         self._global_scope_status_lbl.setWordWrap(True)
@@ -1578,6 +1583,13 @@ class MembretadoWindow(PipelineWindow):
                     else True
                 ),
             },
+            "content": {
+                "preserve_source_background": bool(
+                    self._preserve_source_background_chk.isChecked()
+                    if hasattr(self, "_preserve_source_background_chk")
+                    else True
+                ),
+            },
         }
 
     def _apply_letterhead_config(
@@ -1597,6 +1609,12 @@ class MembretadoWindow(PipelineWindow):
             self._global_pages_edit.setText(str(scope.get("pages") or ""))
             self._preserve_unselected_chk.setChecked(
                 bool(scope.get("preserve_unselected", True))
+            )
+            content = config.get("content") if isinstance(config, dict) else {}
+            if not isinstance(content, dict):
+                content = {}
+            self._preserve_source_background_chk.setChecked(
+                bool(content.get("preserve_source_background", True))
             )
             self._doc_scope_enabled.clear()
             self._doc_scope_modes.clear()
@@ -1695,6 +1713,10 @@ class MembretadoWindow(PipelineWindow):
             + ("conservar sin cambios" if self._preserve_unselected_chk.isChecked() else "omitir")
         )
         rows.append(
+            "<b>Fondo del documento:</b> &nbsp; "
+            + ("conservar" if self._preserve_source_background_chk.isChecked() else "transparentar")
+        )
+        rows.append(
             f"<b>Márgenes:</b> &nbsp; "
             f"sup. {m.top_pt:.0f} pt &nbsp;·&nbsp; inf. {m.bottom_pt:.0f} pt &nbsp;·&nbsp; "
             f"izq. {m.left_pt:.0f} pt &nbsp;·&nbsp; der. {m.right_pt:.0f} pt"
@@ -1742,6 +1764,7 @@ class MembretadoWindow(PipelineWindow):
                 output_path=str(out_path),
                 pages_to_letterhead=None if len(pages) == page_count else pages,
                 preserve_unselected=self._preserve_unselected_chk.isChecked(),
+                preserve_source_background=self._preserve_source_background_chk.isChecked(),
             ))
         return jobs
 
@@ -1808,8 +1831,8 @@ class MembretadoWindow(PipelineWindow):
         self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
-        from PyQt6.QtCore import QUrl
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+        from ui.common.open_utils import open_folder
+        open_folder(self, path, title="Abrir carpeta")
 
     # ------------------------------------------------------------------ #
     # Reset
@@ -1848,6 +1871,7 @@ class MembretadoWindow(PipelineWindow):
             self._set_scope_combo_mode(self._global_scope_combo, "all")
             self._global_pages_edit.clear()
             self._preserve_unselected_chk.setChecked(True)
+            self._preserve_source_background_chk.setChecked(True)
         finally:
             self._suppress_library_persist = False
         self._refresh_scope_documents()

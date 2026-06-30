@@ -1106,8 +1106,8 @@ class FoleadorWindow(PipelineWindow):
         self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
-        from PyQt6.QtCore import QUrl
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+        from ui.common.open_utils import open_folder
+        open_folder(self, path, title="Abrir carpeta")
 
     def _reset_session(self) -> None:
         self._results_viewer.clear_results()

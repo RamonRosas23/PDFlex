@@ -497,8 +497,8 @@ class UnirWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _open_in_explorer(self, path: str) -> None:
-        folder = str(Path(path).parent)
-        QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
+        from ui.common.open_utils import open_folder
+        open_folder(self, path, title="Abrir carpeta")
 
     # ------------------------------------------------------------------ #
     # Resetear sesión

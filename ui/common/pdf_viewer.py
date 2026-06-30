@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
 from ui.styles import COLORS as _COLORS
 
 from ui.common.clipboard_utils import copy_files_to_clipboard
+from ui.common.open_utils import open_file, open_folder
 from ui.common.save_utils import save_file_as, save_files_as_batch
 from ui.common.result_ui import (
     ElidedLabel,
@@ -792,10 +793,7 @@ class GenericPdfViewer(QWidget):
     def _on_open_file(self) -> None:
         if self._current_result:
             out = getattr(self._current_result, "output_path", "")
-            if out and Path(out).exists():
-                from PyQt6.QtCore import QUrl
-                from PyQt6.QtGui import QDesktopServices
-                QDesktopServices.openUrl(QUrl.fromLocalFile(out))
+            open_file(self, out, title="Abrir PDF")
 
     def _on_fullview(self) -> None:
         row = self.doc_list.currentRow()
@@ -807,8 +805,7 @@ class GenericPdfViewer(QWidget):
     def _on_open_in_explorer(self) -> None:
         if self._current_result:
             out = getattr(self._current_result, "output_path", "")
-            if out:
-                self.openInExplorer.emit(out)
+            open_folder(self, out, title="Abrir carpeta")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)

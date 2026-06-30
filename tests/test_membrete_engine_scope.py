@@ -16,6 +16,58 @@ from core.membrete_engine import (
 
 
 class MembreteEngineScopeTests(unittest.TestCase):
+    def test_preserves_implicit_source_background_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            letterhead = self._make_solid_pdf(
+                root / "lh.pdf",
+                width=300,
+                height=300,
+                color=(0, 0, 1),
+            )
+            source = self._make_blank_pdf(root / "source.pdf", width=200, height=200)
+            out = root / "out.pdf"
+
+            result = MembreteEngine().run_batch(
+                [MembreteJob(pdf_path=str(source), output_path=str(out))],
+                str(letterhead),
+                MembreteMargins(top_pt=20, bottom_pt=20, left_pt=20, right_pt=20),
+            )[0]
+
+            self.assertTrue(result.success, result.error)
+            rgb = self._sample_rgb(out, x=150, y=150)
+            self.assertGreaterEqual(min(rgb), 240)
+
+    def test_can_make_source_background_transparent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            letterhead = self._make_solid_pdf(
+                root / "lh.pdf",
+                width=300,
+                height=300,
+                color=(0, 0, 1),
+            )
+            source = self._make_blank_pdf(root / "source.pdf", width=200, height=200)
+            out = root / "out.pdf"
+
+            result = MembreteEngine().run_batch(
+                [
+                    MembreteJob(
+                        pdf_path=str(source),
+                        output_path=str(out),
+                        preserve_source_background=False,
+                    )
+                ],
+                str(letterhead),
+                MembreteMargins(top_pt=20, bottom_pt=20, left_pt=20, right_pt=20),
+            )[0]
+
+            self.assertTrue(result.success, result.error)
+            r, g, b = self._sample_rgb(out, x=150, y=150)
+            self.assertLess(r, 40)
+            self.assertLess(g, 40)
+            self.assertGreater(b, 80)
+
     def test_preserves_unselected_pages_without_letterhead(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -157,6 +209,44 @@ class MembreteEngineScopeTests(unittest.TestCase):
         doc.save(path)
         doc.close()
         return path
+
+    @staticmethod
+    def _make_solid_pdf(
+        path: Path,
+        *,
+        width: float,
+        height: float,
+        color: tuple[float, float, float],
+    ) -> Path:
+        doc = fitz.open()
+        page = doc.new_page(width=width, height=height)
+        page.draw_rect(
+            fitz.Rect(0, 0, width, height),
+            color=color,
+            fill=color,
+            width=0,
+        )
+        doc.save(path)
+        doc.close()
+        return path
+
+    @staticmethod
+    def _make_blank_pdf(path: Path, *, width: float, height: float) -> Path:
+        doc = fitz.open()
+        doc.new_page(width=width, height=height)
+        doc.save(path)
+        doc.close()
+        return path
+
+    @staticmethod
+    def _sample_rgb(path: Path, *, x: int, y: int) -> tuple[int, int, int]:
+        doc = fitz.open(path)
+        try:
+            pix = doc[0].get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
+            idx = (y * pix.width + x) * pix.n
+            return tuple(pix.samples[idx:idx + 3])
+        finally:
+            doc.close()
 
     @staticmethod
     def _page_has_red_stroke(page: fitz.Page) -> bool:

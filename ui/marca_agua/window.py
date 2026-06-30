@@ -808,7 +808,8 @@ class MarcaAguaWindow(PipelineWindow):
         return int(bar.value()) if bar is not None else 0
 
     def _open_in_explorer(self, path: str) -> None:
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+        from ui.common.open_utils import open_folder
+        open_folder(self, path, title="Abrir carpeta")
 
     def _reset_session(self) -> None:
         self.last_results = []

@@ -17,8 +17,8 @@ import threading
 import time
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QObject, QThread, QUrl, QSize, pyqtSignal
-from PyQt6.QtGui import QColor, QDesktopServices, QDragEnterEvent, QDropEvent
+from PyQt6.QtCore import Qt, QObject, QThread, QSize, pyqtSignal
+from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QListWidget,
     QListWidgetItem, QComboBox, QCheckBox, QFrame, QGridLayout,
@@ -34,6 +34,7 @@ from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
+from ui.common.open_utils import open_file, open_folder
 from ui.common.save_utils import save_file_as, save_files_as_batch
 from ui.common.result_ui import ElidedLabel, configure_result_list, format_file_size
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
@@ -538,20 +539,22 @@ class TextResultsViewer(QWidget):
         self._page_meta_lbl.setText(detail)
 
     def _open_docx(self) -> None:
-        if self._current and self._current.docx_path and Path(self._current.docx_path).exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self._current.docx_path))
+        path = self._current.docx_path if self._current else ""
+        open_file(self, path, title="Abrir DOCX")
 
     def _open_txt(self) -> None:
-        if self._current and self._current.txt_path and Path(self._current.txt_path).exists():
-            QDesktopServices.openUrl(QUrl.fromLocalFile(self._current.txt_path))
+        path = self._current.txt_path if self._current else ""
+        open_file(self, path, title="Abrir TXT")
 
     def _open_folder(self) -> None:
         if not self._current:
+            open_folder(self, None, title="Abrir carpeta")
             return
         for path in (self._current.output_path, self._current.docx_path, self._current.txt_path):
-            if path and Path(path).exists():
-                self.openInExplorer.emit(path)
+            if path:
+                open_folder(self, path, title="Abrir carpeta")
                 return
+        open_folder(self, None, title="Abrir carpeta")
 
     def _save_docx_as(self) -> None:
         if not (self._current and self._current.docx_path):
@@ -1069,7 +1072,7 @@ class OcrWindow(PipelineWindow):
             show_error(self, "Error OCR", message)
 
     def _open_in_explorer(self, path: str) -> None:
-        QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
+        open_folder(self, path, title="Abrir carpeta")
 
     def _shutdown_worker(self) -> None:
         """Finaliza el proceso OCR antes de destruir la aplicacion."""

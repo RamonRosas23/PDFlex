@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -13,9 +14,11 @@ from core.pdf_compress_engine import (
     CompressJob,
     CompressOptions,
     PdfCompressEngine,
+    compress_job_to_dict,
     format_bytes,
     profile_for,
 )
+from core.pdf_compress_process import page_rewrite_main, run_request
 from core.pdf_page_rules import PageCompressionRule
 
 
@@ -227,6 +230,114 @@ class PdfCompressEngineTests(unittest.TestCase):
             self.assertEqual(result.strategy, "qpdf estructural")
             self.assertLess(result.output_bytes, result.input_bytes)
 
+    def test_qpdf_mode_uses_visual_boost_for_image_heavy_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_metadata_heavy_pdf(root / "qpdf_visual.pdf")
+            output = root / "out" / "qpdf_visual_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_find_qpdf = compress_engine._find_qpdf
+            original_find_ghostscript = compress_engine._find_ghostscript
+            original_write_qpdf = compress_engine._write_qpdf_candidate
+            original_write_ghostscript = compress_engine._write_ghostscript_candidate
+
+            def fail_qpdf_if_visual_boost_wins(*_args, **_kwargs):
+                raise AssertionError("qpdf visual debe probar refuerzo antes de QPDF estructural")
+
+            def fake_ghostscript(source_path, output_path, _profile, _executable):
+                doc = fitz.open(str(source_path))
+                try:
+                    doc.set_metadata({})
+                    doc.save(
+                        str(output_path),
+                        garbage=4,
+                        deflate=True,
+                        use_objstms=1,
+                        preserve_metadata=0,
+                    )
+                finally:
+                    doc.close()
+
+            try:
+                compress_engine._inspect_source = lambda *_: self._image_heavy_analysis()
+                compress_engine._find_qpdf = lambda: "qpdf"
+                compress_engine._find_ghostscript = lambda: "gs"
+                compress_engine._write_qpdf_candidate = fail_qpdf_if_visual_boost_wins
+                compress_engine._write_ghostscript_candidate = fake_ghostscript
+
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                        options=CompressOptions(engine_mode="qpdf"),
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._find_qpdf = original_find_qpdf
+                compress_engine._find_ghostscript = original_find_ghostscript
+                compress_engine._write_qpdf_candidate = original_write_qpdf
+                compress_engine._write_ghostscript_candidate = original_write_ghostscript
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "qpdf visual reforzado")
+            self.assertLess(result.output_bytes, result.input_bytes)
+
+    def test_qpdf_mode_skips_visual_boost_for_already_optimized_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_metadata_heavy_pdf(root / "qpdf_optimized_image.pdf")
+            output = root / "out" / "qpdf_optimized_image_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_find_qpdf = compress_engine._find_qpdf
+            original_find_ghostscript = compress_engine._find_ghostscript
+            original_write_qpdf = compress_engine._write_qpdf_candidate
+            original_write_ghostscript = compress_engine._write_ghostscript_candidate
+
+            def fail_ghostscript(*_args, **_kwargs):
+                raise AssertionError("imagenes ya optimizadas no deben disparar refuerzo visual")
+
+            def fake_qpdf(source_path, output_path, _executable):
+                doc = fitz.open(str(source_path))
+                try:
+                    doc.set_metadata({})
+                    doc.save(
+                        str(output_path),
+                        garbage=4,
+                        deflate=True,
+                        use_objstms=1,
+                        preserve_metadata=0,
+                    )
+                finally:
+                    doc.close()
+
+            try:
+                compress_engine._inspect_source = lambda *_: self._optimized_large_image_analysis()
+                compress_engine._find_qpdf = lambda: "qpdf"
+                compress_engine._find_ghostscript = lambda: "gs"
+                compress_engine._write_qpdf_candidate = fake_qpdf
+                compress_engine._write_ghostscript_candidate = fail_ghostscript
+
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                        options=CompressOptions(engine_mode="qpdf"),
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._find_qpdf = original_find_qpdf
+                compress_engine._find_ghostscript = original_find_ghostscript
+                compress_engine._write_qpdf_candidate = original_write_qpdf
+                compress_engine._write_ghostscript_candidate = original_write_ghostscript
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "qpdf estructural")
+            self.assertLess(result.output_bytes, result.input_bytes)
+
     def test_ghostscript_candidate_can_win_when_internal_rewrite_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -392,6 +503,268 @@ class PdfCompressEngineTests(unittest.TestCase):
             self.assertIn("imagen compartida", " ".join(result.rule_warnings))
             self.assertLess(result.output_bytes, result.input_bytes)
 
+    def test_risky_masked_images_skip_internal_rewrite_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_text_pdf(root / "risky.pdf")
+            output = root / "out" / "risky_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_write_image = compress_engine._write_image_candidate
+            try:
+                compress_engine._inspect_source = lambda *_: self._risky_image_analysis()
+
+                def fail_if_called(*_args, **_kwargs):
+                    raise AssertionError("rewrite_images no debe usarse con imagenes riesgosas")
+
+                compress_engine._write_image_candidate = fail_if_called
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._write_image_candidate = original_write_image
+
+            self.assertTrue(result.success, result.error)
+            self.assertTrue(output.exists())
+            self.assertNotEqual(result.strategy, "imagenes optimizadas")
+            self.assertIn("imagenes con mascara", result.warning)
+
+    def test_auto_prioritizes_ghostscript_for_masked_image_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_metadata_heavy_pdf(root / "risky_big.pdf")
+            output = root / "out" / "risky_big_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_find_qpdf = compress_engine._find_qpdf
+            original_find_ghostscript = compress_engine._find_ghostscript
+            original_write_qpdf = compress_engine._write_qpdf_candidate
+            original_write_safe = compress_engine._write_safe_candidate
+            original_write_ghostscript = compress_engine._write_ghostscript_candidate
+
+            def fail_if_called(*_args, **_kwargs):
+                raise AssertionError("auto debe evitar candidatos lentos antes de Ghostscript")
+
+            def fake_ghostscript(source_path, output_path, _profile, _executable):
+                doc = fitz.open(str(source_path))
+                try:
+                    doc.set_metadata({})
+                    doc.save(
+                        str(output_path),
+                        garbage=4,
+                        deflate=True,
+                        use_objstms=1,
+                        preserve_metadata=0,
+                    )
+                finally:
+                    doc.close()
+
+            try:
+                compress_engine._inspect_source = lambda *_: self._risky_image_analysis()
+                compress_engine._find_qpdf = lambda: "qpdf"
+                compress_engine._find_ghostscript = lambda: "gs"
+                compress_engine._write_qpdf_candidate = fail_if_called
+                compress_engine._write_safe_candidate = fail_if_called
+                compress_engine._write_ghostscript_candidate = fake_ghostscript
+
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._find_qpdf = original_find_qpdf
+                compress_engine._find_ghostscript = original_find_ghostscript
+                compress_engine._write_qpdf_candidate = original_write_qpdf
+                compress_engine._write_safe_candidate = original_write_safe
+                compress_engine._write_ghostscript_candidate = original_write_ghostscript
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "ghostscript pdfwrite")
+            self.assertLess(result.output_bytes, result.input_bytes)
+
+    def test_auto_prioritizes_ghostscript_for_full_page_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_metadata_heavy_pdf(root / "visual_big.pdf")
+            output = root / "out" / "visual_big_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_find_qpdf = compress_engine._find_qpdf
+            original_find_ghostscript = compress_engine._find_ghostscript
+            original_write_qpdf = compress_engine._write_qpdf_candidate
+            original_write_safe = compress_engine._write_safe_candidate
+            original_write_image = compress_engine._write_image_candidate
+            original_write_ghostscript = compress_engine._write_ghostscript_candidate
+
+            def fail_if_called(*_args, **_kwargs):
+                raise AssertionError("auto debe evitar rutas lentas si Ghostscript ya gano")
+
+            def fake_ghostscript(source_path, output_path, _profile, _executable):
+                doc = fitz.open(str(source_path))
+                try:
+                    doc.set_metadata({})
+                    doc.save(
+                        str(output_path),
+                        garbage=4,
+                        deflate=True,
+                        use_objstms=1,
+                        preserve_metadata=0,
+                    )
+                finally:
+                    doc.close()
+
+            try:
+                compress_engine._inspect_source = lambda *_: self._image_heavy_analysis()
+                compress_engine._find_qpdf = lambda: "qpdf"
+                compress_engine._find_ghostscript = lambda: "gs"
+                compress_engine._write_qpdf_candidate = fail_if_called
+                compress_engine._write_safe_candidate = fail_if_called
+                compress_engine._write_image_candidate = fail_if_called
+                compress_engine._write_ghostscript_candidate = fake_ghostscript
+
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="quality",
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._find_qpdf = original_find_qpdf
+                compress_engine._find_ghostscript = original_find_ghostscript
+                compress_engine._write_qpdf_candidate = original_write_qpdf
+                compress_engine._write_safe_candidate = original_write_safe
+                compress_engine._write_image_candidate = original_write_image
+                compress_engine._write_ghostscript_candidate = original_write_ghostscript
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "ghostscript pdfwrite")
+            self.assertLess(result.output_bytes, result.input_bytes)
+
+    def test_auto_skips_ghostscript_for_already_optimized_large_images(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_text_pdf(root / "optimized_visual.pdf")
+            output = root / "out" / "optimized_visual_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_find_ghostscript = compress_engine._find_ghostscript
+            original_write_ghostscript = compress_engine._write_ghostscript_candidate
+
+            def fail_ghostscript(*_args, **_kwargs):
+                raise AssertionError("auto no debe gastar Ghostscript sin ganancia visual probable")
+
+            try:
+                compress_engine._inspect_source = lambda *_: self._optimized_large_image_analysis()
+                compress_engine._find_ghostscript = lambda: "gs"
+                compress_engine._write_ghostscript_candidate = fail_ghostscript
+
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._find_ghostscript = original_find_ghostscript
+                compress_engine._write_ghostscript_candidate = original_write_ghostscript
+
+            self.assertTrue(result.success, result.error)
+            self.assertNotEqual(result.strategy, "ghostscript pdfwrite")
+
+    def test_pymupdf_mode_uses_pagewise_rewrite_for_masked_image_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_metadata_heavy_pdf(root / "risky_pagewise.pdf")
+            output = root / "out" / "risky_pagewise_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_write_image = compress_engine._write_image_candidate
+            original_write_pagewise = compress_engine._write_pagewise_image_candidate
+            original_write_safe = compress_engine._write_safe_candidate
+
+            def fail_direct_rewrite(*_args, **_kwargs):
+                raise AssertionError("rewrite_images directo no debe usarse con mascaras")
+
+            def fail_safe_if_called(*_args, **_kwargs):
+                raise AssertionError("modo seguro no debe ganar si pagewise es util")
+
+            def fake_pagewise(source_path, output_path, _profile):
+                doc = fitz.open(str(source_path))
+                try:
+                    doc.set_metadata({})
+                    doc.save(
+                        str(output_path),
+                        garbage=4,
+                        deflate=True,
+                        use_objstms=1,
+                        preserve_metadata=0,
+                    )
+                finally:
+                    doc.close()
+
+            try:
+                compress_engine._inspect_source = lambda *_: self._risky_image_analysis()
+                compress_engine._write_image_candidate = fail_direct_rewrite
+                compress_engine._write_pagewise_image_candidate = fake_pagewise
+                compress_engine._write_safe_candidate = fail_safe_if_called
+
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                        options=CompressOptions(engine_mode="pymupdf"),
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._write_image_candidate = original_write_image
+                compress_engine._write_pagewise_image_candidate = original_write_pagewise
+                compress_engine._write_safe_candidate = original_write_safe
+
+            self.assertTrue(result.success, result.error)
+            self.assertEqual(result.strategy, "imagenes optimizadas por pagina")
+            self.assertLess(result.output_bytes, result.input_bytes)
+
+    def test_page_rules_with_risky_images_conserve_original_safely(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_text_pdf(root / "rules.pdf")
+            output = root / "out" / "rules_comprimido.pdf"
+            original_inspect = compress_engine._inspect_source
+            original_write_rules = compress_engine._write_page_rules_candidate
+            try:
+                compress_engine._inspect_source = lambda *_: self._risky_image_analysis()
+
+                def fail_if_called(*_args, **_kwargs):
+                    raise AssertionError("reglas no deben recomprimir imagenes riesgosas")
+
+                compress_engine._write_page_rules_candidate = fail_if_called
+                result = PdfCompressEngine().run_job(
+                    CompressJob(
+                        pdf_path=str(source),
+                        output_path=str(output),
+                        profile_id="balanced",
+                        page_rules=[PageCompressionRule("1", "email")],
+                    )
+                )
+            finally:
+                compress_engine._inspect_source = original_inspect
+                compress_engine._write_page_rules_candidate = original_write_rules
+
+            self.assertTrue(result.success, result.error)
+            self.assertTrue(output.exists())
+            self.assertEqual(result.strategy, "original conservado")
+            self.assertIn("imagenes con mascara", result.warning)
+
     def test_custom_options_build_effective_profile(self) -> None:
         profile = compress_engine._effective_profile(
             profile_for("balanced"),
@@ -428,12 +801,112 @@ class PdfCompressEngineTests(unittest.TestCase):
                     "candidato sin links",
                 )
 
+    def test_isolated_process_request_writes_progress_and_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_text_pdf(root / "simple.pdf")
+            output = root / "out" / "simple_comprimido.pdf"
+            request = root / "request.json"
+            response = root / "response.json"
+            events = root / "events.jsonl"
+            cancel = root / "cancel.signal"
+            job = CompressJob(
+                pdf_path=str(source),
+                output_path=str(output),
+                profile_id="balanced",
+            )
+
+            request.write_text(
+                json.dumps({"jobs": [compress_job_to_dict(job)]}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            events.touch()
+
+            exit_code = run_request(request, response, events, cancel)
+            payload = json.loads(response.read_text(encoding="utf-8"))
+            event_lines = events.read_text(encoding="utf-8").splitlines()
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(payload["status"], "ok")
+            self.assertTrue(payload["results"][0]["success"], payload["results"][0]["error"])
+            self.assertTrue(output.exists())
+            self.assertTrue(any('"type": "progress"' in line for line in event_lines))
+            self.assertTrue(any('"type": "result"' in line for line in event_lines))
+
+    def test_page_rewrite_worker_writes_single_page_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_image_pdf(root / "scan.pdf")
+            output = root / "page.pdf"
+
+            exit_code = page_rewrite_main([
+                "--page-source",
+                str(source),
+                "--page-output",
+                str(output),
+                "--page-index",
+                "0",
+                "--dpi-threshold",
+                "180",
+                "--dpi-target",
+                "150",
+                "--quality",
+                "76",
+            ])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(output.exists())
+            doc = fitz.open(str(output))
+            try:
+                self.assertEqual(doc.page_count, 1)
+            finally:
+                doc.close()
+
     def test_unknown_profile_falls_back_to_balanced(self) -> None:
         self.assertEqual(profile_for("nope").id, "balanced")
 
     def test_format_bytes_is_human_readable(self) -> None:
         self.assertEqual(format_bytes(512), "512 B")
         self.assertEqual(format_bytes(1536), "1.5 KB")
+
+    @staticmethod
+    def _risky_image_analysis():
+        return compress_engine._PdfAnalysis(
+            page_count=1,
+            image_count=1,
+            oversized_images=1,
+            risky_images=1,
+            image_pages=[0],
+            large_image_pages=[0],
+            oversized_pages=[0],
+            risky_pages=[0],
+        )
+
+    @staticmethod
+    def _image_heavy_analysis():
+        return compress_engine._PdfAnalysis(
+            page_count=1,
+            image_count=1,
+            oversized_images=0,
+            risky_images=0,
+            image_pages=[0],
+            large_image_pages=[0],
+            large_image_bytes=2_200_000,
+            large_image_pixels=3_000_000,
+        )
+
+    @staticmethod
+    def _optimized_large_image_analysis():
+        return compress_engine._PdfAnalysis(
+            page_count=1,
+            image_count=1,
+            oversized_images=0,
+            risky_images=0,
+            image_pages=[0],
+            large_image_pages=[0],
+            large_image_bytes=70_000,
+            large_image_pixels=1_750_000,
+        )
 
     @staticmethod
     def _make_text_pdf(path: Path) -> Path:

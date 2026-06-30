@@ -1,7 +1,7 @@
 """PDF compression / optimization engine."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 import os
 from pathlib import Path
 import shutil
@@ -24,6 +24,8 @@ from core.pdf_page_rules import (
 _VALIDATION_MAX_SIDE = 1200
 _VALIDATION_MIN_DPI = 24.0
 _VALIDATION_MAX_DPI = 72.0
+_AUTO_GHOSTSCRIPT_FAST_ACCEPT_REDUCTION = 10.0
+_MIN_USEFUL_REDUCTION_PCT = 1.0
 
 
 @dataclass(frozen=True)
@@ -46,8 +48,8 @@ class CompressProfile:
 PROFILES: dict[str, CompressProfile] = {
     "email": CompressProfile(
         id="email",
-        label="Correo",
-        description="Maxima reduccion razonable para enviar o subir a portales.",
+        label="Maxima reduccion",
+        description="Peso minimo razonable para enviar o subir a portales.",
         dpi_threshold=130,
         dpi_target=110,
         quality=62,
@@ -69,13 +71,13 @@ PROFILES: dict[str, CompressProfile] = {
     "quality": CompressProfile(
         id="quality",
         label="Alta calidad",
-        description="Limpieza ligera y reduccion conservadora.",
-        dpi_threshold=300,
-        dpi_target=240,
-        quality=88,
-        max_visual_mean_delta=9.0,
-        max_visual_p95_delta=42.0,
-        max_changed_pixel_ratio=0.12,
+        description="Alta legibilidad con reduccion real en escaneos de oficina.",
+        dpi_threshold=220,
+        dpi_target=200,
+        quality=86,
+        max_visual_mean_delta=10.0,
+        max_visual_p95_delta=48.0,
+        max_changed_pixel_ratio=0.14,
     ),
 }
 
@@ -140,6 +142,40 @@ class CompressResult:
         return " · ".join(parts)
 
 
+def compress_job_to_dict(job: CompressJob) -> dict:
+    return {
+        "pdf_path": job.pdf_path,
+        "output_path": job.output_path,
+        "profile_id": job.profile_id,
+        "options": asdict(job.options),
+        "page_rules": [asdict(rule) for rule in job.page_rules],
+    }
+
+
+def compress_job_from_dict(data: dict) -> CompressJob:
+    options_data = data.get("options") or {}
+    rule_items = data.get("page_rules") or []
+    return CompressJob(
+        pdf_path=str(data.get("pdf_path", "")),
+        output_path=str(data.get("output_path", "")),
+        profile_id=str(data.get("profile_id", "balanced")),
+        options=CompressOptions(**options_data),
+        page_rules=[PageCompressionRule(**rule) for rule in rule_items],
+    )
+
+
+def compress_result_to_dict(result: CompressResult) -> dict:
+    payload = asdict(result)
+    payload["job"] = compress_job_to_dict(result.job)
+    return payload
+
+
+def compress_result_from_dict(data: dict) -> CompressResult:
+    payload = dict(data)
+    payload["job"] = compress_job_from_dict(payload.get("job") or {})
+    return CompressResult(**payload)
+
+
 @dataclass(frozen=True)
 class OptionalEngineStatus:
     id: str
@@ -153,6 +189,7 @@ class OptionalEngineStatus:
 class _PdfAnalysis:
     page_count: int
     image_count: int = 0
+    image_bytes: int = 0
     oversized_images: int = 0
     risky_images: int = 0
     annotation_count: int = 0
@@ -160,6 +197,9 @@ class _PdfAnalysis:
     link_count: int = 0
     outline_count: int = 0
     image_pages: list[int] = field(default_factory=list)
+    large_image_pages: list[int] = field(default_factory=list)
+    large_image_bytes: int = 0
+    large_image_pixels: int = 0
     oversized_pages: list[int] = field(default_factory=list)
     risky_pages: list[int] = field(default_factory=list)
     signature_flags: int = -1
@@ -319,8 +359,33 @@ class PdfCompressEngine:
                 )
 
             candidates: list[_Candidate] = []
+            early_chosen: _Candidate | None = None
 
             if page_plan.has_explicit_rules:
+                if analysis.risky_images > 0:
+                    _emit_status(
+                        status,
+                        95,
+                        "Imagenes con mascara: conservando original seguro...",
+                    )
+                    _copy_original(source, output)
+                    return CompressResult(
+                        job=job,
+                        output_path=str(output),
+                        success=True,
+                        warning=(
+                            "se conservo el original: las reglas por pagina no se "
+                            "aplicaron porque el PDF contiene imagenes con mascara "
+                            "incompatibles con la recompresion interna segura"
+                        ),
+                        profile_label=profile.label,
+                        input_bytes=input_size,
+                        output_bytes=output.stat().st_size,
+                        total_pages=analysis.page_count,
+                        strategy="original conservado",
+                        validation_pages=len(validation_pages),
+                        **_page_rule_result_fields(page_plan, rule_warnings),
+                    )
                 if page_plan.pages_compressible <= 0:
                     _emit_status(status, 95, "Todas las paginas estan excluidas...")
                     _copy_original(source, output)
@@ -367,10 +432,77 @@ class PdfCompressEngine:
                 except Exception as exc:
                     rejected_notes.append(f"reglas por pagina rechazadas: {_short_error(exc)}")
             else:
+                has_image_optimization = _has_visual_compression_opportunity(analysis)
                 should_try_images = _should_try_image_rewrite(analysis)
+                should_try_pagewise_images = _should_try_pagewise_image_rewrite(analysis)
+                if (
+                    _engine_allows(options, "pymupdf")
+                    and has_image_optimization
+                    and not should_try_images
+                    and analysis.risky_images
+                ):
+                    rejected_notes.append(
+                        "recompresion visual directa omitida por imagenes con mascara"
+                    )
 
                 qpdf_exe = _find_qpdf()
-                if _engine_allows(options, "qpdf") and qpdf_exe:
+                ghostscript_exe = _find_ghostscript()
+                ghostscript_attempted = False
+
+                def _try_ghostscript_candidate() -> None:
+                    nonlocal ghostscript_attempted, early_chosen
+                    ghostscript_attempted = True
+                    ghostscript_path = _temp_output_path(output, "ghostscript")
+                    temp_paths.append(ghostscript_path)
+                    strategy = (
+                        "qpdf visual reforzado"
+                        if options.engine_mode == "qpdf"
+                        else "ghostscript pdfwrite"
+                    )
+                    try:
+                        _emit_status(status, 72, "Probando compresion fuerte con Ghostscript...")
+                        _write_ghostscript_candidate(
+                            source,
+                            ghostscript_path,
+                            profile,
+                            ghostscript_exe or "",
+                        )
+                        _emit_status(status, 86, "Validando candidato Ghostscript...")
+                        ghostscript_candidate = _validate_candidate(
+                            source,
+                            ghostscript_path,
+                            analysis,
+                            validation_pages,
+                            profile,
+                            strategy,
+                            visual_cache=visual_cache,
+                        )
+                        candidates.append(ghostscript_candidate)
+                        if _should_accept_fast_ghostscript(
+                            analysis,
+                            options,
+                            ghostscript_candidate,
+                            input_size,
+                        ):
+                            early_chosen = ghostscript_candidate
+                    except Exception as exc:
+                        rejected_notes.append(
+                            f"ghostscript rechazado: {_short_error(exc)}"
+                        )
+
+                if _should_prioritize_ghostscript(
+                    analysis,
+                    options,
+                    ghostscript_exe,
+                    should_try_images,
+                ):
+                    _try_ghostscript_candidate()
+
+                if (
+                    early_chosen is None
+                    and _engine_allows(options, "qpdf")
+                    and qpdf_exe
+                ):
                     qpdf_path = _temp_output_path(output, "qpdf")
                     temp_paths.append(qpdf_path)
                     try:
@@ -392,7 +524,7 @@ class PdfCompressEngine:
                         rejected_notes.append(f"qpdf rechazado: {_short_error(exc)}")
 
                 image_candidate_useful = False
-                if _engine_allows(options, "pymupdf"):
+                if early_chosen is None and _engine_allows(options, "pymupdf"):
                     if should_try_images:
                         image_path = _temp_output_path(output, "imagenes")
                         temp_paths.append(image_path)
@@ -418,7 +550,47 @@ class PdfCompressEngine:
                                 f"recompresion visual rechazada: {_short_error(exc)}"
                             )
 
-                    if not should_try_images or not image_candidate_useful:
+                    if not should_try_images and should_try_pagewise_images:
+                        pagewise_path = _temp_output_path(output, "paginas")
+                        temp_paths.append(pagewise_path)
+                        try:
+                            _emit_status(
+                                status,
+                                44,
+                                "Recomprimiendo imagenes internas por pagina...",
+                            )
+                            _write_pagewise_image_candidate(
+                                source,
+                                pagewise_path,
+                                profile,
+                            )
+                            _emit_status(
+                                status,
+                                64,
+                                "Validando fidelidad visual por pagina...",
+                            )
+                            pagewise_candidate = _validate_candidate(
+                                source,
+                                pagewise_path,
+                                analysis,
+                                validation_pages,
+                                profile,
+                                "imagenes optimizadas por pagina",
+                                visual_cache=visual_cache,
+                            )
+                            candidates.append(pagewise_candidate)
+                            image_candidate_useful = _candidate_is_useful(
+                                pagewise_candidate, input_size
+                            )
+                        except Exception as exc:
+                            rejected_notes.append(
+                                f"recompresion por pagina rechazada: {_short_error(exc)}"
+                            )
+
+                    if (
+                        (not should_try_images and not should_try_pagewise_images)
+                        or not image_candidate_useful
+                    ):
                         safe_path = _temp_output_path(output, "seguro")
                         temp_paths.append(safe_path)
                         try:
@@ -439,41 +611,17 @@ class PdfCompressEngine:
                         except Exception as exc:
                             rejected_notes.append(f"modo seguro rechazado: {_short_error(exc)}")
 
-                ghostscript_exe = _find_ghostscript()
                 if (
-                    _engine_allows(options, "ghostscript")
+                    early_chosen is None
+                    and _engine_allows(options, "ghostscript")
                     and ghostscript_exe
-                    and (should_try_images or options.engine_mode == "ghostscript")
+                    and (has_image_optimization or options.engine_mode == "ghostscript")
+                    and not ghostscript_attempted
                 ):
-                    ghostscript_path = _temp_output_path(output, "ghostscript")
-                    temp_paths.append(ghostscript_path)
-                    try:
-                        _emit_status(status, 72, "Probando compresion fuerte con Ghostscript...")
-                        _write_ghostscript_candidate(
-                            source,
-                            ghostscript_path,
-                            profile,
-                            ghostscript_exe,
-                        )
-                        _emit_status(status, 86, "Validando candidato Ghostscript...")
-                        candidates.append(
-                            _validate_candidate(
-                                source,
-                                ghostscript_path,
-                                analysis,
-                                validation_pages,
-                                profile,
-                                "ghostscript pdfwrite",
-                                visual_cache=visual_cache,
-                            )
-                        )
-                    except Exception as exc:
-                        rejected_notes.append(
-                            f"ghostscript rechazado: {_short_error(exc)}"
-                        )
+                    _try_ghostscript_candidate()
 
             _emit_status(status, 92, "Seleccionando el mejor resultado validado...")
-            chosen = _choose_candidate(candidates, input_size)
+            chosen = early_chosen or _choose_candidate(candidates, input_size)
             warning_parts: list[str] = []
             if analysis.repaired_on_open:
                 warning_parts.append("estructura reparada al abrir")
@@ -482,8 +630,8 @@ class PdfCompressEngine:
                 _emit_status(status, 96, "Conservando original: no hubo mejora segura...")
                 _copy_original(source, output)
                 warning_parts.append("ya estaba optimizado")
-                if not candidates and rejected_notes:
-                    warning_parts.append("no se acepto ningun candidato")
+                if rejected_notes:
+                    warning_parts.extend(_result_warning_notes(rejected_notes))
                 return CompressResult(
                     job=job,
                     output_path=str(output),
@@ -503,6 +651,10 @@ class PdfCompressEngine:
             output_size = output.stat().st_size
             if chosen.strategy == "optimizacion segura" and rejected_notes:
                 warning_parts.append("se uso modo seguro")
+            warning_parts.extend(
+                note for note in _result_warning_notes(rejected_notes)
+                if note not in warning_parts
+            )
 
             return CompressResult(
                 job=job,
@@ -693,7 +845,7 @@ def _inspect_source(source: Path, profile: CompressProfile) -> _PdfAnalysis:
             analysis.form_widget_count += _page_widget_count(page)
             analysis.link_count += _page_link_count(page)
             try:
-                images = page.get_image_info(xrefs=True)
+                images = page.get_image_info(xrefs=False)
             except Exception:
                 _append_unique(analysis.risky_pages, page_index)
                 continue
@@ -701,7 +853,14 @@ def _inspect_source(source: Path, profile: CompressProfile) -> _PdfAnalysis:
                 _append_unique(analysis.image_pages, page_index)
             for info in images:
                 analysis.image_count += 1
+                image_size = _image_stream_size(info)
+                image_pixels = _image_pixel_count(info)
+                analysis.image_bytes += image_size
                 effective_dpi = _effective_image_dpi(info)
+                if _image_area_ratio(page, info) >= 0.20:
+                    _append_unique(analysis.large_image_pages, page_index)
+                    analysis.large_image_bytes += image_size
+                    analysis.large_image_pixels += image_pixels
                 has_mask = bool(info.get("has-mask"))
                 if has_mask:
                     analysis.risky_images += 1
@@ -767,6 +926,32 @@ def _effective_image_dpi(info: dict) -> float:
     return max(dpi_x, dpi_y)
 
 
+def _image_stream_size(info: dict) -> int:
+    try:
+        return max(0, int(info.get("size") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _image_pixel_count(info: dict) -> int:
+    try:
+        width = max(0, int(info.get("width") or 0))
+        height = max(0, int(info.get("height") or 0))
+    except (TypeError, ValueError):
+        return 0
+    return width * height
+
+
+def _image_area_ratio(page: fitz.Page, info: dict) -> float:
+    try:
+        bbox = fitz.Rect(info.get("bbox"))
+    except Exception:
+        return 0.0
+    page_area = max(1.0, float(page.rect.width * page.rect.height))
+    image_area = max(0.0, float(bbox.width * bbox.height))
+    return image_area / page_area
+
+
 def _append_unique(values: list[int], value: int) -> None:
     if value not in values:
         values.append(value)
@@ -822,8 +1007,90 @@ def _select_page_rule_validation_pages(
     return sorted(ordered)
 
 
-def _should_try_image_rewrite(analysis: _PdfAnalysis) -> bool:
+def _has_image_optimization_opportunity(analysis: _PdfAnalysis) -> bool:
     return analysis.image_count > 0 and analysis.oversized_images > 0
+
+
+def _has_visual_compression_opportunity(analysis: _PdfAnalysis) -> bool:
+    return (
+        _has_image_optimization_opportunity(analysis)
+        or analysis.risky_images > 0
+        or _has_dense_large_images(analysis)
+    )
+
+
+def _is_image_heavy_pdf(analysis: _PdfAnalysis) -> bool:
+    if analysis.image_count <= 0 or analysis.page_count <= 0:
+        return False
+    large_pages = len(analysis.large_image_pages)
+    if large_pages <= 0:
+        return False
+    return large_pages >= max(1, int(analysis.page_count * 0.35))
+
+
+def _has_dense_large_images(analysis: _PdfAnalysis) -> bool:
+    if not _is_image_heavy_pdf(analysis):
+        return False
+    if analysis.large_image_bytes <= 0:
+        return False
+    if analysis.large_image_pixels <= 0:
+        return False
+    bytes_per_pixel = analysis.large_image_bytes / analysis.large_image_pixels
+    return bytes_per_pixel >= 0.18
+
+
+def _should_try_image_rewrite(analysis: _PdfAnalysis) -> bool:
+    # MuPDF 1.27.x can access-violate while recompressing PDFs that contain
+    # masked / soft-masked images. External engines remain isolated and safer.
+    return _has_image_optimization_opportunity(analysis) and analysis.risky_images <= 0
+
+
+def _should_try_pagewise_image_rewrite(analysis: _PdfAnalysis) -> bool:
+    return (
+        analysis.risky_images > 0
+        and _has_visual_compression_opportunity(analysis)
+        and _is_image_heavy_pdf(analysis)
+    )
+
+
+def _should_prioritize_ghostscript(
+    analysis: _PdfAnalysis,
+    options: CompressOptions,
+    ghostscript_exe: str | None,
+    should_try_images: bool,
+) -> bool:
+    if options.engine_mode == "qpdf":
+        return bool(ghostscript_exe) and _has_visual_compression_opportunity(analysis)
+    return (
+        options.engine_mode == "auto"
+        and bool(ghostscript_exe)
+        and _has_visual_compression_opportunity(analysis)
+        and (
+            _is_image_heavy_pdf(analysis)
+            or analysis.risky_images > 0
+            or not should_try_images
+        )
+    )
+
+
+def _should_accept_fast_ghostscript(
+    analysis: _PdfAnalysis,
+    options: CompressOptions,
+    candidate: _Candidate,
+    input_size: int,
+) -> bool:
+    return (
+        options.engine_mode in {"auto", "qpdf"}
+        and _has_visual_compression_opportunity(analysis)
+        and _candidate_reduction_pct(candidate, input_size)
+        >= _AUTO_GHOSTSCRIPT_FAST_ACCEPT_REDUCTION
+    )
+
+
+def _candidate_reduction_pct(candidate: _Candidate, input_size: int) -> float:
+    if input_size <= 0:
+        return 0.0
+    return max(0.0, (1.0 - candidate.size / input_size) * 100.0)
 
 
 def _write_safe_candidate(source: Path, output: Path) -> None:
@@ -853,6 +1120,127 @@ def _write_image_candidate(source: Path, output: Path, profile: CompressProfile)
         _save_optimized(doc, output)
     finally:
         doc.close()
+
+
+def _write_pagewise_image_candidate(
+    source: Path,
+    output: Path,
+    profile: CompressProfile,
+) -> None:
+    src = fitz.open(str(source))
+    out = fitz.open()
+    page_paths: list[Path] = []
+    try:
+        _assert_readable(src)
+        for page_index in range(src.page_count):
+            page_path = _temp_output_path(output, f"pagina-{page_index + 1:04d}")
+            page_paths.append(page_path)
+            _write_single_page_image_candidate_in_process(
+                source,
+                page_path,
+                page_index,
+                profile,
+            )
+            segment = fitz.open(str(page_path))
+            try:
+                out.insert_pdf(segment, links=1, annots=1, widgets=1)
+            finally:
+                segment.close()
+
+        if out.page_count != src.page_count:
+            raise RuntimeError("el candidato por pagina produjo un numero inesperado de paginas")
+        try:
+            out.set_metadata(src.metadata or {})
+        except Exception:
+            pass
+        try:
+            toc = src.get_toc(simple=False)
+            if toc:
+                out.set_toc(toc)
+        except Exception:
+            pass
+        _save_optimized(out, output)
+    finally:
+        out.close()
+        src.close()
+        for page_path in page_paths:
+            _remove_file(page_path)
+
+
+def _write_single_page_image_candidate_in_process(
+    source: Path,
+    output: Path,
+    page_index: int,
+    profile: CompressProfile,
+) -> None:
+    command_args = [
+        "--page-source",
+        str(source),
+        "--page-output",
+        str(output),
+        "--page-index",
+        str(int(page_index)),
+        "--dpi-threshold",
+        str(int(profile.dpi_threshold)),
+        "--dpi-target",
+        str(int(profile.dpi_target)),
+        "--quality",
+        str(int(profile.quality)),
+        "--lossy",
+        "1" if profile.rewrite_lossy else "0",
+        "--lossless",
+        "1" if profile.rewrite_lossless else "0",
+        "--set-to-gray",
+        "1" if profile.set_to_gray else "0",
+    ]
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, "--pdflex-compress-page-worker", *command_args]
+    else:
+        command = [
+            sys.executable,
+            "-m",
+            "core.pdf_compress_process",
+            "--page-rewrite",
+            *command_args,
+        ]
+    _run_command(command, "pymupdf por pagina")
+
+
+def _write_single_page_image_candidate(
+    source: Path,
+    output: Path,
+    page_index: int,
+    profile: CompressProfile,
+) -> None:
+    src = fitz.open(str(source))
+    segment = fitz.open()
+    try:
+        _assert_readable(src)
+        if page_index < 0 or page_index >= src.page_count:
+            raise RuntimeError("pagina fuera de rango")
+        segment.insert_pdf(
+            src,
+            from_page=page_index,
+            to_page=page_index,
+            links=1,
+            annots=1,
+            widgets=1,
+        )
+        segment.rewrite_images(
+            dpi_threshold=profile.dpi_threshold,
+            dpi_target=profile.dpi_target,
+            quality=profile.quality,
+            lossy=profile.rewrite_lossy,
+            lossless=profile.rewrite_lossless,
+            bitonal=False,
+            color=True,
+            gray=True,
+            set_to_gray=profile.set_to_gray,
+        )
+        _save_optimized(segment, output)
+    finally:
+        segment.close()
+        src.close()
 
 
 def _write_page_rules_candidate(
@@ -1365,7 +1753,10 @@ def _choose_candidate(candidates: list[_Candidate], input_size: int) -> _Candida
 
 
 def _candidate_is_useful(candidate: _Candidate, input_size: int) -> bool:
-    return 0 < candidate.size < input_size
+    return (
+        0 < candidate.size < input_size
+        and _candidate_reduction_pct(candidate, input_size) >= _MIN_USEFUL_REDUCTION_PCT
+    )
 
 
 def _shared_image_rule_warnings(
@@ -1418,6 +1809,22 @@ def _page_rule_result_fields(
         "page_rule_summary": page_plan.summary,
         "rule_warnings": list(warnings),
     }
+
+
+def _result_warning_notes(notes: list[str]) -> list[str]:
+    if not notes:
+        return []
+    warnings: list[str] = []
+    joined = " ".join(notes)
+    if "recompresion visual directa omitida" in joined:
+        warnings.append("se omitio recompresion directa por imagenes con mascara")
+    elif "recompresion visual interna omitida" in joined:
+        warnings.append("se omitio recompresion interna por imagenes con mascara")
+    if "rechazad" in joined:
+        warnings.append("algunas estrategias no pasaron validacion segura")
+    if not warnings:
+        warnings.append("no se acepto ningun candidato")
+    return warnings
 
 
 def _find_qpdf() -> str | None:

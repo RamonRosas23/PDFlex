@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import time
@@ -20,7 +21,7 @@ from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
 from core.pdf_compress_engine import CompressJob, CompressResult
 from core.pdf_page_rules import PageCompressionRule
-from ui.compresor.window import CompresorWindow
+from ui.compresor.window import CompressWorker, CompresorWindow
 
 
 class CompresorWindowTests(unittest.TestCase):
@@ -335,6 +336,7 @@ class CompresorWindowTests(unittest.TestCase):
             try:
                 window._docs_card.add_paths([str(pdf_path)])
                 with (
+                    patch("ui.compresor.window._ISOLATED_COMPRESSION_ENABLED", False),
                     patch("ui.compresor.window.PdfCompressEngine", FakeEngine),
                     patch("ui.compresor.window.show_success"),
                     patch("ui.compresor.window.show_warning"),
@@ -344,7 +346,11 @@ class CompresorWindowTests(unittest.TestCase):
                     elapsed = time.perf_counter() - started_at
 
                     self.assertLess(elapsed, 1.0)
-                    self.assertTrue(started.wait(2.0))
+                    deadline = time.perf_counter() + 2.0
+                    while not started.is_set() and time.perf_counter() < deadline:
+                        self.app.processEvents()
+                        QThread.msleep(10)
+                    self.assertTrue(started.is_set())
                     self.assertNotEqual(worker_thread_ids[0], main_thread_id)
                     self.assertFalse(finished.is_set())
                     release.set()
@@ -367,6 +373,271 @@ class CompresorWindowTests(unittest.TestCase):
                     window._worker_thread.wait(3000)
                 window.deleteLater()
                 self.app.processEvents()
+
+    def test_run_prepares_jobs_without_blocking_ui_thread(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            prepare_started = threading.Event()
+            prepare_release = threading.Event()
+            prepare_thread_ids: list[int] = []
+            main_thread_id = threading.get_ident()
+
+            def fake_prepare(request, *, should_cancel):
+                prepare_thread_ids.append(threading.get_ident())
+                prepare_started.set()
+                prepare_release.wait(2.0)
+                return [
+                    CompressJob(
+                        pdf_path=request.paths[0],
+                        output_path=str(Path(tmp) / "out.pdf"),
+                        profile_id=request.profile_id,
+                        options=request.options,
+                        page_rules=request.page_rules,
+                    )
+                ]
+
+            class FakeEngine:
+                def run_batch(self, jobs, *, progress=None, should_cancel=None):
+                    return [
+                        CompressResult(
+                            job=jobs[0],
+                            output_path=jobs[0].output_path,
+                            success=True,
+                            input_bytes=100,
+                            output_bytes=50,
+                            total_pages=1,
+                            strategy="fake",
+                        )
+                    ]
+
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._docs_card.add_paths([str(pdf_path)])
+                with (
+                    patch("ui.compresor.window._ISOLATED_COMPRESSION_ENABLED", False),
+                    patch("ui.compresor.window._prepare_compress_jobs", fake_prepare),
+                    patch("ui.compresor.window.PdfCompressEngine", FakeEngine),
+                    patch("ui.compresor.window.show_success"),
+                    patch("ui.compresor.window.show_warning"),
+                ):
+                    started_at = time.perf_counter()
+                    window._on_run()
+                    elapsed = time.perf_counter() - started_at
+
+                    self.assertLess(elapsed, 1.0)
+                    self.assertTrue(prepare_started.wait(2.0))
+                    self.assertNotEqual(prepare_thread_ids[0], main_thread_id)
+                    self.assertIsNotNone(window._prepare_thread)
+                    self.assertIsNone(window._worker_thread)
+
+                    prepare_release.set()
+                    deadline = time.perf_counter() + 3.0
+                    while (
+                        window._prepare_thread is not None
+                        or window._worker_thread is not None
+                    ) and time.perf_counter() < deadline:
+                        self.app.processEvents()
+                        QThread.msleep(10)
+                    self.assertEqual(window.last_results[0].strategy, "fake")
+            finally:
+                window._cleanup_thread()
+                window._result_viewer.clear_results()
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_recompress_button_reuses_successful_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_path = self._make_pdf(root / "input.pdf")
+            output_path = self._make_pdf(root / "input_comprimido.pdf")
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window.last_results = [
+                    CompressResult(
+                        job=CompressJob(
+                            pdf_path=str(source_path),
+                            output_path=str(output_path),
+                            profile_id="balanced",
+                        ),
+                        output_path=str(output_path),
+                        success=True,
+                        input_bytes=100,
+                        output_bytes=50,
+                        total_pages=1,
+                        strategy="fake",
+                    )
+                ]
+                window._sync_recompress_button()
+                self.assertTrue(window._recompress_btn.isEnabled())
+
+                run_paths: list[list[str]] = []
+                window._on_run = lambda: run_paths.append(window._docs_card.paths())
+
+                window._on_recompress_results()
+                self.app.processEvents()
+
+                self.assertEqual(window._docs_card.paths(), [str(output_path)])
+                self.assertEqual(run_paths, [[str(output_path)]])
+                self.assertFalse(window._recompress_btn.isEnabled())
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
+    def test_worker_falls_back_if_isolated_process_does_not_start(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            output_path = Path(tmp) / "out.pdf"
+            finished: list[CompressResult] = []
+            errors: list[str] = []
+
+            class FakeEngine:
+                def run_batch(self, jobs, *, progress=None, should_cancel=None):
+                    return [
+                        CompressResult(
+                            job=jobs[0],
+                            output_path=jobs[0].output_path,
+                            success=True,
+                            input_bytes=100,
+                            output_bytes=80,
+                            total_pages=1,
+                            strategy="fallback",
+                        )
+                    ]
+
+            worker = CompressWorker([
+                CompressJob(str(pdf_path), str(output_path), "balanced")
+            ])
+            worker.finished.connect(lambda results: finished.extend(results))
+            worker.error.connect(errors.append)
+
+            with (
+                patch("ui.compresor.window.PdfCompressEngine", FakeEngine),
+                patch.object(
+                    CompressWorker,
+                    "_build_command",
+                    return_value=[
+                        sys.executable,
+                        "-c",
+                        "import sys; sys.exit(3)",
+                    ],
+                ),
+            ):
+                worker.run()
+
+            self.assertFalse(errors)
+            self.assertEqual(len(finished), 1)
+            self.assertEqual(finished[0].strategy, "fallback")
+
+    def test_worker_marks_native_crash_as_failed_result_without_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            output_path = Path(tmp) / "out.pdf"
+            finished: list[CompressResult] = []
+            errors: list[str] = []
+
+            class FakeEngine:
+                def run_batch(self, jobs, *, progress=None, should_cancel=None):
+                    raise AssertionError("native crashes must not fall back in-process")
+
+            worker = CompressWorker([
+                CompressJob(str(pdf_path), str(output_path), "balanced")
+            ])
+            worker.finished.connect(lambda results: finished.extend(results))
+            worker.error.connect(errors.append)
+
+            with (
+                patch("ui.compresor.window.PdfCompressEngine", FakeEngine),
+                patch.object(
+                    CompressWorker,
+                    "_build_command",
+                    return_value=[
+                        sys.executable,
+                        "-c",
+                        "import os; os._exit(-1073741819)",
+                    ],
+                ),
+            ):
+                worker.run()
+
+            self.assertFalse(errors)
+            self.assertEqual(len(finished), 1)
+            self.assertFalse(finished[0].success)
+            self.assertIn("access violation", finished[0].error)
+            self.assertIn("3221225477", finished[0].error)
+
+    def test_worker_continues_after_one_pdf_native_crashes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            first_pdf = self._make_pdf(Path(tmp) / "first.pdf")
+            second_pdf = self._make_pdf(Path(tmp) / "second.pdf")
+            first_out = Path(tmp) / "first_out.pdf"
+            second_out = Path(tmp) / "second_out.pdf"
+            finished: list[CompressResult] = []
+            errors: list[str] = []
+            original_build_command = CompressWorker._build_command
+            calls = 0
+
+            def build_command(request_path, response_path, events_path, cancel_path):
+                nonlocal calls
+                calls += 1
+                if calls == 1:
+                    return [
+                        sys.executable,
+                        "-c",
+                        "import os; os._exit(-1073741819)",
+                    ]
+                return original_build_command(
+                    request_path,
+                    response_path,
+                    events_path,
+                    cancel_path,
+                )
+
+            worker = CompressWorker([
+                CompressJob(str(first_pdf), str(first_out), "balanced"),
+                CompressJob(str(second_pdf), str(second_out), "balanced"),
+            ])
+            worker.finished.connect(lambda results: finished.extend(results))
+            worker.error.connect(errors.append)
+
+            with patch.object(CompressWorker, "_build_command", side_effect=build_command):
+                worker.run()
+
+            self.assertFalse(errors)
+            self.assertEqual(len(finished), 2)
+            self.assertFalse(finished[0].success)
+            self.assertTrue(finished[1].success, finished[1].error)
+            self.assertTrue(second_out.exists())
+
+    def test_worker_heartbeat_refreshes_long_stage_message(self) -> None:
+        worker = CompressWorker([])
+        progress_events: list[tuple[int, int, str]] = []
+        worker.progress.connect(
+            lambda current, total, message: progress_events.append(
+                (current, total, message)
+            )
+        )
+
+        worker._emit_progress(72, 100, "Probando compresion fuerte con Ghostscript...")
+        worker._last_stage_started_at -= 3.0
+        worker._last_heartbeat_at -= 3.0
+        worker._emit_progress_heartbeat(100)
+
+        self.assertGreaterEqual(len(progress_events), 2)
+        self.assertEqual(progress_events[-1][0], 72)
+        self.assertIn("Ghostscript", progress_events[-1][2])
+        self.assertIn("s)", progress_events[-1][2])
 
     @staticmethod
     def _make_pdf(path: Path) -> Path:

@@ -21,11 +21,24 @@ def _asset_path(relative: str) -> Path:
 def _run_internal_worker_if_requested() -> int | None:
     """Despacha procesos auxiliares antes de cargar la interfaz grafica."""
     marker = "--pdflex-ocr-worker"
-    if marker not in sys.argv:
-        return None
-    from core.ocr_process import main as ocr_worker_main
-    marker_index = sys.argv.index(marker)
-    return ocr_worker_main(sys.argv[marker_index + 1:])
+    if marker in sys.argv:
+        from core.ocr_process import main as ocr_worker_main
+        marker_index = sys.argv.index(marker)
+        return ocr_worker_main(sys.argv[marker_index + 1:])
+
+    marker = "--pdflex-compress-worker"
+    if marker in sys.argv:
+        from core.pdf_compress_process import main as compress_worker_main
+        marker_index = sys.argv.index(marker)
+        return compress_worker_main(sys.argv[marker_index + 1:])
+
+    marker = "--pdflex-compress-page-worker"
+    if marker in sys.argv:
+        from core.pdf_compress_process import page_rewrite_main
+        marker_index = sys.argv.index(marker)
+        return page_rewrite_main(sys.argv[marker_index + 1:])
+
+    return None
 
 
 # Suprimir warnings de MuPDF (PDFs con xref rotos imprimen spam al stderr).

@@ -90,6 +90,33 @@ class OrganizadorWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_window_preserves_input_order_across_image_conversion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first_pdf = root / "10-original.pdf"
+            last_pdf = root / "01-final.pdf"
+            for path, label in ((first_pdf, "First"), (last_pdf, "Last")):
+                doc = fitz.open()
+                doc.new_page().insert_text((36, 72), label)
+                doc.save(path)
+                doc.close()
+
+            image_path = root / "02-scan.png"
+            Image.new("RGB", (90, 45), "white").save(image_path)
+
+            window = OrganizadorWindow(self._make_ctx())
+            try:
+                window.set_inputs([str(first_pdf), str(image_path), str(last_pdf)])
+
+                lane_stems = [
+                    Path(lane.page_refs()[0].source_path).stem
+                    for lane in window._lane_container.lanes()
+                ]
+                self.assertEqual(lane_stems, ["10-original", "02-scan", "01-final"])
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_tray_selection_adds_pdf_to_a_lane(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pdf_path = Path(tmp) / "from_tray.pdf"

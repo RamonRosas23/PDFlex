@@ -22,10 +22,10 @@ from PyQt6.QtWidgets import (
 from core.output_paths import make_run_dir, unique_output_path
 from core.media_conversion import (
     DOCUMENT_IMPORT_EXTENSIONS,
-    image_paths,
+    IMAGE_EXTENSIONS,
     images_to_pdf_exact,
-    pdf_paths,
-    word_paths,
+    PDF_EXTENSIONS,
+    WORD_EXTENSIONS,
 )
 from core.page_organizer_engine import (
     MultiOrganizerJob,
@@ -286,26 +286,73 @@ class OrganizadorWindow(PipelineWindow):
         if not accepted:
             return
 
-        pdfs = pdf_paths(accepted)
-        images = image_paths(accepted)
-        words = word_paths(accepted)
-        if images:
-            try:
-                converted = images_to_pdf_exact(images)
-            except Exception as exc:
-                show_error(self, "No se pudieron convertir las imágenes", str(exc))
-                converted = ""
-            if converted:
-                pdfs.append(converted)
+        slots, words = self._build_import_slots(accepted)
         if words:
             self._convert_words_then_add(
                 words,
-                initial_pdfs=pdfs,
+                import_slots=slots,
                 target_lane_id=target_lane_id,
                 at_row=at_row,
                 replace=replace,
             )
             return
+        self._add_import_slots_to_lanes(
+            slots,
+            {},
+            target_lane_id=target_lane_id,
+            at_row=at_row,
+            replace=replace,
+        )
+
+    def _build_import_slots(self, paths: List[str]) -> tuple[list[tuple[str, str]], list[str]]:
+        slots: list[tuple[str, str]] = []
+        words: list[str] = []
+        image_group: list[str] = []
+
+        def flush_images() -> None:
+            nonlocal image_group
+            if not image_group:
+                return
+            try:
+                converted = images_to_pdf_exact(image_group)
+            except Exception as exc:
+                show_error(self, "No se pudieron convertir las imágenes", str(exc))
+                converted = ""
+            if converted:
+                slots.append(("pdf", converted))
+            image_group = []
+
+        for path in paths:
+            suffix = Path(path).suffix.lower()
+            if suffix in IMAGE_EXTENSIONS:
+                image_group.append(path)
+                continue
+            flush_images()
+            if suffix in PDF_EXTENSIONS:
+                slots.append(("pdf", path))
+            elif suffix in WORD_EXTENSIONS:
+                slots.append(("word", path))
+                words.append(path)
+        flush_images()
+        return slots, words
+
+    def _add_import_slots_to_lanes(
+        self,
+        slots: list[tuple[str, str]],
+        word_outputs: dict[str, str],
+        *,
+        target_lane_id: str | None = None,
+        at_row: int = -1,
+        replace: bool = False,
+    ) -> None:
+        pdfs: list[str] = []
+        for kind, path in slots:
+            if kind == "pdf":
+                pdfs.append(path)
+            elif kind == "word":
+                converted = word_outputs.get(path)
+                if converted:
+                    pdfs.append(converted)
         self._add_pdfs_to_lanes(
             pdfs,
             target_lane_id=target_lane_id,
@@ -340,11 +387,13 @@ class OrganizadorWindow(PipelineWindow):
         self,
         words: List[str],
         *,
-        initial_pdfs: List[str],
+        initial_pdfs: List[str] | None = None,
+        import_slots: list[tuple[str, str]] | None = None,
         target_lane_id: str | None,
         at_row: int,
         replace: bool,
     ) -> None:
+        slots = list(import_slots or [("pdf", path) for path in (initial_pdfs or [])])
         if not self.ctx.word_converter.is_available():
             show_info(
                 self,
@@ -352,8 +401,9 @@ class OrganizadorWindow(PipelineWindow):
                 "Para convertir archivos Word a PDF se necesita Microsoft Office.\n"
                 "Los archivos .doc/.docx han sido omitidos.",
             )
-            self._add_pdfs_to_lanes(
-                initial_pdfs,
+            self._add_import_slots_to_lanes(
+                slots,
+                {},
                 target_lane_id=target_lane_id,
                 at_row=at_row,
                 replace=replace,
@@ -364,7 +414,7 @@ class OrganizadorWindow(PipelineWindow):
         from ui.common.word_convert_dialog import WordConvertDialog
 
         self._pending_import = {
-            "initial_pdfs": list(initial_pdfs),
+            "slots": slots,
             "target_lane_id": target_lane_id,
             "at_row": at_row,
             "replace": replace,
@@ -399,9 +449,15 @@ class OrganizadorWindow(PipelineWindow):
         self._conv_thread = None
         self._conv_worker = None
         context = self._consume_pending_import()
-        pdfs = list(context.get("initial_pdfs") or []) + list(converted_paths)
-        self._add_pdfs_to_lanes(
-            pdfs,
+        slots = list(context.get("slots") or [])
+        words = [path for kind, path in slots if kind == "word"]
+        self._add_import_slots_to_lanes(
+            slots,
+            {
+                source: output
+                for source, output in zip(words, converted_paths)
+                if output
+            },
             target_lane_id=context.get("target_lane_id"),
             at_row=int(context.get("at_row", -1)),
             replace=bool(context.get("replace", False)),
@@ -411,14 +467,13 @@ class OrganizadorWindow(PipelineWindow):
         self._conv_thread = None
         self._conv_worker = None
         context = self._consume_pending_import()
-        initial_pdfs = list(context.get("initial_pdfs") or [])
-        if initial_pdfs:
-            self._add_pdfs_to_lanes(
-                initial_pdfs,
-                target_lane_id=context.get("target_lane_id"),
-                at_row=int(context.get("at_row", -1)),
-                replace=bool(context.get("replace", False)),
-            )
+        self._add_import_slots_to_lanes(
+            list(context.get("slots") or []),
+            {},
+            target_lane_id=context.get("target_lane_id"),
+            at_row=int(context.get("at_row", -1)),
+            replace=bool(context.get("replace", False)),
+        )
 
     def _on_layout_changed(self) -> None:
         total = self._lane_container.total_pages()
@@ -636,7 +691,9 @@ class OrganizadorWindow(PipelineWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        paths = [url.toLocalFile() for url in event.mimeData().urls()]
+        from ui.common.file_ordering import paths_from_mime_data
+
+        paths = paths_from_mime_data(event.mimeData())
         self.handle_drop(paths)
         event.acceptProposedAction()
 

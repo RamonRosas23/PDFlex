@@ -45,6 +45,32 @@ def test_file_dialogs_remember_last_open_location(monkeypatch, tmp_path) -> None
     assert Path(seen_dirs[-1]) == first_dir
 
 
+def test_import_order_preserves_ingress_by_default(monkeypatch, tmp_path) -> None:
+    _reset_settings_scope()
+    from ui.common import file_ordering
+
+    monkeypatch.setattr(file_ordering, "ORG_NAME", "PDFlexTests")
+    monkeypatch.setattr(file_ordering, "APP_NAME", f"ImportOrder-{uuid4().hex}")
+    QSettings(file_ordering.ORG_NAME, file_ordering.APP_NAME).clear()
+
+    paths = [
+        str(tmp_path / "doc10.pdf"),
+        str(tmp_path / "doc2.pdf"),
+        str(tmp_path / "doc1.pdf"),
+    ]
+
+    assert file_ordering.natural_import_sort_enabled() is False
+    assert file_ordering.import_paths(paths) == paths
+
+    file_ordering.set_natural_import_sort_enabled(True)
+
+    assert file_ordering.import_paths(paths) == [
+        str(tmp_path / "doc1.pdf"),
+        str(tmp_path / "doc2.pdf"),
+        str(tmp_path / "doc10.pdf"),
+    ]
+
+
 def test_save_dialog_uses_last_location_and_preserves_suggested_name(
     monkeypatch,
     tmp_path,

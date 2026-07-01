@@ -1057,7 +1057,9 @@ class MainWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        from ui.common.file_ordering import paths_from_mime_data
+
+        paths = paths_from_mime_data(event.mimeData())
         pdfs = [p for p in paths if p.lower().endswith(".pdf")]
         if pdfs:
             self._add_pdf_paths(pdfs)

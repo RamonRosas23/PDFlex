@@ -1890,7 +1890,9 @@ class MembretadoWindow(PipelineWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        from ui.common.file_ordering import paths_from_mime_data
+
+        paths = paths_from_mime_data(event.mimeData())
         self._add_file_paths_smart(paths)
 
     def _add_file_paths_smart(self, paths: List[str]) -> None:

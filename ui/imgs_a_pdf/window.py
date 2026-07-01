@@ -31,11 +31,10 @@ from shell.context import ShellContext
 from core.media_conversion import (
     IMAGE_EXTENSIONS as SHARED_IMAGE_EXTENSIONS,
     IMAGE_IMPORT_FILTER,
+    PDF_EXTENSIONS,
+    WORD_EXTENSIONS,
     accepted_image_paths,
-    image_paths,
-    pdf_paths,
     pdfs_to_images_exact,
-    word_paths,
 )
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
 from ui.common.cards import make_card, card_layout, make_page_header
@@ -466,6 +465,7 @@ class ImageListCard(QFrame):
         self._conv_thread: Optional[QThread] = None
         self._conv_worker = None
         self._conv_dlg = None
+        self._pending_import_slots: list[tuple[str, object]] | None = None
         self._build()
 
     def set_conversion_context(self, ctx) -> None:
@@ -588,13 +588,55 @@ class ImageListCard(QFrame):
 
     def add_paths(self, raw_paths: List[str]) -> None:
         accepted = accepted_image_paths(raw_paths)
-        self._add_image_paths(image_paths(accepted))
-        pdfs = pdf_paths(accepted)
-        if pdfs:
-            self._handle_pdf_files(pdfs)
-        words = word_paths(accepted)
+        slots, words = self._build_import_slots(accepted)
         if words:
+            ctx = self._ctx
+            converter = getattr(ctx, "word_converter", None)
+            if converter is None or not converter.is_available():
+                show_info(
+                    self.window(),
+                    "Microsoft Office requerido",
+                    "Para convertir archivos Word a imágenes se necesita Microsoft Office.\n"
+                    "Los archivos .doc/.docx han sido omitidos.",
+                )
+                self._add_import_slots(slots, {})
+                return
+            self._pending_import_slots = slots
             self._handle_word_files(words)
+            return
+        self._add_import_slots(slots, {})
+
+    def _build_import_slots(self, paths: List[str]) -> tuple[list[tuple[str, object]], list[str]]:
+        slots: list[tuple[str, object]] = []
+        words: list[str] = []
+        for path in paths:
+            suffix = Path(path).suffix.lower()
+            if suffix in self._accepted_exts:
+                slots.append(("images", [path]))
+            elif suffix in PDF_EXTENSIONS:
+                converted = self._convert_pdfs_to_images([path])
+                if converted:
+                    slots.append(("images", converted))
+            elif suffix in WORD_EXTENSIONS:
+                slots.append(("word", path))
+                words.append(path)
+        return slots, words
+
+    def _add_import_slots(
+        self,
+        slots: list[tuple[str, object]],
+        word_outputs: dict[str, str],
+    ) -> None:
+        ordered_images: list[str] = []
+        for kind, payload in slots:
+            if kind == "images":
+                ordered_images.extend(str(path) for path in payload)
+            elif kind == "word":
+                output_pdf = word_outputs.get(str(payload))
+                if output_pdf:
+                    ordered_images.extend(self._convert_pdfs_to_images([output_pdf]))
+        if ordered_images:
+            self._add_image_paths(ordered_images)
 
     def _add_image_paths(self, raw_paths: List[str]) -> None:
         changed = False
@@ -618,16 +660,19 @@ class ImageListCard(QFrame):
             self._update_remove_btn()
             self.files_changed.emit(self.paths())
 
-    def _handle_pdf_files(self, paths: List[str]) -> None:
+    def _convert_pdfs_to_images(self, paths: List[str]) -> List[str]:
         try:
-            converted = pdfs_to_images_exact(paths)
+            return pdfs_to_images_exact(paths)
         except Exception as exc:
             show_error(
                 self.window(),
                 "No se pudieron convertir los PDFs",
                 str(exc),
             )
-            return
+            return []
+
+    def _handle_pdf_files(self, paths: List[str]) -> None:
+        converted = self._convert_pdfs_to_images(paths)
         if converted:
             self._add_image_paths(converted)
 
@@ -666,11 +711,28 @@ class ImageListCard(QFrame):
     def _on_word_done(self, converted_pdfs: List[str]) -> None:
         self._conv_thread = None
         self._conv_worker = None
-        self._handle_pdf_files(converted_pdfs)
+        slots = self._pending_import_slots
+        self._pending_import_slots = None
+        if slots is None:
+            self._handle_pdf_files(converted_pdfs)
+            return
+        words = [str(path) for kind, path in slots if kind == "word"]
+        self._add_import_slots(
+            slots,
+            {
+                source: output
+                for source, output in zip(words, converted_pdfs)
+                if output
+            },
+        )
 
     def _on_word_error(self, msg: str) -> None:
         self._conv_thread = None
         self._conv_worker = None
+        slots = self._pending_import_slots
+        self._pending_import_slots = None
+        if slots is not None:
+            self._add_import_slots(slots, {})
 
     def clear(self) -> None:
         self._paths.clear()
@@ -1315,5 +1377,7 @@ class ImgsAPdfWindow(PipelineWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        from ui.common.file_ordering import paths_from_mime_data
+
+        paths = paths_from_mime_data(event.mimeData())
         self._img_card.add_paths(paths)

@@ -6,6 +6,8 @@ from pathlib import Path
 from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import QFileDialog, QWidget
 
+from ui.common.file_ordering import import_paths
+
 
 _LAST_LOCATION_KEY = "fileDialogs/lastLocation"
 
@@ -78,7 +80,7 @@ def get_open_file_names(
     )
     if paths:
         _store_working_location(paths[0])
-    return [str(Path(p)) for p in paths], selected
+    return import_paths(str(Path(p)) for p in paths), selected
 
 
 def get_save_file_name(

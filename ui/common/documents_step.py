@@ -36,12 +36,12 @@ from ui.common.clipboard_utils import clipboard_file_paths, copy_files_to_clipbo
 from ui.common.icons import icon_pixmap, make_icon_label, set_button_icon
 from core.media_conversion import (
     DOCUMENT_IMPORT_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    PDF_EXTENSIONS,
+    WORD_EXTENSIONS,
     accepted_document_paths,
     expand_document_filter,
-    image_paths,
     images_to_pdf_exact,
-    pdf_paths,
-    word_paths,
 )
 from ui.common.dialogs import show_error, show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
@@ -99,6 +99,7 @@ class DocumentsCard(QFrame):
         self._conv_thread: Optional[QThread] = None
         self._conv_worker = None
         self._conv_dlg = None
+        self._pending_import_slots: list[tuple[str, str]] | None = None
         self._thumb_threads: list = []  # threads de generación de thumbnails activos
         self._thumb_workers: dict = {}  # mantiene vivos los workers hasta que terminen
 
@@ -373,9 +374,11 @@ class DocumentsCard(QFrame):
     def dropEvent(self, event: QDropEvent) -> None:
         self._set_drop_active(False)
         if event.mimeData().hasUrls():
+            from ui.common.file_ordering import paths_from_mime_data
+
             event.acceptProposedAction()
             self._flash_drop_success()
-            paths = [u.toLocalFile() for u in event.mimeData().urls()]
+            paths = paths_from_mime_data(event.mimeData())
             if paths:
                 self.add_paths(paths)
             return
@@ -791,15 +794,22 @@ class DocumentsCard(QFrame):
     def add_paths(self, raw_paths: List[str]) -> None:
         """Agrega paths, convirtiendo Word o imágenes si es necesario."""
         accepted = accepted_document_paths(raw_paths)
-        pdfs = pdf_paths(accepted)
-        images = image_paths(accepted)
-        words = word_paths(accepted)
-        if pdfs:
-            self._add_pdf_paths(pdfs)
-        if images:
-            self._handle_image_files(images)
+        if self._single_file:
+            accepted = accepted[:1]
+        slots, words = self._build_import_slots(accepted)
         if words:
+            if not self._ctx.word_converter.is_available():
+                show_info(
+                    self.window(), "Microsoft Office requerido",
+                    "Para convertir archivos Word a PDF se necesita Microsoft Office.\n"
+                    "Los archivos .doc/.docx han sido omitidos.",
+                )
+                self._add_import_slots(slots, {})
+                return
+            self._pending_import_slots = slots
             self._handle_word_files(words)
+            return
+        self._add_import_slots(slots, {})
 
     def clear(self) -> None:
         self._paths.clear()
@@ -873,6 +883,49 @@ class DocumentsCard(QFrame):
     # ------------------------------------------------------------------ #
     # Internos
     # ------------------------------------------------------------------ #
+
+    def _build_import_slots(self, paths: List[str]) -> tuple[list[tuple[str, str]], list[str]]:
+        slots: list[tuple[str, str]] = []
+        words: list[str] = []
+        image_out_dir = None
+        for path in paths:
+            suffix = Path(path).suffix.lower()
+            if suffix in PDF_EXTENSIONS:
+                slots.append(("pdf", path))
+            elif suffix in IMAGE_EXTENSIONS:
+                try:
+                    if image_out_dir is None:
+                        image_out_dir = make_run_dir("converted")
+                    converted = images_to_pdf_exact([path], out_dir=image_out_dir)
+                except Exception as exc:
+                    show_error(
+                        self.window(),
+                        "No se pudieron convertir las imágenes",
+                        str(exc),
+                    )
+                    continue
+                if converted:
+                    slots.append(("pdf", converted))
+            elif suffix in WORD_EXTENSIONS:
+                slots.append(("word", path))
+                words.append(path)
+        return slots, words
+
+    def _add_import_slots(
+        self,
+        slots: list[tuple[str, str]],
+        word_outputs: dict[str, str],
+    ) -> None:
+        ordered: list[str] = []
+        for kind, path in slots:
+            if kind == "pdf":
+                ordered.append(path)
+            elif kind == "word":
+                converted = word_outputs.get(path)
+                if converted:
+                    ordered.append(converted)
+        if ordered:
+            self._add_pdf_paths(ordered)
 
     def _add_pdf_paths(self, paths: List[str]) -> None:
         if self._single_file:
@@ -1057,11 +1110,28 @@ class DocumentsCard(QFrame):
     def _on_word_done(self, paths: List[str]) -> None:
         self._conv_thread = None
         self._conv_worker = None
-        self._add_pdf_paths(paths)
+        slots = self._pending_import_slots
+        self._pending_import_slots = None
+        if slots is None:
+            self._add_pdf_paths(paths)
+            return
+        words = [path for kind, path in slots if kind == "word"]
+        self._add_import_slots(
+            slots,
+            {
+                source: output
+                for source, output in zip(words, paths)
+                if output
+            },
+        )
 
     def _on_word_error(self, msg: str) -> None:
         self._conv_thread = None
         self._conv_worker = None
+        slots = self._pending_import_slots
+        self._pending_import_slots = None
+        if slots is not None:
+            self._add_import_slots(slots, {})
 
 
 def _pdf_page_count(path: str) -> int:

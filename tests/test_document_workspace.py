@@ -255,6 +255,30 @@ def test_documents_card_converts_each_image_to_its_own_pdf(tmp_path):
         _app().processEvents()
 
 
+def test_documents_card_preserves_input_order_across_image_conversion(tmp_path):
+    _app()
+
+    from shell.tray import PdfTray
+    from ui.common.documents_step import DocumentsCard
+
+    first_pdf = _touch_pdf(tmp_path / "10-original.pdf")
+    image_path = tmp_path / "02-scan.png"
+    Image.new("RGB", (80, 40), "navy").save(image_path)
+    last_pdf = _touch_pdf(tmp_path / "01-final.pdf")
+
+    card = DocumentsCard(_ctx(PdfTray()), show_thumbnails=False)
+    try:
+        card.add_paths([first_pdf, str(image_path), last_pdf])
+
+        paths = card.paths()
+        assert paths[0] == first_pdf
+        assert Path(paths[1]).stem == image_path.stem
+        assert paths[2] == last_pdf
+    finally:
+        card.deleteLater()
+        _app().processEvents()
+
+
 def test_document_workspace_uses_preview_panel(tmp_path):
     _app()
 

@@ -526,5 +526,6 @@ class UnirWindow(PipelineWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
-        self._docs_card.add_paths(paths)
+        from ui.common.file_ordering import paths_from_mime_data
+
+        self.handle_drop(paths_from_mime_data(event.mimeData()))

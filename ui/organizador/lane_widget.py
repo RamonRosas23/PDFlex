@@ -214,10 +214,11 @@ class _PageStrip(QListWidget):
             return
 
         if event.mimeData().hasUrls():
+            from ui.common.file_ordering import paths_from_mime_data
+
             paths = [
-                url.toLocalFile()
-                for url in event.mimeData().urls()
-                if Path(url.toLocalFile()).suffix.lower() in ACCEPTED_EXTS
+                path for path in paths_from_mime_data(event.mimeData())
+                if Path(path).suffix.lower() in ACCEPTED_EXTS
             ]
             if paths:
                 _, target_row = self._insertion_for_pos(event.position().toPoint())

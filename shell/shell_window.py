@@ -32,6 +32,10 @@ from ui.common.output_settings import (
     add_tool_suffix_enabled,
     set_add_tool_suffix_enabled,
 )
+from ui.common.file_ordering import (
+    natural_import_sort_enabled,
+    set_natural_import_sort_enabled,
+)
 from ui.common.icons import set_button_icon
 from core.update_config import (
     UPDATE_STARTUP_DELAY_MS,
@@ -154,6 +158,16 @@ class ShellWindow(QMainWindow):
         self._suffix_action.setChecked(add_tool_suffix_enabled())
         self._suffix_action.toggled.connect(set_add_tool_suffix_enabled)
         options_menu.addAction(self._suffix_action)
+        self._natural_import_sort_action = QAction(
+            "Ordenar archivos importados por nombre",
+            self._options_btn,
+        )
+        self._natural_import_sort_action.setCheckable(True)
+        self._natural_import_sort_action.setChecked(natural_import_sort_enabled())
+        self._natural_import_sort_action.toggled.connect(
+            set_natural_import_sort_enabled
+        )
+        options_menu.addAction(self._natural_import_sort_action)
         options_menu.addSeparator()
         self._check_updates_action = QAction(
             "Buscar actualizaciones",
@@ -575,7 +589,9 @@ class ShellWindow(QMainWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        from ui.common.file_ordering import paths_from_mime_data
+
+        paths = paths_from_mime_data(event.mimeData())
         active = self._main_stack.currentWidget()
         if hasattr(active, "handle_drop"):
             active.handle_drop(paths)

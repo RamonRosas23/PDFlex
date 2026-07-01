@@ -416,5 +416,7 @@ class QuitarFondoWindow(PipelineWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        self.handle_drop([url.toLocalFile() for url in event.mimeData().urls()])
+        from ui.common.file_ordering import paths_from_mime_data
+
+        self.handle_drop(paths_from_mime_data(event.mimeData()))
         event.acceptProposedAction()

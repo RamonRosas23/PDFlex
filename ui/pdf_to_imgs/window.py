@@ -593,6 +593,8 @@ class PdfToImgsWindow(PipelineWindow):
             event.acceptProposedAction()
 
     def dropEvent(self, event: QDropEvent) -> None:
-        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        from ui.common.file_ordering import paths_from_mime_data
+
+        paths = paths_from_mime_data(event.mimeData())
         self._docs_card.add_paths(paths)
         self._switch_section(0)

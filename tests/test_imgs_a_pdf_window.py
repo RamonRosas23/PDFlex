@@ -229,6 +229,33 @@ class ImgsAPdfWindowTests(unittest.TestCase):
                 card.deleteLater()
                 self.app.processEvents()
 
+    def test_image_list_card_preserves_input_order_across_pdf_conversion(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first_image = root / "10-first.png"
+            second_image = root / "01-second.png"
+            Image.new("RGB", (80, 40), "blue").save(first_image)
+            Image.new("RGB", (70, 35), "white").save(second_image)
+
+            pdf_path = root / "02-middle.pdf"
+            doc = fitz.open()
+            doc.new_page(width=72, height=36)
+            doc.save(pdf_path)
+            doc.close()
+
+            card = ImageListCard()
+            try:
+                card.add_paths([str(first_image), str(pdf_path), str(second_image)])
+                self.app.processEvents()
+
+                paths = card.paths()
+                self.assertEqual(paths[0], str(first_image))
+                self.assertEqual(Path(paths[1]).stem, "02-middle_p001")
+                self.assertEqual(paths[2], str(second_image))
+            finally:
+                card.deleteLater()
+                self.app.processEvents()
+
     def test_tool_registry_exposes_images_to_pdf_for_images(self) -> None:
         tool = get_tool("imgs_a_pdf")
 

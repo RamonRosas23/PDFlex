@@ -38,6 +38,7 @@ from ui.common.file_dialogs import (
     get_open_file_names,
 )
 from ui.common.icons import set_button_icon
+from ui.common.result_ui import configure_file_list
 from .pdf_preview import PdfPreviewView, pil_to_qpixmap
 from .results_viewer import ResultsViewer
 
@@ -314,6 +315,7 @@ class MainWindow(QMainWindow):
 
         # Stack: drop zone vacía / lista con items
         self.pdf_list = QListWidget()
+        configure_file_list(self.pdf_list)
         self.pdf_list.setMinimumHeight(340)
         cl.addWidget(self.pdf_list, 1)
 
@@ -376,6 +378,7 @@ class MainWindow(QMainWindow):
                              "la misma posición relativa.")
         rl = card_layout(ref_card)
         self.doc_selector = QListWidget()
+        configure_file_list(self.doc_selector)
         self.doc_selector.setMinimumHeight(120)
         self.doc_selector.setMaximumHeight(160)
         self.doc_selector.itemSelectionChanged.connect(self._on_doc_selector_changed)
@@ -731,7 +734,9 @@ class MainWindow(QMainWindow):
         for p in paths:
             if p.lower().endswith(".pdf") and p not in self.pdf_paths:
                 self.pdf_paths.append(p)
-                self.pdf_list.addItem(QListWidgetItem(Path(p).name))
+                item = QListWidgetItem(Path(p).name)
+                item.setToolTip(p)
+                self.pdf_list.addItem(item)
         self._refresh_doc_count()
         self._refresh_doc_selector()
 
@@ -748,7 +753,9 @@ class MainWindow(QMainWindow):
     def _refresh_doc_selector(self) -> None:
         self.doc_selector.clear()
         for p in self.pdf_paths:
-            self.doc_selector.addItem(QListWidgetItem(Path(p).name))
+            item = QListWidgetItem(Path(p).name)
+            item.setToolTip(p)
+            self.doc_selector.addItem(item)
         if self.pdf_paths:
             self.doc_selector.setCurrentRow(0)
 

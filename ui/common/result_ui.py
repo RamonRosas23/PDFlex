@@ -158,14 +158,32 @@ class ElidedLabel(QLabel):
         super().setText(metrics.elidedText(self._full_text, self._elide_mode, width))
 
 
+def elide_middle_text(text: str, max_chars: int = 72) -> str:
+    """Return a width-independent middle-elided string for item rows/HTML."""
+    value = text or ""
+    if len(value) <= max_chars:
+        return value
+    if max_chars <= 3:
+        return value[:max_chars]
+    left = max(1, (max_chars - 3) // 2)
+    right = max(1, max_chars - 3 - left)
+    return f"{value[:left]}...{value[-right:]}"
+
+
+def configure_file_list(widget: QListWidget, *, word_wrap: bool = False) -> None:
+    """Keep file rows clipped, scrollable vertically, and stable with long names."""
+    widget.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+    widget.setWordWrap(word_wrap)
+    widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    widget.setHorizontalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+    widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+
+
 def configure_result_list(widget: QListWidget) -> None:
     """Use predictable clipping behavior for result lists."""
     widget.setObjectName("ResultList")
     widget.setSpacing(2)
-    widget.setTextElideMode(Qt.TextElideMode.ElideMiddle)
-    widget.setWordWrap(True)
-    widget.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    widget.setVerticalScrollMode(QListWidget.ScrollMode.ScrollPerPixel)
+    configure_file_list(widget, word_wrap=True)
 
 
 def format_file_size(path: str | Path) -> str:

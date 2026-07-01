@@ -14,14 +14,15 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QListWidget, QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
-    QWidget,
+    QListWidget, QListWidgetItem, QMenu, QPushButton, QSizePolicy,
+    QVBoxLayout, QWidget,
 )
 
 from core.page_organizer_engine import PageRef
 from core.media_conversion import DOCUMENT_IMPORT_EXTENSIONS, DOCUMENT_IMPORT_FILTER
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
+from ui.common.result_ui import ElidedLabel, elide_middle_text
 from ui.organizador.page_mime import MIME_TYPE, decode_drag, encode_drag
 from ui.organizador.thumb_cache import ThumbnailCache, ThumbnailKey, ThumbnailWorker
 
@@ -433,9 +434,9 @@ class DocLane(QFrame):
         sw.addWidget(self._list)
 
         self._shortcut_lbl = QLabel(
-            "Enter ver grande  ·  Del  ·  R rotar  ·  Shift+R rotar ←  ·  "
-            "Ctrl+D duplicar  ·  Ctrl+C copiar  ·  Ctrl+X cortar  ·  Ctrl+V pegar  ·  Ctrl+Z deshacer"
+            "Enter ver grande · Del eliminar · R rotar · Ctrl+C/X/V · Ctrl+Z deshacer"
         )
+        self._shortcut_lbl.setWordWrap(True)
         self._shortcut_lbl.setStyleSheet(
             "color: #3A3E4A; font-size: 10px; background: transparent; padding: 0 4px 2px 4px;"
         )
@@ -475,20 +476,21 @@ class DocLane(QFrame):
         h.addWidget(down_btn)
         h.addSpacing(8)
 
-        self._name_lbl = QLabel(self._display_name)
+        self._name_lbl = ElidedLabel(self._display_name)
+        self._name_lbl.setMinimumWidth(0)
+        self._name_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self._name_lbl.setStyleSheet(
             "color: #ECEDEE; font-size: 13px; font-weight: 600; background: transparent;"
         )
-        self._name_lbl.setToolTip("Doble clic para renombrar")
         self._name_lbl.mouseDoubleClickEvent = lambda _: self._start_name_edit()
-        h.addWidget(self._name_lbl)
+        h.addWidget(self._name_lbl, 1)
 
         self._name_edit = QLineEdit(self._display_name)
         self._name_edit.setStyleSheet(
             "QLineEdit { background: #26262C; border: 1px solid #5E6AD2;"
             " border-radius: 4px; color: #ECEDEE; font-size: 13px; padding: 2px 6px; }"
         )
-        self._name_edit.setMaximumWidth(200)
+        self._name_edit.setMaximumWidth(260)
         self._name_edit.setVisible(False)
         self._name_edit.returnPressed.connect(self._commit_name_edit)
         self._name_edit.editingFinished.connect(self._commit_name_edit)
@@ -962,8 +964,8 @@ class DocLane(QFrame):
             move_menu.setStyleSheet(menu.styleSheet())
             copy_menu.setStyleSheet(menu.styleSheet())
             for sib_id, sib_name in siblings:
-                move_menu.addAction(sib_name).setData(("move", sib_id))
-                copy_menu.addAction(sib_name).setData(("copy", sib_id))
+                move_menu.addAction(elide_middle_text(sib_name, 64)).setData(("move", sib_id))
+                copy_menu.addAction(elide_middle_text(sib_name, 64)).setData(("copy", sib_id))
 
         menu.addSeparator()
         del_act = menu.addAction("Eliminar  (Del)")

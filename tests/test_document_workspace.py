@@ -156,6 +156,36 @@ def test_document_workspace_sends_work_items_back_to_tray(tmp_path):
         _app().processEvents()
 
 
+def test_document_workspace_long_names_do_not_need_horizontal_scroll(tmp_path):
+    app = _app()
+
+    from shell.tray import PdfTray
+    from ui.common.document_workspace import DocumentWorkspace
+
+    name = "contrato_revision_final_con_nombre_muy_largo_" + ("x" * 72) + ".pdf"
+    pdf = _touch_pdf(tmp_path / name)
+    tray = PdfTray()
+    tray.add_items([pdf], "Auditoria")
+
+    workspace = DocumentWorkspace(_ctx(tray), show_thumbnails=False)
+    try:
+        workspace.resize(560, 420)
+        workspace.show()
+        app.processEvents()
+
+        workspace._tray_list.item(0).setSelected(True)
+        workspace._add_selected_to_work()
+        app.processEvents()
+
+        assert workspace._tray_list.horizontalScrollBar().maximum() == 0
+        assert workspace.list_widget.horizontalScrollBar().maximum() == 0
+        assert workspace._tray_list.item(0).toolTip() == pdf
+        assert workspace.list_widget.item(0).toolTip() == pdf
+    finally:
+        workspace.deleteLater()
+        app.processEvents()
+
+
 def test_documents_card_pastes_files_from_windows_clipboard(tmp_path):
     app = _app()
 

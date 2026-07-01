@@ -46,7 +46,7 @@ from core.media_conversion import (
 from ui.common.dialogs import show_error, show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
 from ui.common.open_utils import open_file as open_local_file, open_folder as open_local_folder
-from ui.common.result_ui import ElidedLabel, format_file_size
+from ui.common.result_ui import ElidedLabel, configure_file_list, format_file_size
 from ui.styles import COLORS
 from core.output_paths import make_run_dir
 
@@ -261,6 +261,7 @@ class DocumentsCard(QFrame):
 
         # ── Lista de documentos ─────────────────────────────────────────
         self.list_widget = QListWidget()
+        configure_file_list(self.list_widget)
         self.list_widget.setMinimumHeight(260)
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list_widget.itemSelectionChanged.connect(self._update_remove_btn)
@@ -330,6 +331,14 @@ class DocumentsCard(QFrame):
         self._preview_meta_lbl.setWordWrap(True)
         layout.addWidget(self._preview_meta_lbl)
         return panel
+
+    def _make_file_item(self, path: str) -> QListWidgetItem:
+        item = QListWidgetItem(Path(path).name)
+        item.setData(Qt.ItemDataRole.UserRole, path)
+        item.setToolTip(path)
+        row_height = max(self._thumb_h + 18, 46) if self._show_thumbnails else 42
+        item.setSizeHint(QSize(220, row_height))
+        return item
 
     # ------------------------------------------------------------------ #
     # Event filter — Delete key
@@ -703,9 +712,7 @@ class DocumentsCard(QFrame):
         self._path_set = set(paths)
         self.list_widget.clear()
         for p in paths:
-            item = QListWidgetItem(Path(p).name)
-            item.setData(Qt.ItemDataRole.UserRole, p)
-            item.setToolTip(p)
+            item = self._make_file_item(p)
             if self._show_thumbnails:
                 placeholder = make_placeholder_pixmap(self._thumb_w, self._thumb_h)
                 item.setIcon(QIcon(placeholder))
@@ -842,9 +849,7 @@ class DocumentsCard(QFrame):
         self._path_set = set(normalized)
         self.list_widget.clear()
         for path in normalized:
-            item = QListWidgetItem(Path(path).name)
-            item.setData(Qt.ItemDataRole.UserRole, path)
-            item.setToolTip(path)
+            item = self._make_file_item(path)
             if self._show_thumbnails:
                 placeholder = make_placeholder_pixmap(self._thumb_w, self._thumb_h)
                 item.setIcon(QIcon(placeholder))
@@ -937,9 +942,7 @@ class DocumentsCard(QFrame):
             if p not in self._path_set:
                 self._path_set.add(p)
                 self._paths.append(p)
-                item = QListWidgetItem(Path(p).name)
-                item.setData(Qt.ItemDataRole.UserRole, p)
-                item.setToolTip(p)
+                item = self._make_file_item(p)
                 if self._show_thumbnails:
                     placeholder = make_placeholder_pixmap(self._thumb_w, self._thumb_h)
                     item.setIcon(QIcon(placeholder))

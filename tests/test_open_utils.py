@@ -37,7 +37,8 @@ def test_open_folder_opens_parent_for_file_path(tmp_path, monkeypatch):
     )
 
     assert open_utils.open_folder(None, source)
-    assert opened == [str(tmp_path)]
+    assert len(opened) == 1
+    assert Path(opened[0]) == tmp_path
 
 
 def test_open_file_reports_desktop_service_rejection(tmp_path, monkeypatch):

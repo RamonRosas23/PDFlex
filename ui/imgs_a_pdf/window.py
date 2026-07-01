@@ -46,7 +46,7 @@ from ui.common.dialogs import show_error, show_info, show_warning
 from ui.common.file_workspace import FileWorkspace
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
-from ui.common.result_ui import format_file_size
+from ui.common.result_ui import configure_file_list, format_file_size
 
 
 # ── Constantes ───────────────────────────────────────────────────────── #
@@ -511,6 +511,7 @@ class ImageListCard(QFrame):
 
         # ── Lista ─────────────────────────────────────────────────────
         self.list_widget = QListWidget()
+        configure_file_list(self.list_widget)
         self.list_widget.setMinimumHeight(300)
         self.list_widget.setIconSize(QSize(80, 80))
         self.list_widget.setSpacing(3)

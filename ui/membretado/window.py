@@ -56,6 +56,7 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import ask_question, show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
+from ui.common.result_ui import ElidedLabel, configure_file_list, elide_middle_text
 
 
 # ====================================================================== #
@@ -437,9 +438,8 @@ class MembretadoWindow(PipelineWindow):
 
         info_col = QVBoxLayout()
         info_col.setSpacing(8)
-        self._lh_name_lbl = QLabel("Ningun membrete seleccionado")
+        self._lh_name_lbl = ElidedLabel("Ningun membrete seleccionado")
         self._lh_name_lbl.setObjectName("CardTitle")
-        self._lh_name_lbl.setWordWrap(True)
         self._lh_pages_lbl = QLabel("Selecciona una hoja o usa una guardada en biblioteca.")
         self._lh_pages_lbl.setProperty("class", "CardHint")
         self._lh_pages_lbl.setWordWrap(True)
@@ -484,6 +484,7 @@ class MembretadoWindow(PipelineWindow):
         lib_l = card_layout(library_card)
         lib_l.setSpacing(12)
         self._library_list = QListWidget()
+        configure_file_list(self._library_list)
         self._library_list.setMinimumHeight(254)
         self._library_list.setAlternatingRowColors(True)
         self._library_list.setStyleSheet(
@@ -718,6 +719,7 @@ class MembretadoWindow(PipelineWindow):
         dl = card_layout(docs_card)
         dl.setSpacing(10)
         self._scope_docs_list = QListWidget()
+        configure_file_list(self._scope_docs_list)
         self._scope_docs_list.setSpacing(3)
         self._scope_docs_list.currentRowChanged.connect(self._on_scope_doc_row_changed)
         dl.addWidget(self._scope_docs_list, 1)
@@ -734,9 +736,9 @@ class MembretadoWindow(PipelineWindow):
         doc_card = make_card("Excepción del documento")
         ed = card_layout(doc_card)
         ed.setSpacing(10)
-        self._scope_doc_title = QLabel("Selecciona un documento")
+        self._scope_doc_title = ElidedLabel("Selecciona un documento")
+        self._scope_doc_title.setMinimumWidth(0)
         self._scope_doc_title.setStyleSheet("color:#ECEDEE; font-size:15px; font-weight:600;")
-        self._scope_doc_title.setWordWrap(True)
         ed.addWidget(self._scope_doc_title)
 
         self._scope_doc_meta = QLabel("—")
@@ -1029,6 +1031,7 @@ class MembretadoWindow(PipelineWindow):
             "background: #111114; border: 1px solid #26262C; border-radius: 8px;"
         )
         self._lh_name_lbl.setText(self._lh_source_name)
+        self._lh_name_lbl.setToolTip(self._lh_source_name or path)
         self._lh_pages_lbl.setText(
             f"{page_count} pagina{'s' if page_count != 1 else ''} · "
             f"{pw:.0f} x {ph:.0f} pt"
@@ -1448,6 +1451,7 @@ class MembretadoWindow(PipelineWindow):
 
             if not path:
                 self._scope_doc_title.setText("Selecciona un documento")
+                self._scope_doc_title.setToolTip("")
                 self._scope_doc_meta.setText("—")
                 self._doc_override_chk.setChecked(False)
                 self._set_scope_combo_mode(self._doc_scope_combo, "all")
@@ -1461,6 +1465,7 @@ class MembretadoWindow(PipelineWindow):
             override = path in self._doc_scope_enabled
             mode, text = self._scope_config_for_doc(path)
             self._scope_doc_title.setText(Path(path).name)
+            self._scope_doc_title.setToolTip(path)
             self._scope_doc_meta.setText(f"{count} página" + ("" if count == 1 else "s"))
             self._doc_override_chk.setChecked(override)
             self._set_scope_combo_mode(self._doc_scope_combo, mode)
@@ -1514,8 +1519,9 @@ class MembretadoWindow(PipelineWindow):
         if error:
             self._doc_scope_status_lbl.setText(error)
             self._doc_scope_status_lbl.setStyleSheet("color:#E5484D;")
+            name = elide_middle_text(Path(path).name, 64)
             self._scope_preview_lbl.setText(
-                f"<b>{Path(path).name}</b><br>"
+                f"<b>{name}</b><br>"
                 "<span style='color:#E5484D'>Revisa el alcance antes de procesar.</span>"
             )
             return
@@ -1532,8 +1538,9 @@ class MembretadoWindow(PipelineWindow):
             untouched_text = f"<br>{untouched} página{'s' if untouched != 1 else ''} se conservarán sin cambios."
         elif untouched:
             untouched_text = f"<br>{untouched} página{'s' if untouched != 1 else ''} se omitirán."
+        name = elide_middle_text(Path(path).name, 64)
         self._scope_preview_lbl.setText(
-            f"<b>{Path(path).name}</b><br>"
+            f"<b>{name}</b><br>"
             f"{len(pages)} {label}: <span style='color:#B8BDF8'>{compact}</span>"
             f"{untouched_text}"
         )
@@ -1862,6 +1869,7 @@ class MembretadoWindow(PipelineWindow):
             "border-radius: 8px; color: #6B6F7A; font-size: 11px;"
         )
         self._lh_name_lbl.setText("Ningun membrete seleccionado")
+        self._lh_name_lbl.setToolTip("")
         self._lh_pages_lbl.setText("Selecciona una hoja o usa una guardada en biblioteca.")
         self._lh_margins_lbl.setText("")
         self._margin_preview.clear_letterhead()

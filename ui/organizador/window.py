@@ -15,7 +15,7 @@ from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QTableWidget, QTableWidgetItem,
+    QHeaderView, QPushButton, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -40,6 +40,7 @@ from ui.common.dialogs import show_error, show_info, show_warning
 from ui.common.icons import set_button_icon
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
+from ui.common.result_ui import elide_middle_text
 from ui.common.tray_input_panel import TrayInputPanel
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.organizador.lane_container import LaneContainer
@@ -152,7 +153,11 @@ class OrganizadorWindow(PipelineWindow):
 
         self._output_table = QTableWidget(0, 3)
         self._output_table.setHorizontalHeaderLabels(["Documento", "Paginas", "Nombre de salida"])
-        self._output_table.horizontalHeader().setStretchLastSection(True)
+        header = self._output_table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._output_table.verticalHeader().setVisible(False)
         self._output_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._output_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -533,14 +538,17 @@ class OrganizadorWindow(PipelineWindow):
         states = self._lane_container.all_lane_states()
         self._output_table.setRowCount(len(states))
         for row, (lane_id, name, refs) in enumerate(states):
-            self._output_table.setItem(row, 0, QTableWidgetItem(name))
+            doc_item = QTableWidgetItem(elide_middle_text(name, 72))
+            doc_item.setToolTip(name)
+            self._output_table.setItem(row, 0, doc_item)
             self._output_table.setItem(row, 1, QTableWidgetItem(str(len(refs))))
             stem = Path(name).stem if "." in name else name
             edit = QLineEdit(f"{stem}_org")
             edit.setProperty("lane_id", lane_id)
+            edit.setMinimumWidth(0)
+            edit.setToolTip(f"Salida para: {name}")
             self._output_table.setCellWidget(row, 2, edit)
-        self._output_table.resizeColumnsToContents()
-        self._output_table.horizontalHeader().setStretchLastSection(True)
+        self._output_table.resizeRowsToContents()
 
     def _output_name_for_row(self, row: int) -> str:
         w = self._output_table.cellWidget(row, 2)

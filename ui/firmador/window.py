@@ -79,6 +79,7 @@ from ui.common.send_to_tool import SendToToolButton
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.output_settings import add_tool_suffix_enabled
+from ui.common.result_ui import ElidedLabel, configure_file_list, elide_middle_text
 from ui.common.dialogs import ask_question, show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import make_icon_label, set_button_icon
@@ -162,10 +163,7 @@ def _friendly_signature_label(source_path: str) -> str:
 
 
 def _elide_middle(text: str, max_chars: int = 32) -> str:
-    if len(text) <= max_chars:
-        return text
-    keep = max(4, (max_chars - 1) // 2)
-    return f"{text[:keep]}…{text[-keep:]}"
+    return elide_middle_text(text, max_chars)
 
 
 def _normalize_page_token(text: str) -> str:
@@ -859,7 +857,7 @@ class FirmadorWindow(PipelineWindow):
         self._prev_doc_btn.clicked.connect(
             lambda: self._go_to_doc(self._active_doc_idx - 1)
         )
-        self._doc_name_lbl = QLabel("Sin documento")
+        self._doc_name_lbl = ElidedLabel("Sin documento")
         self._doc_name_lbl.setMinimumWidth(0)
         _fit_left_width(self._doc_name_lbl)
         self._doc_name_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -1206,6 +1204,7 @@ class FirmadorWindow(PipelineWindow):
         docs_layout.setSpacing(10)
 
         self._intervals_list = QListWidget()
+        configure_file_list(self._intervals_list)
         self._intervals_list.setSpacing(3)
         self._intervals_list.currentRowChanged.connect(
             self._on_interval_doc_row_changed
@@ -1225,11 +1224,11 @@ class FirmadorWindow(PipelineWindow):
         editor_layout = card_layout(editor_card)
         editor_layout.setSpacing(12)
 
-        self._interval_doc_title = QLabel("Selecciona un documento")
+        self._interval_doc_title = ElidedLabel("Selecciona un documento")
+        self._interval_doc_title.setMinimumWidth(0)
         self._interval_doc_title.setStyleSheet(
             "color:#ECEDEE; font-size:15px; font-weight:600;"
         )
-        self._interval_doc_title.setWordWrap(True)
         editor_layout.addWidget(self._interval_doc_title)
 
         self._interval_doc_meta = QLabel("—")
@@ -1378,6 +1377,7 @@ class FirmadorWindow(PipelineWindow):
 
         self._review_doc_list = QListWidget()
         self._review_doc_list.setObjectName("ReviewDocList")
+        configure_file_list(self._review_doc_list)
         self._review_doc_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._review_doc_list.currentRowChanged.connect(self._on_review_doc_selected)
         left_l.addWidget(self._review_doc_list, 1)
@@ -1388,6 +1388,7 @@ class FirmadorWindow(PipelineWindow):
 
         self._review_page_list = QListWidget()
         self._review_page_list.setObjectName("ReviewPageList")
+        configure_file_list(self._review_page_list)
         self._review_page_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._review_page_list.currentRowChanged.connect(self._on_review_page_selected)
         left_l.addWidget(self._review_page_list, 2)
@@ -1428,7 +1429,7 @@ class FirmadorWindow(PipelineWindow):
         tb.setContentsMargins(12, 0, 12, 0)
         tb.setSpacing(8)
 
-        self._review_doc_title_lbl = QLabel("Sin documento")
+        self._review_doc_title_lbl = ElidedLabel("Sin documento")
         self._review_doc_title_lbl.setStyleSheet(
             "color:#ECEDEE; font-size:13px; font-weight:600; background: transparent;"
         )
@@ -1533,6 +1534,7 @@ class FirmadorWindow(PipelineWindow):
         right_l.addWidget(self._review_summary_lbl)
 
         self._review_sig_list = QListWidget()
+        configure_file_list(self._review_sig_list)
         self._review_sig_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._review_sig_list.currentRowChanged.connect(
             self._on_review_sig_row_changed
@@ -1832,6 +1834,7 @@ class FirmadorWindow(PipelineWindow):
 
             if not path:
                 self._interval_doc_title.setText("Selecciona un documento")
+                self._interval_doc_title.setToolTip("")
                 self._interval_doc_meta.setText("—")
                 self._range_all_radio.setChecked(True)
                 self._range_edit.setText("")
@@ -1845,6 +1848,7 @@ class FirmadorWindow(PipelineWindow):
 
             count = self._page_count_for_doc(path)
             self._interval_doc_title.setText(Path(path).name)
+            self._interval_doc_title.setToolTip(path)
             self._interval_doc_meta.setText(
                 f"{count} página" + ("" if count == 1 else "s")
             )
@@ -1923,8 +1927,9 @@ class FirmadorWindow(PipelineWindow):
                 f"Se firmarán todas las {total} páginas."
             )
             self._range_status_lbl.setStyleSheet("color:#3BD37C;")
+            name = elide_middle_text(Path(path).name, 64)
             self._interval_preview_lbl.setText(
-                f"<b>{Path(path).name}</b><br>Todas las páginas"
+                f"<b>{name}</b><br>Todas las páginas"
             )
             return
 
@@ -1934,8 +1939,9 @@ class FirmadorWindow(PipelineWindow):
         except ValueError as exc:
             self._range_status_lbl.setText(str(exc))
             self._range_status_lbl.setStyleSheet("color:#E5484D;")
+            name = elide_middle_text(Path(path).name, 64)
             self._interval_preview_lbl.setText(
-                f"<b>{Path(path).name}</b><br>"
+                f"<b>{name}</b><br>"
                 "<span style='color:#E5484D'>Revisa el intervalo antes de procesar.</span>"
             )
             return
@@ -1945,8 +1951,9 @@ class FirmadorWindow(PipelineWindow):
         compact = compact_page_intervals(pages)
         self._range_status_lbl.setText(f"{count} {label} seleccionadas: {compact}")
         self._range_status_lbl.setStyleSheet("color:#3BD37C;")
+        name = elide_middle_text(Path(path).name, 64)
         self._interval_preview_lbl.setText(
-            f"<b>{Path(path).name}</b><br>"
+            f"<b>{name}</b><br>"
             f"{count} {label}: <span style='color:#B8BDF8'>{compact}</span>"
         )
 
@@ -2981,15 +2988,15 @@ class FirmadorWindow(PipelineWindow):
 
         if n == 0 or idx < 0:
             self._doc_name_lbl.setText("Sin documento")
+            self._doc_name_lbl.setToolTip("")
             self._doc_counter_lbl.setText("—")
             self._prev_doc_btn.setEnabled(False)
             self._next_doc_btn.setEnabled(False)
             return
 
-        name = Path(self.pdf_paths[idx]).name
-        if len(name) > 24:
-            name = name[:21] + "…"
-        self._doc_name_lbl.setText(name)
+        path = self.pdf_paths[idx]
+        self._doc_name_lbl.setText(Path(path).name)
+        self._doc_name_lbl.setToolTip(path)
         self._doc_counter_lbl.setText(f"{idx + 1} / {n}")
         self._prev_doc_btn.setEnabled(idx > 0)
         self._next_doc_btn.setEnabled(idx < n - 1)
@@ -4020,6 +4027,9 @@ class FirmadorWindow(PipelineWindow):
         self._review_doc_title_lbl.setText(
             Path(review.source_path).name if review is not None else "Sin documento"
         )
+        self._review_doc_title_lbl.setToolTip(
+            review.source_path if review is not None else ""
+        )
         self._review_page_spin.blockSignals(True)
         self._review_page_spin.setRange(1, max(1, page_count))
         self._review_page_spin.setValue(cur + 1 if page_count else 1)
@@ -4122,7 +4132,7 @@ class FirmadorWindow(PipelineWindow):
             return
         deleted = sum(1 for inst in review.instances if inst.deleted)
         self._review_summary_lbl.setText(
-            f"<b>{Path(review.source_path).name}</b><br>"
+            f"<b>{elide_middle_text(Path(review.source_path).name, 48)}</b><br>"
             f"{review.live_count} firmas activas"
             + (f" · {deleted} eliminadas" if deleted else "")
             + (f"<br><span style='color:#E5484D'>{review.warning_count} con advertencias</span>"
@@ -4268,6 +4278,7 @@ class FirmadorWindow(PipelineWindow):
             self._review_progress.setValue(0)
             self._review_status_lbl.setText("Listo para validar.")
             self._review_doc_title_lbl.setText("Sin documento")
+            self._review_doc_title_lbl.setToolTip("")
             self._review_page_total_lbl.setText("/ —")
             self._review_page_spin.setRange(1, 1)
             self._review_page_spin.setValue(1)

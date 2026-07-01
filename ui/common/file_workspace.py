@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
 from shell.transfer import ToolTransfer
 from core.media_conversion import IMAGE_EXTENSIONS, IMAGE_IMPORT_EXTENSIONS
 from ui.common.icons import icon, set_button_icon
+from ui.common.result_ui import configure_file_list
 from ui.styles import COLORS
 
 if TYPE_CHECKING:
@@ -87,6 +88,7 @@ class FileWorkspace(QFrame):
         layout.addLayout(header)
 
         self._tray_list = QListWidget()
+        configure_file_list(self._tray_list)
         self._tray_list.setMinimumHeight(280)
         self._tray_list.setIconSize(QSize(18, 18))
         self._tray_list.setSpacing(3)
@@ -216,6 +218,7 @@ class FileWorkspace(QFrame):
             list_item.setData(Qt.ItemDataRole.UserRole, tray_item.path)
             list_item.setToolTip(tray_item.path)
             list_item.setIcon(icon("file-text", self._status_color(tray_item.status), 15))
+            list_item.setSizeHint(QSize(220, 46))
             self._tray_list.addItem(list_item)
             list_item.setSelected(tray_item.path in selected)
 

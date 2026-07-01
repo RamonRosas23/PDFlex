@@ -41,6 +41,7 @@ from ui.common.process_step import ProcessStep
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import show_error, show_success, show_warning
 from ui.common.icons import set_button_icon
+from ui.common.result_ui import configure_file_list
 from ui.pdf_preview import PdfPreviewView, pil_to_qpixmap
 
 TIPPY_FORMATO = """\
@@ -299,6 +300,7 @@ class FoleadorWindow(PipelineWindow):
                              "Los demás documentos usarán la misma posición relativa.")
         rl = card_layout(ref_card)
         self._ref_list = QListWidget()
+        configure_file_list(self._ref_list)
         self._ref_list.setMinimumHeight(120)
         self._ref_list.setMaximumHeight(160)
         self._ref_list.itemSelectionChanged.connect(self._on_ref_doc_changed)
@@ -637,6 +639,7 @@ class FoleadorWindow(PipelineWindow):
         for p in paths:
             it = QListWidgetItem(Path(p).name)
             it.setData(Qt.ItemDataRole.UserRole, p)
+            it.setToolTip(p)
             self._ref_list.addItem(it)
 
         # Intentar mantener el mismo doc de referencia si sigue en la lista

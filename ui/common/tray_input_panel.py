@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ui.common.icons import icon, set_button_icon
+from ui.common.result_ui import configure_file_list
 from ui.styles import COLORS
 
 if TYPE_CHECKING:
@@ -61,6 +62,7 @@ class TrayInputPanel(QFrame):
         layout.addLayout(header)
 
         self.list_widget = QListWidget()
+        configure_file_list(self.list_widget)
         self.list_widget.setMinimumHeight(280)
         self.list_widget.setIconSize(QSize(18, 18))
         self.list_widget.setSpacing(3)
@@ -141,6 +143,7 @@ class TrayInputPanel(QFrame):
             item.setData(Qt.ItemDataRole.UserRole, tray_item.path)
             item.setToolTip(tray_item.path)
             item.setIcon(icon("file-text", self._status_color(tray_item.status), 15))
+            item.setSizeHint(QSize(220, 46))
             self.list_widget.addItem(item)
             item.setSelected(tray_item.path in selected)
 

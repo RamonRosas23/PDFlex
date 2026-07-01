@@ -604,6 +604,7 @@ class CompresorWindow(PipelineWindow):
         self._profile_card_refs: dict[str, QWidget] = {}
         self._profile_grid_columns = 0
         self._profile_scroll: Optional[QScrollArea] = None
+        self._closing = False
 
         self._build_pages()
         self.setMinimumSize(785, 540)
@@ -865,7 +866,7 @@ class CompresorWindow(PipelineWindow):
         self._recompress_btn = QPushButton("Recomprimir")
         self._recompress_btn.setProperty("class", "Primary")
         self._recompress_btn.setFixedHeight(36)
-        self._recompress_btn.setFixedWidth(150)
+        self._recompress_btn.setMinimumWidth(200)
         self._recompress_btn.setEnabled(False)
         set_button_icon(self._recompress_btn, "refresh-cw")
         self._recompress_btn.clicked.connect(self._on_recompress_results)
@@ -992,6 +993,8 @@ class CompresorWindow(PipelineWindow):
         self._refresh_docs_info_async(paths, self._docs_info_token)
 
     def _refresh_docs_info_async(self, paths: List[str], token: int) -> None:
+        if self._closing:
+            return
         self._docs_info_worker = DocsInfoWorker(paths, token)
         self._docs_info_thread = RunnerThread(self._docs_info_worker.run, self)
         queued = Qt.ConnectionType.QueuedConnection
@@ -1012,6 +1015,8 @@ class CompresorWindow(PipelineWindow):
         first_page_count: int,
         first_label: str,
     ) -> None:
+        if self._closing:
+            return
         if token != self._docs_info_token:
             return
         self._docs_total_bytes = int(total_bytes)
@@ -1109,6 +1114,8 @@ class CompresorWindow(PipelineWindow):
         return "\n".join(lines)
 
     def _refresh_engine_status_async(self) -> None:
+        if self._closing:
+            return
         if self._engine_status_thread is not None:
             return
         self._engine_status_loading = True
@@ -1132,6 +1139,8 @@ class CompresorWindow(PipelineWindow):
         self._engine_status_thread.start()
 
     def _on_engine_status_ready(self, statuses: list) -> None:
+        if self._closing:
+            return
         self._engine_statuses = list(statuses)
         self._engine_status_loading = False
         self._engine_status_worker = None
@@ -1519,10 +1528,12 @@ class CompresorWindow(PipelineWindow):
         event.acceptProposedAction()
 
     def closeEvent(self, event) -> None:
+        self._closing = True
         self._cleanup_thread()
         super().closeEvent(event)
 
     def deleteLater(self) -> None:  # type: ignore[override]
+        self._closing = True
         self._cleanup_thread()
         super().deleteLater()
 

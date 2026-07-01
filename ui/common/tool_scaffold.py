@@ -315,6 +315,7 @@ class PipelineWindow(QWidget):
         self._nav_prev_btn.setProperty("class", "Ghost")
         self._nav_prev_btn.setFixedHeight(36)
         set_button_icon(self._nav_prev_btn, "arrow-left", color=COLORS["text_muted"])
+        self._fit_button_to_text(self._nav_prev_btn)
         self._nav_prev_btn.clicked.connect(self._on_nav_prev)
         self._nav_prev_btn.setVisible(False)
         row.addWidget(self._nav_prev_btn)
@@ -333,11 +334,20 @@ class PipelineWindow(QWidget):
         self._nav_next_btn.setProperty("class", "Primary")
         self._nav_next_btn.setFixedHeight(36)
         set_button_icon(self._nav_next_btn, "arrow-right", color="#FFFFFF")
+        self._fit_button_to_text(self._nav_next_btn)
         self._nav_next_btn.clicked.connect(self._on_nav_next)
         self._nav_next_btn.setVisible(False)
         row.addWidget(self._nav_next_btn)
 
         return navbar
+
+    @staticmethod
+    def _fit_button_to_text(button: QPushButton, *, max_width: int = 360) -> None:
+        """Reserva el ancho que Qt calcula para texto+icono, con un pequeño margen."""
+        if not button.text():
+            return
+        target = max(button.sizeHint().width(), button.minimumSizeHint().width()) + 8
+        button.setMinimumWidth(min(max_width, max(button.minimumWidth(), target)))
 
     def _get_step_actions(self, idx: int) -> list:
         """Returns contextual navbar widgets for the given step index.
@@ -384,6 +394,8 @@ class PipelineWindow(QWidget):
 
         actions = self._get_step_actions(idx)
         for widget in actions:
+            if isinstance(widget, QPushButton):
+                self._fit_button_to_text(widget)
             self._action_zone_layout.addWidget(widget)
 
         has_actions = bool(actions)
@@ -409,12 +421,14 @@ class PipelineWindow(QWidget):
         if idx > 0:
             prev_name = self.SECTIONS[idx - 1][1]
             self._nav_prev_btn.setText(prev_name)
+            self._fit_button_to_text(self._nav_prev_btn)
             self._nav_prev_btn.setVisible(True)
         else:
             self._nav_prev_btn.setVisible(False)
         if idx < total - 1:
             next_name = self.SECTIONS[idx + 1][1]
             self._nav_next_btn.setText(f"Siguiente: {next_name}")
+            self._fit_button_to_text(self._nav_next_btn)
             self._nav_next_btn.setVisible(True)
         else:
             self._nav_next_btn.setVisible(False)
@@ -730,6 +744,29 @@ QListWidget::item:selected:!active {{
             except Exception:
                 pass
             thread.wait(3000)
+
+    def deleteLater(self) -> None:  # type: ignore[override]
+        """Limpia efectos/animaciones Qt antes de destruir ventanas offscreen."""
+        try:
+            self.close()
+        except Exception:
+            pass
+        for anim in list(getattr(self, "_slide_animations", [])):
+            try:
+                anim.stop()
+            except Exception:
+                pass
+        self._slide_animations.clear()
+        for child in self.findChildren(QWidget):
+            try:
+                child.setGraphicsEffect(None)
+            except Exception:
+                pass
+        try:
+            self.setGraphicsEffect(None)
+        except Exception:
+            pass
+        super().deleteLater()
 
 
 # ──────────────────────────────────────────────────────────────

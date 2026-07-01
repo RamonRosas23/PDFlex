@@ -359,6 +359,25 @@ def set_button_icon(
         button.setText("")
 
 
+def set_compact_icon_button(
+    button: QPushButton,
+    name: str,
+    tooltip: str,
+    *,
+    color: str = DEFAULT_ICON_COLOR,
+    size: int = 16,
+    width: int = 32,
+    height: int = 30,
+) -> None:
+    """Convierte un QPushButton en accion compacta de solo icono."""
+    button.setProperty("class", "IconBtn")
+    button.setToolTip(tooltip)
+    button.setAccessibleName(tooltip)
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.setFixedSize(width, height)
+    set_button_icon(button, name, color=color, size=size, icon_only=True)
+
+
 def make_icon_label(
     name: str,
     *,

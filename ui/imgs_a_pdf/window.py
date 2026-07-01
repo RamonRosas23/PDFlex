@@ -892,6 +892,8 @@ class ImgsAPdfWindow(PipelineWindow):
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         inner = QWidget()
+        inner.setMinimumWidth(0)
+        inner.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         inner_layout = QVBoxLayout(inner)
         inner_layout.setSpacing(16)
         inner_layout.setContentsMargins(0, 0, 0, 0)
@@ -950,8 +952,9 @@ class ImgsAPdfWindow(PipelineWindow):
         orient_row.addStretch()
         sl.addLayout(orient_row)
 
-        self._autorotate_chk = QCheckBox(
-            "Rotar página automáticamente según la orientación de la imagen"
+        self._autorotate_chk = QCheckBox("Rotar página automáticamente")
+        self._autorotate_chk.setToolTip(
+            "Ajustar la orientación de la página según la orientación de la imagen"
         )
         self._autorotate_chk.setChecked(True)
         sl.addWidget(self._autorotate_chk)

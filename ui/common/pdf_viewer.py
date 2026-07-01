@@ -34,7 +34,7 @@ from ui.common.result_ui import (
     format_file_size,
     make_result_list_item,
 )
-from ui.common.icons import icon, set_button_icon
+from ui.common.icons import icon, set_button_icon, set_compact_icon_button
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog
 
 
@@ -131,45 +131,42 @@ class GenericPdfViewer(QWidget):
         self.title_label.setProperty("class", "CardTitle")
         title_row.addWidget(self.title_label, 1)
 
-        self.open_file_btn = QPushButton("Abrir PDF")
-        self.open_file_btn.setProperty("class", "Ghost")
-        set_button_icon(self.open_file_btn, "external-link")
+        self.open_file_btn = QPushButton()
+        set_compact_icon_button(self.open_file_btn, "external-link", "Abrir PDF")
         self.open_file_btn.clicked.connect(self._on_open_file)
         self.open_file_btn.setEnabled(False)
         title_row.addWidget(self.open_file_btn)
 
-        self.copy_file_btn = QPushButton("Copiar PDF")
-        self.copy_file_btn.setProperty("class", "Ghost")
-        set_button_icon(self.copy_file_btn, "copy")
+        self.copy_file_btn = QPushButton()
+        set_compact_icon_button(self.copy_file_btn, "copy", "Copiar PDF")
         self.copy_file_btn.clicked.connect(self._on_copy_file)
         self.copy_file_btn.setEnabled(False)
         title_row.addWidget(self.copy_file_btn)
 
-        self.fullview_btn = QPushButton("Vista completa")
-        self.fullview_btn.setProperty("class", "Ghost")
-        set_button_icon(self.fullview_btn, "maximize")
-        self.fullview_btn.setToolTip("Abrir en vista completa (modal inmersivo)")
+        self.fullview_btn = QPushButton()
+        set_compact_icon_button(
+            self.fullview_btn,
+            "maximize",
+            "Abrir en vista completa",
+        )
         self.fullview_btn.clicked.connect(self._on_fullview)
         self.fullview_btn.setEnabled(False)
         title_row.addWidget(self.fullview_btn)
 
-        self.open_btn = QPushButton("Abrir carpeta")
-        self.open_btn.setProperty("class", "Ghost")
-        set_button_icon(self.open_btn, "folder-open")
+        self.open_btn = QPushButton()
+        set_compact_icon_button(self.open_btn, "folder-open", "Abrir carpeta")
         self.open_btn.clicked.connect(self._on_open_in_explorer)
         self.open_btn.setEnabled(False)
         title_row.addWidget(self.open_btn)
 
-        self.save_as_btn = QPushButton("Guardar como")
-        self.save_as_btn.setProperty("class", "Ghost")
-        set_button_icon(self.save_as_btn, "save")
+        self.save_as_btn = QPushButton()
+        set_compact_icon_button(self.save_as_btn, "save", "Guardar como")
         self.save_as_btn.clicked.connect(self._on_save_as)
         self.save_as_btn.setEnabled(False)
         title_row.addWidget(self.save_as_btn)
 
-        self.save_all_btn = QPushButton("Guardar todo")
-        self.save_all_btn.setProperty("class", "Ghost")
-        set_button_icon(self.save_all_btn, "download")
+        self.save_all_btn = QPushButton()
+        set_compact_icon_button(self.save_all_btn, "download", "Guardar todo")
         self.save_all_btn.clicked.connect(self._on_save_all)
         self.save_all_btn.setEnabled(False)
         title_row.addWidget(self.save_all_btn)

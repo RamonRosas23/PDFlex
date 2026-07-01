@@ -106,9 +106,10 @@ class FileWorkspace(QFrame):
         self._add_selected_btn.clicked.connect(self._add_selected_to_work)
         primary_row.addWidget(self._add_selected_btn, 1)
 
-        self._replace_work_btn = QPushButton("Reemplazar")
+        self._replace_work_btn = QPushButton("Cambiar")
         self._replace_work_btn.setProperty("class", "Ghost")
         self._replace_work_btn.setFixedHeight(30)
+        self._replace_work_btn.setToolTip("Reemplazar el lote de trabajo con la selección")
         set_button_icon(self._replace_work_btn, "refresh-cw", size=14)
         self._replace_work_btn.clicked.connect(self._replace_work_with_selected)
         primary_row.addWidget(self._replace_work_btn, 1)

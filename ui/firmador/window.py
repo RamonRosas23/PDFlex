@@ -1259,8 +1259,9 @@ class FirmadorWindow(PipelineWindow):
         input_row.addWidget(self._range_edit, 1)
         editor_layout.addLayout(input_row)
 
-        quick_row = QHBoxLayout()
-        quick_row.setSpacing(8)
+        quick_row = QGridLayout()
+        quick_row.setHorizontalSpacing(8)
+        quick_row.setVerticalSpacing(8)
         quick_specs = [
             ("Todas", "todo"),
             ("Primera", "1"),
@@ -1269,13 +1270,15 @@ class FirmadorWindow(PipelineWindow):
             ("Impares", "impares"),
         ]
         self._interval_quick_buttons = []
-        for label, value in quick_specs:
+        for i, (label, value) in enumerate(quick_specs):
             btn = QPushButton(label)
             btn.setProperty("class", "Ghost")
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(lambda _, v=value: self._set_current_interval_text(v))
-            quick_row.addWidget(btn)
+            quick_row.addWidget(btn, i // 3, i % 3)
             self._interval_quick_buttons.append(btn)
-        quick_row.addStretch()
+        for col in range(3):
+            quick_row.setColumnStretch(col, 1)
         editor_layout.addLayout(quick_row)
 
         self._range_status_lbl = QLabel("")
@@ -1554,25 +1557,27 @@ class FirmadorWindow(PipelineWindow):
         self._review_delete_btn.setProperty("class", "Ghost")
         set_button_icon(self._review_delete_btn, "trash-2", color="#E5484D")
         self._review_delete_btn.clicked.connect(self._on_review_delete_selected)
-        action_grid.addWidget(self._review_delete_btn, 0, 0)
+        action_grid.addWidget(self._review_delete_btn, 0, 0, 1, 2)
 
         self._review_restore_btn = QPushButton("Restaurar")
         self._review_restore_btn.setProperty("class", "Ghost")
         set_button_icon(self._review_restore_btn, "rotate-ccw")
         self._review_restore_btn.clicked.connect(self._on_review_restore_selected)
-        action_grid.addWidget(self._review_restore_btn, 0, 1)
+        action_grid.addWidget(self._review_restore_btn, 1, 0, 1, 2)
 
-        self._review_reset_btn = QPushButton("Auto original")
+        self._review_reset_btn = QPushButton("Auto")
         self._review_reset_btn.setProperty("class", "Ghost")
+        self._review_reset_btn.setToolTip("Restaurar posición automática original")
         set_button_icon(self._review_reset_btn, "rotate-ccw")
         self._review_reset_btn.clicked.connect(self._on_review_reset_selected)
-        action_grid.addWidget(self._review_reset_btn, 1, 0)
+        action_grid.addWidget(self._review_reset_btn, 2, 0, 1, 2)
 
-        self._review_reset_page_btn = QPushButton("Reset pág.")
+        self._review_reset_page_btn = QPushButton("Página")
         self._review_reset_page_btn.setProperty("class", "Ghost")
+        self._review_reset_page_btn.setToolTip("Restaurar firmas de la página actual")
         set_button_icon(self._review_reset_page_btn, "refresh-cw")
         self._review_reset_page_btn.clicked.connect(self._on_review_reset_page)
-        action_grid.addWidget(self._review_reset_page_btn, 1, 1)
+        action_grid.addWidget(self._review_reset_page_btn, 3, 0, 1, 2)
         right_l.addLayout(action_grid)
 
         self._review_progress = QProgressBar()

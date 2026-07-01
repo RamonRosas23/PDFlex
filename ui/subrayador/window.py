@@ -52,7 +52,7 @@ from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.dialogs import show_error, show_success, show_warning
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
-from ui.common.icons import set_button_icon
+from ui.common.icons import set_button_icon, set_compact_icon_button
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
@@ -678,16 +678,15 @@ class SubrayadorWindow(PipelineWindow):
         cl.addWidget(self._page_lbl)
 
         nav_row = QHBoxLayout()
-        self._prev_page_btn = QPushButton("Anterior")
-        self._prev_page_btn.setProperty("class", "Ghost")
-        set_button_icon(self._prev_page_btn, "chevron-left")
+        self._prev_page_btn = QPushButton()
+        set_compact_icon_button(self._prev_page_btn, "chevron-left", "Página anterior")
         self._prev_page_btn.clicked.connect(self._previous_page)
         nav_row.addWidget(self._prev_page_btn)
-        self._next_page_btn = QPushButton("Siguiente")
-        self._next_page_btn.setProperty("class", "Ghost")
-        set_button_icon(self._next_page_btn, "chevron-right")
+        self._next_page_btn = QPushButton()
+        set_compact_icon_button(self._next_page_btn, "chevron-right", "Página siguiente")
         self._next_page_btn.clicked.connect(self._next_page)
         nav_row.addWidget(self._next_page_btn)
+        nav_row.addStretch(1)
         cl.addLayout(nav_row)
 
         self._mark_count_lbl = QLabel("0 trazos")
@@ -752,18 +751,16 @@ class SubrayadorWindow(PipelineWindow):
         seed_row.addWidget(self._seed_spin)
         cl.addLayout(seed_row)
 
-        actions_row = QHBoxLayout()
         self._undo_btn = QPushButton("Deshacer")
         self._undo_btn.setProperty("class", "Ghost")
         set_button_icon(self._undo_btn, "arrow-left")
         self._undo_btn.clicked.connect(self._undo_page)
-        actions_row.addWidget(self._undo_btn)
-        self._clear_page_btn = QPushButton("Limpiar pagina")
+        cl.addWidget(self._undo_btn)
+        self._clear_page_btn = QPushButton("Limpiar página")
         self._clear_page_btn.setProperty("class", "Ghost")
         set_button_icon(self._clear_page_btn, "eraser")
         self._clear_page_btn.clicked.connect(self._clear_page)
-        actions_row.addWidget(self._clear_page_btn)
-        cl.addLayout(actions_row)
+        cl.addWidget(self._clear_page_btn)
 
         self._clear_all_btn = QPushButton("Limpiar todo")
         self._clear_all_btn.setProperty("class", "Danger")
@@ -784,10 +781,12 @@ class SubrayadorWindow(PipelineWindow):
         self._draw_mode_btn.setCheckable(True)
         self._draw_mode_btn.setProperty("class", "Ghost")
         set_button_icon(self._draw_mode_btn, "tool-subrayador")
+        self._draw_mode_btn.setMinimumWidth(164)
         self._pan_mode_btn = QPushButton("Mover")
         self._pan_mode_btn.setCheckable(True)
         self._pan_mode_btn.setProperty("class", "Ghost")
         set_button_icon(self._pan_mode_btn, "arrow-up-down")
+        self._pan_mode_btn.setMinimumWidth(124)
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
         self._mode_group.addButton(self._draw_mode_btn)

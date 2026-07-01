@@ -19,6 +19,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QScrollArea, QListWidget, QListWidgetItem,
     QComboBox, QLineEdit, QCheckBox,
+    QSizePolicy, QGridLayout,
 )
 
 from core.margin_detector import MembreteMargins, detect_margins
@@ -593,7 +594,15 @@ class MembretadoWindow(PipelineWindow):
                               "letter-spacing: 0.6px; text-transform: uppercase; "
                               "background: transparent;")
             lbl.setToolTip(tooltip)
-            s = SliderWithValue(0.0, 250.0, default, step=1.0, suffix="pt", decimals=0)
+            s = SliderWithValue(
+                0.0,
+                250.0,
+                default,
+                step=1.0,
+                suffix="pt",
+                decimals=0,
+                spin_width=112,
+            )
             row_l.addWidget(lbl)
             row_l.addWidget(s)
             ll.addWidget(row_w)
@@ -612,8 +621,9 @@ class MembretadoWindow(PipelineWindow):
         self._s_right = _row_slider("Derecho",   "Margen lateral derecho", 18.0)
 
         ll.addSpacing(4)
-        reset_btn = QPushButton("Restablecer detección automática")
+        reset_btn = QPushButton("Autodetectar")
         reset_btn.setProperty("class", "Ghost")
+        reset_btn.setToolTip("Restablecer detección automática de márgenes")
         set_button_icon(reset_btn, "refresh-cw")
         reset_btn.clicked.connect(self._on_reset_margins)
         ll.addWidget(reset_btn)
@@ -624,6 +634,8 @@ class MembretadoWindow(PipelineWindow):
             s.valueChanged.connect(self._on_margin_slider_changed)
 
         left_scroll = QScrollArea()
+        ctrl_card.setMinimumWidth(0)
+        ctrl_card.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_scroll.setWidget(ctrl_card)
         left_scroll.setWidgetResizable(True)
         left_scroll.setFixedWidth(360)
@@ -683,20 +695,23 @@ class MembretadoWindow(PipelineWindow):
         self._global_pages_edit.textChanged.connect(self._on_global_scope_changed)
         gl.addWidget(self._global_pages_edit)
 
-        quick_row = QHBoxLayout()
-        quick_row.setSpacing(8)
-        for label, value in (
+        quick_row = QGridLayout()
+        quick_row.setHorizontalSpacing(8)
+        quick_row.setVerticalSpacing(8)
+        for i, (label, value) in enumerate((
             ("Primera", "1"),
             ("Última", "final"),
             ("Todo", "1-final"),
             ("Pares", "pares"),
             ("Impares", "impares"),
-        ):
+        )):
             btn = QPushButton(label)
             btn.setProperty("class", "Ghost")
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(lambda _, v=value: self._set_scope_text(self._global_pages_edit, v))
-            quick_row.addWidget(btn)
-        quick_row.addStretch()
+            quick_row.addWidget(btn, i // 3, i % 3)
+        for col in range(3):
+            quick_row.setColumnStretch(col, 1)
         gl.addLayout(quick_row)
 
         self._preserve_unselected_chk = QCheckBox("Conservar páginas sin membretar")
@@ -759,22 +774,25 @@ class MembretadoWindow(PipelineWindow):
         self._doc_pages_edit.textChanged.connect(self._on_doc_scope_changed)
         ed.addWidget(self._doc_pages_edit)
 
-        doc_quick = QHBoxLayout()
-        doc_quick.setSpacing(8)
+        doc_quick = QGridLayout()
+        doc_quick.setHorizontalSpacing(8)
+        doc_quick.setVerticalSpacing(8)
         self._doc_scope_quick_buttons = []
-        for label, value in (
+        for i, (label, value) in enumerate((
             ("Primera", "1"),
             ("Última", "final"),
             ("Todo", "1-final"),
             ("Pares", "pares"),
             ("Impares", "impares"),
-        ):
+        )):
             btn = QPushButton(label)
             btn.setProperty("class", "Ghost")
+            btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             btn.clicked.connect(lambda _, v=value: self._set_scope_text(self._doc_pages_edit, v))
-            doc_quick.addWidget(btn)
+            doc_quick.addWidget(btn, i // 3, i % 3)
             self._doc_scope_quick_buttons.append(btn)
-        doc_quick.addStretch()
+        for col in range(3):
+            doc_quick.setColumnStretch(col, 1)
         ed.addLayout(doc_quick)
 
         self._doc_scope_status_lbl = QLabel("")

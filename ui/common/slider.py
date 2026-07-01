@@ -16,6 +16,7 @@ class SliderWithValue(QWidget):
         step: float = 0.1,
         suffix: str = "",
         decimals: int = 1,
+        spin_width: int | None = None,
     ):
         super().__init__()
         self._min = minimum
@@ -41,7 +42,7 @@ class SliderWithValue(QWidget):
         if suffix:
             self.spin.setSuffix(f" {suffix}")
         self.spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
-        self.spin.setFixedWidth(150 if suffix else 112)
+        self.spin.setFixedWidth(spin_width or (124 if suffix else 112))
         self.spin.valueChanged.connect(self._on_spin)
         self.spin.setAlignment(Qt.AlignmentFlag.AlignRight)
 

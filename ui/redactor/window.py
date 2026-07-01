@@ -38,7 +38,7 @@ from shell.context import ShellContext
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.dialogs import show_error, show_success, show_warning
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
-from ui.common.icons import set_button_icon
+from ui.common.icons import set_button_icon, set_compact_icon_button
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.process_step import ProcessStep
@@ -438,16 +438,15 @@ class RedactorWindow(PipelineWindow):
         cl.addWidget(self._page_lbl)
 
         nav_row = QHBoxLayout()
-        self._prev_page_btn = QPushButton("Anterior")
-        self._prev_page_btn.setProperty("class", "Ghost")
-        set_button_icon(self._prev_page_btn, "chevron-left")
+        self._prev_page_btn = QPushButton()
+        set_compact_icon_button(self._prev_page_btn, "chevron-left", "Página anterior")
         self._prev_page_btn.clicked.connect(self._previous_page)
         nav_row.addWidget(self._prev_page_btn)
-        self._next_page_btn = QPushButton("Siguiente")
-        self._next_page_btn.setProperty("class", "Ghost")
-        set_button_icon(self._next_page_btn, "chevron-right")
+        self._next_page_btn = QPushButton()
+        set_compact_icon_button(self._next_page_btn, "chevron-right", "Página siguiente")
         self._next_page_btn.clicked.connect(self._next_page)
         nav_row.addWidget(self._next_page_btn)
+        nav_row.addStretch(1)
         cl.addLayout(nav_row)
 
         self._rect_count_lbl = QLabel("0 zonas")
@@ -460,7 +459,7 @@ class RedactorWindow(PipelineWindow):
         self._undo_btn.clicked.connect(self._undo_page)
         cl.addWidget(self._undo_btn)
 
-        self._clear_page_btn = QPushButton("Limpiar pagina")
+        self._clear_page_btn = QPushButton("Limpiar página")
         self._clear_page_btn.setProperty("class", "Ghost")
         set_button_icon(self._clear_page_btn, "eraser")
         self._clear_page_btn.clicked.connect(self._clear_page)

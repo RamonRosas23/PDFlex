@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QFrame, QComboBox, QCheckBox,
     QLineEdit, QScrollArea, QSpinBox, QGridLayout, QListWidget, QListWidgetItem,
+    QSizePolicy,
 )
 
 from core.folio_format import FolioConfig, render, validate_pattern, preview_examples
@@ -340,14 +341,15 @@ class FoleadorWindow(PipelineWindow):
         zl.addLayout(page_nav)
 
         zoom_row = QHBoxLayout()
-        for label, fn, icon_name in [
-            ("", lambda: self._pos_preview.zoom_out(), "minus"),
-            ("", lambda: self._pos_preview.zoom_in(), "plus"),
-            ("Ajustar", lambda: self._pos_preview.fit_to_view(), "maximize"),
+        for tooltip, fn, icon_name in [
+            ("Reducir zoom", lambda: self._pos_preview.zoom_out(), "minus"),
+            ("Aumentar zoom", lambda: self._pos_preview.zoom_in(), "plus"),
+            ("Ajustar a la vista", lambda: self._pos_preview.fit_to_view(), "maximize"),
         ]:
-            btn = QPushButton(label)
+            btn = QPushButton()
             btn.setProperty("class", "IconBtn")
-            set_button_icon(btn, icon_name, size=14, icon_only=not label)
+            btn.setToolTip(tooltip)
+            set_button_icon(btn, icon_name, size=14, icon_only=True)
             btn.clicked.connect(fn)
             zoom_row.addWidget(btn)
         zl.addLayout(zoom_row)
@@ -363,6 +365,8 @@ class FoleadorWindow(PipelineWindow):
 
         left_w = QWidget()
         left_w.setLayout(left_col)
+        left_w.setMinimumWidth(0)
+        left_w.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_scroll = QScrollArea()
         left_scroll.setObjectName("LeftPanelScroll")
         left_scroll.setWidget(left_w)

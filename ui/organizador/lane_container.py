@@ -59,6 +59,8 @@ class LaneContainer(QWidget):
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._container = QWidget()
+        self._container.setMinimumWidth(0)
+        self._container.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._container_layout = QVBoxLayout(self._container)
         self._container_layout.setContentsMargins(0, 0, 0, 0)
         self._container_layout.setSpacing(8)
@@ -80,17 +82,21 @@ class LaneContainer(QWidget):
         h.setContentsMargins(8, 8, 8, 8)
         h.setSpacing(8)
 
-        blank_btn = QPushButton("＋ Nuevo documento vacío")
+        blank_btn = QPushButton("Documento vacío")
         blank_btn.setProperty("class", "Ghost")
+        blank_btn.setToolTip("Crear un documento vacío")
+        blank_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         set_button_icon(blank_btn, "plus", size=13)
         blank_btn.clicked.connect(self._on_add_blank)
-        h.addWidget(blank_btn)
+        h.addWidget(blank_btn, 1)
 
-        pdf_btn = QPushButton("＋ Agregar archivos")
+        pdf_btn = QPushButton("Agregar archivos")
         pdf_btn.setProperty("class", "Primary")
+        pdf_btn.setToolTip("Agregar PDF, Word o imágenes")
+        pdf_btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         set_button_icon(pdf_btn, "plus", size=13)
         pdf_btn.clicked.connect(self._on_add_pdfs)
-        h.addWidget(pdf_btn)
+        h.addWidget(pdf_btn, 1)
         h.addStretch()
         return bar
 

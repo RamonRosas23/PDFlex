@@ -80,9 +80,10 @@ class TrayInputPanel(QFrame):
         self._add_btn.clicked.connect(self._emit_add)
         primary_row.addWidget(self._add_btn, 1)
 
-        self._replace_btn = QPushButton("Reemplazar")
+        self._replace_btn = QPushButton("Cambiar")
         self._replace_btn.setProperty("class", "Ghost")
         self._replace_btn.setFixedHeight(30)
+        self._replace_btn.setToolTip("Reemplazar el lote de trabajo con la selección")
         set_button_icon(self._replace_btn, "refresh-cw", size=14)
         self._replace_btn.clicked.connect(self._emit_replace)
         primary_row.addWidget(self._replace_btn, 1)

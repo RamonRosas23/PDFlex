@@ -165,6 +165,11 @@ class AnimationHelper:
     @staticmethod
     def apply_glow(widget: QWidget, accent: str, blur: int = 18, alpha: int = 80) -> None:
         """Aplica QGraphicsDropShadowEffect de acento a un widget."""
+        from PyQt6.QtWidgets import QApplication
+        app = QApplication.instance()
+        if app is not None and app.platformName().lower() == "offscreen":
+            widget.setGraphicsEffect(None)
+            return
         r, g, b = _hex_to_rgb(accent)
         effect = QGraphicsDropShadowEffect(widget)
         effect.setBlurRadius(blur)

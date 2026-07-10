@@ -12,9 +12,7 @@ from PySide6.QtWidgets import (
     QComboBox, QGridLayout, QLineEdit, QSlider, QSpinBox,
 )
 
-import fitz
-from PIL import Image
-
+from core.pdf_backend import PdfRenderDocument, extract_pages, pdf_page_count
 from core.output_naming import unique_output_path_for_source
 from core.output_paths import make_run_dir
 from core.media_conversion import (
@@ -42,6 +40,7 @@ from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
+from ui.common.pdf_render_utils import rendered_page_to_qimage
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
@@ -71,18 +70,12 @@ class WatermarkPreviewWorker(QObject):
         try:
             sample_source = self._preview_dir / "preview_source.pdf"
             sample_output = self._preview_dir / "preview_sellado.pdf"
-            src = fitz.open(self._source_path)
-            try:
-                pages = parse_page_selection(
-                    self._options.page_scope, self._options.custom_pages, src.page_count
-                )
-                page_index = pages[0] if pages else 0
-                sample_doc = fitz.open()
-                sample_doc.insert_pdf(src, from_page=page_index, to_page=page_index)
-                sample_doc.save(sample_source)
-                sample_doc.close()
-            finally:
-                src.close()
+            page_count = pdf_page_count(self._source_path)
+            pages = parse_page_selection(
+                self._options.page_scope, self._options.custom_pages, page_count
+            )
+            page_index = pages[0] if pages else 0
+            extract_pages(self._source_path, [page_index], sample_source)
             preview_options = replace(self._options, page_scope="all", custom_pages="")
             result = WatermarkEngine().run_job(
                 WatermarkJob(str(sample_source), str(sample_output), preview_options)
@@ -90,12 +83,11 @@ class WatermarkPreviewWorker(QObject):
             if not result.success:
                 self.failed.emit(result.error or "No se pudo generar el preview.")
                 return
-            doc = fitz.open(result.output_path)
-            try:
-                qimage = _render_preview_qimage(doc[0], self._target_w, self._target_h)
+            with PdfRenderDocument(result.output_path) as document:
+                qimage = _render_preview_qimage(
+                    document, 0, self._target_w, self._target_h
+                )
                 self.ready.emit(qimage)
-            finally:
-                doc.close()
         except Exception as exc:
             self.failed.emit(str(exc))
 
@@ -422,9 +414,7 @@ class MarcaAguaWindow(PipelineWindow):
         for p in paths:
             if p not in self._pdf_page_cache:
                 try:
-                    doc = fitz.open(p)
-                    self._pdf_page_cache[p] = doc.page_count
-                    doc.close()
+                    self._pdf_page_cache[p] = pdf_page_count(p)
                 except Exception:
                     self._pdf_page_cache[p] = 0
         self._mark_preview_stale()
@@ -853,20 +843,31 @@ class MarcaAguaWindow(PipelineWindow):
         event.acceptProposedAction()
 
 
-def _render_preview_qimage(page: fitz.Page, target_width: int, target_height: int) -> QImage:
+def _render_preview_qimage(
+    document: PdfRenderDocument,
+    page_index: int,
+    target_width: int,
+    target_height: int,
+) -> QImage:
     """Renderiza página como QImage — thread-safe, sin QPixmap."""
-    page_long = max(1.0, page.rect.width, page.rect.height)
+    info = document.page_info(page_index)
+    page_long = max(1.0, info.width_pt, info.height_pt)
     target_long = max(180, min(520, max(target_width - 24, target_height)))
     dpi = max(24.0, min(130.0, target_long * 72.0 / page_long))
-    pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
-    image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
-    data = image.tobytes("raw", "RGBA")
-    qimage = QImage(data, image.width, image.height, QImage.Format.Format_RGBA8888)
-    return qimage.copy()
+    return rendered_page_to_qimage(
+        document.render_page(page_index, scale=dpi / 72.0)
+    ).convertToFormat(QImage.Format.Format_RGBA8888)
 
 
-def _render_preview_page(page: fitz.Page, target_width: int, target_height: int) -> QPixmap:
-    qimage = _render_preview_qimage(page, target_width, target_height)
+def _render_preview_page(
+    document: PdfRenderDocument,
+    page_index: int,
+    target_width: int,
+    target_height: int,
+) -> QPixmap:
+    qimage = _render_preview_qimage(
+        document, page_index, target_width, target_height
+    )
     qpix = QPixmap.fromImage(qimage)
     return qpix.scaled(
         max(120, target_width - 24),

@@ -4,8 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
-from PIL import Image
 from PySide6.QtCore import QObject, QPointF, QRectF, QThread, QUrl, Qt, Signal
 from PySide6.QtGui import (
     QBrush,
@@ -27,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from core.output_naming import unique_output_path_for_source
 from core.output_paths import make_run_dir
+from core.pdf_backend import PdfRenderDocument
 from core.redaction_engine import (
     RedactionEngine,
     RedactionJob,
@@ -41,6 +40,7 @@ from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.icons import set_button_icon, set_compact_icon_button
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.pdf_viewer import GenericPdfViewer
+from ui.common.pdf_render_utils import rendered_page_to_qimage
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
@@ -86,25 +86,17 @@ class PageRenderWorker(QObject):
 
     def run(self) -> None:
         try:
-            doc = fitz.open(self._path)
-            try:
-                if self._page_index >= doc.page_count:
+            with PdfRenderDocument(self._path) as document:
+                if self._page_index >= document.page_count:
                     self.ready.emit(None, self._guard)
                     return
-                page = doc[self._page_index]
-                page_long = max(1.0, page.rect.width, page.rect.height)
+                info = document.page_info(self._page_index)
+                page_long = max(1.0, info.width_pt, info.height_pt)
                 dpi = max(36.0, min(140.0, 1400.0 * 72.0 / page_long))
-                pix = page.get_pixmap(
-                    matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False
-                )
-                image = Image.frombytes(
-                    "RGB", (pix.width, pix.height), pix.samples
-                ).convert("RGBA")
-                data = image.tobytes("raw", "RGBA")
-                qimage = QImage(data, image.width, image.height, QImage.Format.Format_RGBA8888)
-                self.ready.emit(qimage.copy(), self._guard)
-            finally:
-                doc.close()
+                qimage = rendered_page_to_qimage(
+                    document.render_page(self._page_index, scale=dpi / 72.0)
+                ).convertToFormat(QImage.Format.Format_RGBA8888)
+                self.ready.emit(qimage, self._guard)
         except Exception:
             self.ready.emit(None, self._guard)
 
@@ -115,7 +107,7 @@ class RedactionCanvas(QWidget):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self._doc: fitz.Document | None = None
+        self._doc: PdfRenderDocument | None = None
         self._path = ""
         self._page_index = 0
         self._pixmap = QPixmap()
@@ -135,7 +127,7 @@ class RedactionCanvas(QWidget):
     def load_pdf(self, path: str) -> None:
         self.close_doc()
         self._path = path
-        self._doc = fitz.open(path)
+        self._doc = PdfRenderDocument(path)
         self._page_index = 0
         self._rects = {}
         self._render_current()

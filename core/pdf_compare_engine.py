@@ -2,14 +2,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from io import BytesIO
+import os
 from pathlib import Path
 from typing import Callable, List
 import difflib
 import re
+import uuid
 
-import fitz
 from PIL import Image, ImageChops
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen.canvas import Canvas
+
+from core.pdf_backend import PdfRenderDocument
 
 
 @dataclass(frozen=True)
@@ -124,49 +129,57 @@ class PdfCompareEngine:
         if not compare_path.exists():
             return PdfCompareResult(job=job, success=False, error="El PDF a comparar no existe.")
 
-        base_doc: fitz.Document | None = None
-        compare_doc: fitz.Document | None = None
-        try:
-            base_doc = fitz.open(str(base_path))
-            compare_doc = fitz.open(str(compare_path))
-            _validate_doc(base_doc, "base")
-            _validate_doc(compare_doc, "a comparar")
-
-            total_pages = max(base_doc.page_count, compare_doc.page_count)
-            page_results: list[PdfComparePageResult] = []
-            for page_index in range(total_pages):
-                if should_cancel and should_cancel():
-                    break
-                page_results.append(self._compare_page(base_doc, compare_doc, page_index, job.options))
-
-            result = PdfCompareResult(
+        if output.resolve() in {base_path.resolve(), compare_path.resolve()}:
+            return PdfCompareResult(
                 job=job,
-                output_path=str(output),
-                success=True,
-                total_pages=total_pages,
-                changed_pages=sum(1 for item in page_results if item.changed),
-                visual_changed_pages=sum(1 for item in page_results if item.visual_changed or item.size_changed),
-                text_changed_pages=sum(1 for item in page_results if item.text_changed),
-                added_pages=sum(1 for item in page_results if item.compare_exists and not item.base_exists),
-                removed_pages=sum(1 for item in page_results if item.base_exists and not item.compare_exists),
-                page_results=page_results,
+                success=False,
+                error="La salida no puede sobrescribir uno de los PDFs comparados.",
             )
-            self._write_report(base_doc, compare_doc, result)
-            return result
+
+        try:
+            with (
+                PdfRenderDocument(base_path) as base_doc,
+                PdfRenderDocument(compare_path) as compare_doc,
+            ):
+                _validate_doc(base_doc, "base")
+                _validate_doc(compare_doc, "a comparar")
+
+                total_pages = max(base_doc.page_count, compare_doc.page_count)
+                page_results: list[PdfComparePageResult] = []
+                for page_index in range(total_pages):
+                    if should_cancel and should_cancel():
+                        break
+                    page_results.append(
+                        self._compare_page(base_doc, compare_doc, page_index, job.options)
+                    )
+
+                result = PdfCompareResult(
+                    job=job,
+                    output_path=str(output),
+                    success=True,
+                    total_pages=total_pages,
+                    changed_pages=sum(1 for item in page_results if item.changed),
+                    visual_changed_pages=sum(
+                        1 for item in page_results if item.visual_changed or item.size_changed
+                    ),
+                    text_changed_pages=sum(1 for item in page_results if item.text_changed),
+                    added_pages=sum(
+                        1 for item in page_results if item.compare_exists and not item.base_exists
+                    ),
+                    removed_pages=sum(
+                        1 for item in page_results if item.base_exists and not item.compare_exists
+                    ),
+                    page_results=page_results,
+                )
+                self._write_report(base_doc, compare_doc, result)
+                return result
         except Exception as exc:
             return PdfCompareResult(job=job, success=False, error=str(exc))
-        finally:
-            for doc in (base_doc, compare_doc):
-                if doc is not None:
-                    try:
-                        doc.close()
-                    except Exception:
-                        pass
 
     def _compare_page(
         self,
-        base_doc: fitz.Document,
-        compare_doc: fitz.Document,
+        base_doc: PdfRenderDocument,
+        compare_doc: PdfRenderDocument,
         page_index: int,
         options: PdfCompareOptions,
     ) -> PdfComparePageResult:
@@ -190,11 +203,9 @@ class PdfCompareEngine:
             and _normalize_text(base_text) != _normalize_text(compare_text)
         )
 
-        base_page = base_doc[page_index]
-        compare_page = compare_doc[page_index]
-        size_changed = _page_size_changed(base_page, compare_page)
-        base_image = _render_page_image(base_page, options.dpi)
-        compare_image = _render_page_image(compare_page, options.dpi)
+        size_changed = _page_size_changed(base_doc, compare_doc, page_index)
+        base_image = _render_page_image(base_doc, page_index, options.dpi)
+        compare_image = _render_page_image(compare_doc, page_index, options.dpi)
         ratio = _difference_ratio(base_image, compare_image, options.pixel_threshold)
         visual_changed = ratio >= options.min_change_ratio
 
@@ -211,34 +222,43 @@ class PdfCompareEngine:
 
     def _write_report(
         self,
-        base_doc: fitz.Document,
-        compare_doc: fitz.Document,
+        base_doc: PdfRenderDocument,
+        compare_doc: PdfRenderDocument,
         result: PdfCompareResult,
     ) -> None:
         output = Path(result.output_path)
-        report = fitz.open()
+        temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
+        detail_pages = [
+            item for item in result.page_results
+            if item.changed or result.job.options.include_equal_pages
+        ]
         try:
+            report = Canvas(str(temporary), pagesize=(595, 842), pageCompression=1)
             self._add_summary_page(report, result)
-            detail_pages = [
-                item for item in result.page_results
-                if item.changed or result.job.options.include_equal_pages
-            ]
+            report.showPage()
             for page_result in detail_pages:
                 self._add_detail_page(report, base_doc, compare_doc, result, page_result)
-            report.save(
-                str(output),
-                garbage=4,
-                clean=True,
-                deflate=True,
-                deflate_images=True,
-                deflate_fonts=True,
-                use_objstms=1,
-            )
-        finally:
-            report.close()
+                report.showPage()
+            report.save()
 
-    def _add_summary_page(self, report: fitz.Document, result: PdfCompareResult) -> None:
-        page = report.new_page(width=595, height=842)
+            expected_pages = 1 + len(detail_pages)
+            with PdfRenderDocument(temporary) as verification:
+                if verification.page_count != expected_pages:
+                    raise RuntimeError(
+                        f"El reporte contiene {verification.page_count} páginas; "
+                        f"se esperaban {expected_pages}."
+                    )
+                for index in range(expected_pages):
+                    verification.render_page(index, scale=0.2)
+            os.replace(temporary, output)
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _add_summary_page(self, page: Canvas, result: PdfCompareResult) -> None:
+        _prepare_page(page, 595, 842)
         _draw_title(page, "Reporte de comparacion PDF", 36, 52, size=20)
         lines = [
             f"PDF base: {Path(result.job.base_pdf).name}",
@@ -253,7 +273,7 @@ class PdfCompareEngine:
         ]
         if result.changed_pages == 0:
             lines.append("Sin diferencias detectadas con la sensibilidad actual.")
-        _insert_textbox(page, fitz.Rect(36, 82, 559, 240), "\n".join(lines), fontsize=10.5)
+        _insert_textbox(page, (36, 82, 559, 240), "\n".join(lines), fontsize=10.5)
 
         y = 272
         _draw_title(page, "Resumen por pagina", 36, y, size=13)
@@ -267,38 +287,38 @@ class PdfCompareEngine:
 
     def _add_detail_page(
         self,
-        report: fitz.Document,
-        base_doc: fitz.Document,
-        compare_doc: fitz.Document,
+        page: Canvas,
+        base_doc: PdfRenderDocument,
+        compare_doc: PdfRenderDocument,
         result: PdfCompareResult,
         page_result: PdfComparePageResult,
     ) -> None:
-        page = report.new_page(width=842, height=595)
+        _prepare_page(page, 842, 595)
         page_no = page_result.page_index + 1
         _draw_title(page, f"Pagina {page_no} - {page_result.status_label}", 36, 40, size=17)
         _insert_textbox(
             page,
-            fitz.Rect(36, 58, 806, 92),
+            (36, 58, 806, 92),
             _page_detail_label(page_result),
             fontsize=9.5,
             color=_status_color(page_result),
         )
 
-        left_bounds = fitz.Rect(36, 126, 405, 520)
-        right_bounds = fitz.Rect(437, 126, 806, 520)
-        _insert_text(page, left_bounds.x0, 112, "Base", fontsize=10, color=(0.88, 0.88, 0.9))
-        _insert_text(page, right_bounds.x0, 112, "Revisado con diferencias resaltadas", fontsize=10, color=(0.88, 0.88, 0.9))
+        left_bounds = (36.0, 126.0, 405.0, 520.0)
+        right_bounds = (437.0, 126.0, 806.0, 520.0)
+        _insert_text(page, left_bounds[0], 112, "Base", fontsize=10, color=(0.88, 0.88, 0.9))
+        _insert_text(page, right_bounds[0], 112, "Revisado con diferencias resaltadas", fontsize=10, color=(0.88, 0.88, 0.9))
 
         if page_result.base_exists:
-            base_img = _render_page_image(base_doc[page_result.page_index], result.job.options.dpi)
+            base_img = _render_page_image(base_doc, page_result.page_index, result.job.options.dpi)
             _insert_pil_image(page, base_img, left_bounds)
         else:
             _draw_placeholder(page, left_bounds, "No existe en PDF base")
 
         if page_result.compare_exists:
-            compare_img = _render_page_image(compare_doc[page_result.page_index], result.job.options.dpi)
+            compare_img = _render_page_image(compare_doc, page_result.page_index, result.job.options.dpi)
             if page_result.base_exists:
-                base_img = _render_page_image(base_doc[page_result.page_index], result.job.options.dpi)
+                base_img = _render_page_image(base_doc, page_result.page_index, result.job.options.dpi)
                 compare_img = _highlight_differences(base_img, compare_img, result.job.options.pixel_threshold)
             _insert_pil_image(page, compare_img, right_bounds)
         else:
@@ -308,24 +328,22 @@ class PdfCompareEngine:
             _draw_title(page, "Diferencia textual", 36, 548, size=10)
             _insert_textbox(
                 page,
-                fitz.Rect(150, 536, 806, 584),
+                (150, 536, 806, 584),
                 page_result.text_delta,
                 fontsize=7.5,
                 color=(0.86, 0.86, 0.88),
             )
 
 
-def _validate_doc(doc: fitz.Document, label: str) -> None:
-    if doc.is_encrypted:
-        raise RuntimeError(f"El PDF {label} esta protegido o cifrado.")
+def _validate_doc(doc: PdfRenderDocument, label: str) -> None:
     if doc.page_count <= 0:
         raise RuntimeError(f"El PDF {label} no tiene paginas.")
 
 
-def _page_text(doc: fitz.Document, page_index: int) -> str:
+def _page_text(doc: PdfRenderDocument, page_index: int) -> str:
     if page_index < 0 or page_index >= doc.page_count:
         return ""
-    return doc[page_index].get_text("text") or ""
+    return doc.extract_text(page_index)
 
 
 def _normalize_text(value: str) -> str:
@@ -333,17 +351,26 @@ def _normalize_text(value: str) -> str:
     return "\n".join(line for line in lines if line)
 
 
-def _page_size_changed(base_page: fitz.Page, compare_page: fitz.Page) -> bool:
+def _page_size_changed(
+    base_doc: PdfRenderDocument,
+    compare_doc: PdfRenderDocument,
+    page_index: int,
+) -> bool:
+    base_page = base_doc.page_info(page_index)
+    compare_page = compare_doc.page_info(page_index)
     return (
-        abs(base_page.rect.width - compare_page.rect.width) > 0.5
-        or abs(base_page.rect.height - compare_page.rect.height) > 0.5
+        abs(base_page.width_pt - compare_page.width_pt) > 0.5
+        or abs(base_page.height_pt - compare_page.height_pt) > 0.5
     )
 
 
-def _render_page_image(page: fitz.Page, dpi: int) -> Image.Image:
+def _render_page_image(
+    document: PdfRenderDocument,
+    page_index: int,
+    dpi: int,
+) -> Image.Image:
     scale = max(12, min(240, dpi)) / 72.0
-    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False)
-    return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    return document.render_page(page_index, scale=scale).to_pil()
 
 
 def _normalized_pair(a: Image.Image, b: Image.Image) -> tuple[Image.Image, Image.Image]:
@@ -413,7 +440,7 @@ def _status_color(item: PdfComparePageResult) -> tuple[float, float, float]:
 
 
 def _insert_text(
-    page: fitz.Page,
+    page: Canvas,
     x: float,
     y: float,
     text: str,
@@ -421,42 +448,113 @@ def _insert_text(
     fontsize: float = 10,
     color: tuple[float, float, float] = (0.88, 0.88, 0.9),
 ) -> None:
-    page.insert_text((x, y), text, fontsize=fontsize, fontname="helv", color=color)
+    page.setFont("Helvetica", fontsize)
+    page.setFillColorRGB(*color)
+    page.drawString(x, _page_height(page) - y, text)
 
 
 def _insert_textbox(
-    page: fitz.Page,
-    rect: fitz.Rect,
+    page: Canvas,
+    rect: tuple[float, float, float, float],
     text: str,
     *,
     fontsize: float = 10,
     color: tuple[float, float, float] = (0.82, 0.82, 0.86),
 ) -> None:
-    page.insert_textbox(rect, text, fontsize=fontsize, fontname="helv", color=color)
+    x0, y0, x1, y1 = rect
+    leading = fontsize * 1.35
+    baseline = _page_height(page) - y0 - fontsize
+    minimum = _page_height(page) - y1
+    page.setFont("Helvetica", fontsize)
+    page.setFillColorRGB(*color)
+    for paragraph in text.splitlines() or [""]:
+        for line in _wrap_text(paragraph, "Helvetica", fontsize, max(1.0, x1 - x0)):
+            if baseline < minimum:
+                return
+            page.drawString(x0, baseline, line)
+            baseline -= leading
 
 
-def _draw_title(page: fitz.Page, text: str, x: float, y: float, *, size: float) -> None:
+def _draw_title(page: Canvas, text: str, x: float, y: float, *, size: float) -> None:
     _insert_text(page, x, y, text, fontsize=size, color=(0.96, 0.96, 0.98))
 
 
-def _draw_placeholder(page: fitz.Page, rect: fitz.Rect, label: str) -> None:
-    page.draw_rect(rect, color=(0.34, 0.34, 0.38), fill=(0.09, 0.09, 0.11), width=0.8)
-    _insert_textbox(page, rect + (0, rect.height / 2 - 12, 0, 0), label, fontsize=12, color=(0.72, 0.72, 0.76))
+def _draw_placeholder(
+    page: Canvas,
+    rect: tuple[float, float, float, float],
+    label: str,
+) -> None:
+    x0, y0, x1, y1 = rect
+    page.setStrokeColorRGB(0.34, 0.34, 0.38)
+    page.setFillColorRGB(0.09, 0.09, 0.11)
+    page.setLineWidth(0.8)
+    page.rect(x0, _page_height(page) - y1, x1 - x0, y1 - y0, stroke=1, fill=1)
+    middle = y0 + (y1 - y0) / 2 - 8
+    _insert_textbox(page, (x0 + 12, middle, x1 - 12, y1), label, fontsize=12, color=(0.72, 0.72, 0.76))
 
 
-def _insert_pil_image(page: fitz.Page, image: Image.Image, bounds: fitz.Rect) -> None:
+def _insert_pil_image(
+    page: Canvas,
+    image: Image.Image,
+    bounds: tuple[float, float, float, float],
+) -> None:
     rect = _fit_rect(image.size, bounds)
-    page.draw_rect(bounds, color=(0.22, 0.22, 0.26), width=0.6)
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    page.insert_image(rect, stream=buffer.getvalue(), keep_proportion=True)
+    x0, y0, x1, y1 = bounds
+    page.setStrokeColorRGB(0.22, 0.22, 0.26)
+    page.setLineWidth(0.6)
+    page.rect(x0, _page_height(page) - y1, x1 - x0, y1 - y0, stroke=1, fill=0)
+    rx0, ry0, rx1, ry1 = rect
+    page.drawImage(
+        ImageReader(image),
+        rx0,
+        _page_height(page) - ry1,
+        width=rx1 - rx0,
+        height=ry1 - ry0,
+        preserveAspectRatio=False,
+        mask="auto",
+    )
 
 
-def _fit_rect(size: tuple[int, int], bounds: fitz.Rect) -> fitz.Rect:
+def _fit_rect(
+    size: tuple[int, int],
+    bounds: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     width, height = max(1, size[0]), max(1, size[1])
-    scale = min(bounds.width / width, bounds.height / height)
+    x0, y0, x1, y1 = bounds
+    bounds_width = x1 - x0
+    bounds_height = y1 - y0
+    scale = min(bounds_width / width, bounds_height / height)
     out_w = width * scale
     out_h = height * scale
-    x0 = bounds.x0 + (bounds.width - out_w) / 2
-    y0 = bounds.y0 + (bounds.height - out_h) / 2
-    return fitz.Rect(x0, y0, x0 + out_w, y0 + out_h)
+    left = x0 + (bounds_width - out_w) / 2
+    top = y0 + (bounds_height - out_h) / 2
+    return left, top, left + out_w, top + out_h
+
+
+def _prepare_page(page: Canvas, width: float, height: float) -> None:
+    page.setPageSize((width, height))
+    page.setFillColorRGB(0.055, 0.059, 0.075)
+    page.rect(0, 0, width, height, stroke=0, fill=1)
+
+
+def _page_height(page: Canvas) -> float:
+    return float(page._pagesize[1])
+
+
+def _wrap_text(text: str, font: str, size: float, max_width: float) -> list[str]:
+    if not text:
+        return [""]
+    words = text.split()
+    if not words:
+        return [""]
+    lines: list[str] = []
+    current = words[0]
+    for word in words[1:]:
+        candidate = f"{current} {word}"
+        if stringWidth(candidate, font, size) <= max_width:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    lines.append(current)
+    return lines

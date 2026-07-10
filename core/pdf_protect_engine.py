@@ -2,10 +2,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Callable, List
+import uuid
 
-import fitz
+import pikepdf
+
+from core.pdf_backend import PdfRenderDocument
 
 
 @dataclass(frozen=True)
@@ -80,64 +84,76 @@ class PdfProtectEngine:
 
         if not source.exists():
             return ProtectResult(job=job, success=False, error="El PDF de origen no existe.")
+        if source.resolve() == output.resolve():
+            return ProtectResult(
+                job=job,
+                success=False,
+                error="La salida no puede sobrescribir el PDF de origen.",
+            )
 
+        temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
         try:
             owner_pw, user_pw = _validated_passwords(job.options)
             input_size = source.stat().st_size
-            doc = fitz.open(str(source))
-            try:
-                if doc.is_encrypted or doc.needs_pass:
+            with pikepdf.Pdf.open(source) as document:
+                if document.is_encrypted:
                     raise RuntimeError("El PDF ya esta protegido o cifrado.")
-                if doc.page_count <= 0:
+                page_count = len(document.pages)
+                if page_count <= 0:
                     raise RuntimeError("El PDF no tiene paginas.")
-                permissions = permissions_mask(job.options)
-                doc.save(
-                    str(output),
-                    garbage=4,
-                    clean=True,
-                    deflate=True,
-                    deflate_images=True,
-                    deflate_fonts=True,
-                    use_objstms=1,
-                    encryption=fitz.PDF_ENCRYPT_AES_256,
-                    owner_pw=owner_pw,
-                    user_pw=user_pw,
-                    permissions=permissions,
+                document.save(
+                    temporary,
+                    object_stream_mode=pikepdf.ObjectStreamMode.generate,
+                    compress_streams=True,
+                    recompress_flate=True,
+                    encryption=pikepdf.Encryption(
+                        owner=owner_pw,
+                        user=user_pw,
+                        R=6,
+                        aes=True,
+                        metadata=True,
+                        allow=permissions_mask(job.options),
+                    ),
                 )
-                return ProtectResult(
-                    job=job,
-                    output_path=str(output),
-                    success=True,
-                    input_bytes=input_size,
-                    output_bytes=output.stat().st_size,
-                    total_pages=doc.page_count,
-                    permission_label=permission_label(job.options),
-                )
-            finally:
-                doc.close()
+
+            _verify_protected_pdf(temporary, user_pw, page_count)
+            os.replace(temporary, output)
+            return ProtectResult(
+                job=job,
+                output_path=str(output),
+                success=True,
+                input_bytes=input_size,
+                output_bytes=output.stat().st_size,
+                total_pages=page_count,
+                permission_label=permission_label(job.options),
+            )
+        except pikepdf.PasswordError:
+            return ProtectResult(
+                job=job,
+                success=False,
+                error="El PDF ya esta protegido o cifrado.",
+            )
         except Exception as exc:
             return ProtectResult(job=job, success=False, error=str(exc))
+        finally:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
-def permissions_mask(options: ProtectOptions) -> int:
-    value = 0
-    if options.allow_print:
-        value |= fitz.PDF_PERM_PRINT
-    if options.allow_high_quality_print and options.allow_print:
-        value |= fitz.PDF_PERM_PRINT_HQ
-    if options.allow_copy:
-        value |= fitz.PDF_PERM_COPY
-    if options.allow_modify:
-        value |= fitz.PDF_PERM_MODIFY
-    if options.allow_annotate:
-        value |= fitz.PDF_PERM_ANNOTATE
-    if options.allow_forms:
-        value |= fitz.PDF_PERM_FORM
-    if options.allow_assemble:
-        value |= fitz.PDF_PERM_ASSEMBLE
-    if options.allow_accessibility:
-        value |= fitz.PDF_PERM_ACCESSIBILITY
-    return value
+def permissions_mask(options: ProtectOptions) -> pikepdf.Permissions:
+    """Translate PDFlex options to QPDF's explicit permission model."""
+    return pikepdf.Permissions(
+        accessibility=options.allow_accessibility,
+        extract=options.allow_copy,
+        modify_annotation=options.allow_annotate,
+        modify_assembly=options.allow_assemble,
+        modify_form=options.allow_forms,
+        modify_other=options.allow_modify,
+        print_lowres=options.allow_print,
+        print_highres=options.allow_print and options.allow_high_quality_print,
+    )
 
 
 def permission_label(options: ProtectOptions) -> str:
@@ -171,3 +187,19 @@ def _validated_passwords(options: ProtectOptions) -> tuple[str, str]:
     if open_pw and len(open_pw) < 4:
         raise ValueError("La contrasena de apertura debe tener al menos 4 caracteres.")
     return owner_pw, open_pw
+
+
+def _verify_protected_pdf(path: Path, user_password: str, expected_pages: int) -> None:
+    try:
+        with pikepdf.Pdf.open(path, password=user_password) as protected:
+            if not protected.is_encrypted:
+                raise RuntimeError("La copia generada no quedó cifrada.")
+            if len(protected.pages) != expected_pages:
+                raise RuntimeError(
+                    f"La copia protegida contiene {len(protected.pages)} páginas; "
+                    f"se esperaban {expected_pages}."
+                )
+        with PdfRenderDocument(path, password=user_password) as rendered:
+            rendered.render_page(0, scale=0.2)
+    except pikepdf.PasswordError as exc:
+        raise RuntimeError("No se pudo autenticar la copia protegida.") from exc

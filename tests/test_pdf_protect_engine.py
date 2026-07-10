@@ -4,8 +4,10 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import fitz
+import pikepdf
+from reportlab.pdfgen.canvas import Canvas
 
+from core.pdf_backend import PdfRenderDocument
 from core.pdf_protect_engine import (
     PdfProtectEngine,
     ProtectJob,
@@ -34,14 +36,17 @@ class PdfProtectEngineTests(unittest.TestCase):
 
             self.assertTrue(result.success, result.error)
             self.assertTrue(output.exists())
-            protected = fitz.open(output)
-            try:
-                self.assertTrue(protected.needs_pass)
-                self.assertEqual(protected.authenticate("mal"), 0)
-                self.assertGreater(protected.authenticate("abrir123"), 0)
-                self.assertIn("Documento protegido", protected[0].get_text())
-            finally:
-                protected.close()
+            with self.assertRaises(pikepdf.PasswordError):
+                pikepdf.Pdf.open(output, password="mal")
+            with pikepdf.Pdf.open(output, password="abrir123") as encrypted:
+                self.assertTrue(encrypted.is_encrypted)
+                self.assertEqual(encrypted.encryption.R, 6)
+                self.assertEqual(encrypted.encryption.bits, 256)
+                self.assertTrue(encrypted.allow.print_lowres)
+                self.assertFalse(encrypted.allow.extract)
+                self.assertFalse(encrypted.allow.modify_other)
+            with PdfRenderDocument(output, password="abrir123") as protected:
+                self.assertIn("Documento protegido", protected.extract_text(0))
 
     def test_owner_password_can_restrict_permissions_without_open_password(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -61,12 +66,8 @@ class PdfProtectEngineTests(unittest.TestCase):
             )
 
             self.assertTrue(result.success, result.error)
-            protected = fitz.open(output)
-            try:
-                self.assertFalse(bool(protected.needs_pass))
-                self.assertIn("Documento protegido", protected[0].get_text())
-            finally:
-                protected.close()
+            with PdfRenderDocument(output) as protected:
+                self.assertIn("Documento protegido", protected.extract_text(0))
 
     def test_requires_some_password(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -82,7 +83,7 @@ class PdfProtectEngineTests(unittest.TestCase):
             self.assertIn("contrasena", result.error.lower())
 
     def test_permissions_mask_uses_selected_flags(self) -> None:
-        mask = permissions_mask(
+        permissions = permissions_mask(
             ProtectOptions(
                 owner_password="dueno123",
                 allow_print=True,
@@ -93,19 +94,18 @@ class PdfProtectEngineTests(unittest.TestCase):
             )
         )
 
-        self.assertTrue(mask & fitz.PDF_PERM_PRINT)
-        self.assertTrue(mask & fitz.PDF_PERM_PRINT_HQ)
-        self.assertTrue(mask & fitz.PDF_PERM_COPY)
-        self.assertFalse(mask & fitz.PDF_PERM_MODIFY)
-        self.assertTrue(mask & fitz.PDF_PERM_ACCESSIBILITY)
+        self.assertTrue(permissions.print_lowres)
+        self.assertTrue(permissions.print_highres)
+        self.assertTrue(permissions.extract)
+        self.assertFalse(permissions.modify_other)
+        self.assertTrue(permissions.accessibility)
 
     @staticmethod
     def _make_pdf(path: Path) -> Path:
-        doc = fitz.open()
-        page = doc.new_page(width=300, height=200)
-        page.insert_text((36, 72), "Documento protegido")
-        doc.save(path)
-        doc.close()
+        canvas = Canvas(str(path), pagesize=(300, 200))
+        canvas.drawString(36, 128, "Documento protegido")
+        canvas.showPage()
+        canvas.save()
         return path
 
 

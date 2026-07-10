@@ -7,7 +7,7 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import fitz
+from reportlab.pdfgen.canvas import Canvas
 from PySide6.QtWidgets import QApplication
 
 from core.pdf_protect_engine import PdfProtectEngine, ProtectJob, ProtectOptions
@@ -125,11 +125,10 @@ class ProtectorWindowTests(unittest.TestCase):
 
     @staticmethod
     def _make_pdf(path: Path) -> Path:
-        doc = fitz.open()
-        page = doc.new_page(width=300, height=200)
-        page.insert_text((36, 72), "Documento protegido")
-        doc.save(path)
-        doc.close()
+        canvas = Canvas(str(path), pagesize=(300, 200))
+        canvas.drawString(36, 128, "Documento protegido")
+        canvas.showPage()
+        canvas.save()
         return path
 
 

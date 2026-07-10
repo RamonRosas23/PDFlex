@@ -70,6 +70,21 @@ def test_pdfium_backend_renders_text_forms_and_rotation(backend_pdf: Path):
         assert transparent.stride == transparent.width * 4
 
 
+def test_pdfium_object_bounds_are_recursive_and_rotation_aware(backend_pdf: Path):
+    with PdfRenderDocument(backend_pdf) as document:
+        first_text = document.object_bounds(0, kinds=("text",))
+        rotated_text = document.object_bounds(1, kinds=("text",))
+
+    assert len(first_text) >= 2
+    assert all(item.kind == "text" for item in first_text)
+    assert min(item.top for item in first_text) < 90
+    assert rotated_text
+    # Text originally near the physical top becomes a vertical strip at the
+    # right after clockwise /Rotate=90, while its display Y starts near x=72.
+    assert min(item.left for item in rotated_text) > 680
+    assert min(item.top for item in rotated_text) == pytest.approx(72, abs=2)
+
+
 def test_pdfium_backend_rejects_invalid_scale_and_page(backend_pdf: Path):
     with PdfRenderDocument(backend_pdf) as document:
         with pytest.raises(ValueError):

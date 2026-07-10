@@ -5,7 +5,14 @@ calling PDFium, QPDF, pypdf, or ReportLab directly.
 """
 from .errors import PdfBackendError, PdfCancelledError, PdfClosedError, PdfPasswordError
 from .composition import ImagePdfPage, create_image_pdf
-from .rendering import PageInfo, PdfRenderDocument, RenderedPage, pdf_page_count
+from .rendering import (
+    PageInfo,
+    PageObjectBounds,
+    PageObjectKind,
+    PdfRenderDocument,
+    RenderedPage,
+    pdf_page_count,
+)
 from .structure import (
     AssemblyReport,
     MergeReport,
@@ -21,6 +28,8 @@ from .structure import (
 
 __all__ = [
     "PageInfo",
+    "PageObjectBounds",
+    "PageObjectKind",
     "AssemblyReport",
     "ImagePdfPage",
     "MergeReport",

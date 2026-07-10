@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-import fitz
+from core.pdf_backend import PdfRenderDocument
 
 
 # ====================================================================== #
@@ -57,11 +57,11 @@ def detect_margins(pdf_path: str) -> MembreteMargins:
 
 
 def _analyse(pdf_path: str) -> MembreteMargins:
-    doc = fitz.open(pdf_path)
-    try:
-        page = doc[0]
-        pw = page.rect.width
-        ph = page.rect.height
+    with PdfRenderDocument(pdf_path) as document:
+        if document.page_count <= 0:
+            raise ValueError("El PDF no tiene páginas.")
+        page = document.page_info(0)
+        ph = page.height_pt
 
         header_y_max = 0.0    # y1 del elemento más bajo en la zona de encabezado
         footer_y_min = ph     # y0 del elemento más alto en la zona de pie
@@ -77,23 +77,9 @@ def _analyse(pdf_path: str) -> MembreteMargins:
             elif y_center > threshold_bot:
                 footer_y_min = min(footer_y_min, y0)
 
-        # Bloques de texto (get_text("blocks") → list of (x0,y0,x1,y1,text,...))
-        for b in page.get_text("blocks"):
-            _process(b[1], b[3])
-
-        # Dibujos vectoriales (líneas, rectángulos, logos)
-        for drawing in page.get_drawings():
-            r = drawing.get("rect")
-            if r and not r.is_empty and not r.is_infinite:
-                _process(r.y0, r.y1)
-
-        # Imágenes rasterizadas (logos PNG/JPEG embebidos)
-        for img_info in page.get_image_info():
-            bbox = img_info.get("bbox")
-            if bbox:
-                r = fitz.Rect(bbox)
-                if not r.is_empty and not r.is_infinite:
-                    _process(r.y0, r.y1)
+        for bounds in document.object_bounds(0, kinds=("text", "path", "image")):
+            if bounds.width > 0 and bounds.height >= 0:
+                _process(bounds.top, bounds.bottom)
 
         top = (header_y_max + _GRACE_PT) if header_y_max > 0 else _DEFAULT_PT
         bottom = ((ph - footer_y_min) + _GRACE_PT) if footer_y_min < ph else _DEFAULT_PT
@@ -105,5 +91,3 @@ def _analyse(pdf_path: str) -> MembreteMargins:
             left_pt=_DEFAULT_PT,
             right_pt=_DEFAULT_PT,
         )
-    finally:
-        doc.close()

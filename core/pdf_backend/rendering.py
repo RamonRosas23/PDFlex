@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import threading
+from typing import Literal, Sequence
 
 from PIL import Image
 import pypdfium2 as pdfium
@@ -56,6 +57,28 @@ class RenderedPage:
             self.mode,
             self.stride,
         ).copy()
+
+
+PageObjectKind = Literal["text", "path", "image", "shading", "form"]
+
+
+@dataclass(frozen=True, slots=True)
+class PageObjectBounds:
+    """Visual top-left bounds for one PDF page object, in points."""
+
+    kind: PageObjectKind
+    left: float
+    top: float
+    right: float
+    bottom: float
+
+    @property
+    def width(self) -> float:
+        return self.right - self.left
+
+    @property
+    def height(self) -> float:
+        return self.bottom - self.top
 
 
 class PdfRenderDocument:
@@ -208,6 +231,68 @@ class PdfRenderDocument:
                 page.close()
         return text.replace("\r\n", "\n").replace("\r", "\n")
 
+    def object_bounds(
+        self,
+        index: int,
+        *,
+        kinds: Sequence[PageObjectKind] = ("text", "path", "image"),
+    ) -> list[PageObjectBounds]:
+        """Return recursively discovered object bounds in display coordinates."""
+        document = self._document_or_raise()
+        self._validate_page_index(index)
+        type_by_kind = {
+            "text": pdfium_c.FPDF_PAGEOBJ_TEXT,
+            "path": pdfium_c.FPDF_PAGEOBJ_PATH,
+            "image": pdfium_c.FPDF_PAGEOBJ_IMAGE,
+            "shading": pdfium_c.FPDF_PAGEOBJ_SHADING,
+            "form": pdfium_c.FPDF_PAGEOBJ_FORM,
+        }
+        invalid = [kind for kind in kinds if kind not in type_by_kind]
+        if invalid:
+            raise ValueError(f"Tipos de objeto PDF no soportados: {', '.join(invalid)}")
+        selected_types = [type_by_kind[kind] for kind in kinds]
+        kind_by_type = {value: key for key, value in type_by_kind.items()}
+
+        results: list[PageObjectBounds] = []
+        with _PDFIUM_LOCK:
+            page = document[index]
+            try:
+                display_width, display_height = page.get_size()
+                rotation = page.get_rotation() % 360
+                native_width, native_height = (
+                    (display_height, display_width)
+                    if rotation in (90, 270)
+                    else (display_width, display_height)
+                )
+                for obj in page.get_objects(filter=selected_types, max_depth=15):
+                    try:
+                        left, bottom, right, top = obj.get_bounds()
+                        points = [
+                            _native_to_display(x, y, native_width, native_height, rotation)
+                            for x, y in (
+                                (left, bottom),
+                                (left, top),
+                                (right, bottom),
+                                (right, top),
+                            )
+                        ]
+                    except (pdfium.PdfiumError, ValueError):
+                        continue
+                    xs = [point[0] for point in points]
+                    ys = [point[1] for point in points]
+                    results.append(
+                        PageObjectBounds(
+                            kind=kind_by_type[obj.type],
+                            left=float(min(xs)),
+                            top=float(min(ys)),
+                            right=float(max(xs)),
+                            bottom=float(max(ys)),
+                        )
+                    )
+            finally:
+                page.close()
+        return results
+
     def _document_or_raise(self) -> pdfium.PdfDocument:
         self._ensure_open()
         assert self._document is not None
@@ -222,3 +307,21 @@ class PdfRenderDocument:
             raise IndexError(
                 f"Página fuera de rango: {index}; total: {self._page_count}."
             )
+
+
+def _native_to_display(
+    x: float,
+    y: float,
+    native_width: float,
+    native_height: float,
+    rotation: int,
+) -> tuple[float, float]:
+    if rotation == 0:
+        return x, native_height - y
+    if rotation == 90:
+        return y, x
+    if rotation == 180:
+        return native_width - x, y
+    if rotation == 270:
+        return native_height - y, native_width - x
+    raise ValueError(f"Rotación de página no soportada: {rotation}")

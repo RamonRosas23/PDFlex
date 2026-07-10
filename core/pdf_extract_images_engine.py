@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import io
 from pathlib import Path
 from typing import Callable, List
 
-import fitz
+import pikepdf
 
 from core.output_naming import output_stem_for_source
 from core.output_paths import unique_output_path
@@ -104,70 +105,73 @@ class PdfExtractImagesEngine:
                 error="El PDF de origen no existe.",
             )
 
-        doc: fitz.Document | None = None
         try:
-            doc = fitz.open(str(source))
-            if doc.is_encrypted:
+            document = pikepdf.Pdf.open(source)
+            if document.is_encrypted:
+                document.close()
                 raise RuntimeError("El PDF esta protegido o cifrado.")
-            if doc.page_count <= 0:
+            if len(document.pages) <= 0:
+                document.close()
                 raise RuntimeError("El PDF no tiene paginas.")
 
-            base = output_stem_for_source(
-                job.base_name or job.pdf_path,
-                tool_suffix=job.tool_suffix,
-                add_tool_suffix=job.add_tool_suffix,
-                fallback="documento",
-            )
-            seen_xrefs: set[int] = set()
-            reserved: set[str] = set()
-            results: list[ExtractedImageResult] = []
-            skipped_duplicates = 0
-            skipped_small = 0
+            with document:
+                base = output_stem_for_source(
+                    job.base_name or job.pdf_path,
+                    tool_suffix=job.tool_suffix,
+                    add_tool_suffix=job.add_tool_suffix,
+                    fallback="documento",
+                )
+                seen_objects: set[tuple[int, int]] = set()
+                reserved: set[str] = set()
+                results: list[ExtractedImageResult] = []
+                skipped_duplicates = 0
+                skipped_small = 0
 
-            for page_index in range(doc.page_count):
-                if should_cancel and should_cancel():
-                    break
-                for image_info in doc.get_page_images(page_index, full=True):
-                    xref = int(image_info[0])
-                    if config.deduplicate and xref in seen_xrefs:
-                        skipped_duplicates += 1
-                        continue
-                    seen_xrefs.add(xref)
-                    result = self._extract_one(
-                        doc,
-                        xref,
-                        out_dir,
-                        base,
-                        page_index,
-                        reserved,
-                        config,
-                    )
-                    if result is None:
-                        skipped_small += 1
-                    else:
-                        results.append(result)
+                for page_index, page in enumerate(document.pages):
+                    if should_cancel and should_cancel():
+                        break
+                    for _resource_name, image_object in page.get_images(recursive=True).items():
+                        object_id = tuple(image_object.objgen)
+                        if config.deduplicate and object_id != (0, 0) and object_id in seen_objects:
+                            skipped_duplicates += 1
+                            continue
+                        if object_id != (0, 0):
+                            seen_objects.add(object_id)
+                        result = self._extract_one(
+                            image_object,
+                            int(object_id[0]),
+                            out_dir,
+                            base,
+                            page_index,
+                            reserved,
+                            config,
+                        )
+                        if result is None:
+                            skipped_small += 1
+                        else:
+                            results.append(result)
 
-            ok = [result for result in results if result.success]
+                ok = [result for result in results if result.success]
+                return ExtractImagesJobResult(
+                    job=job,
+                    image_results=results,
+                    success=bool(ok),
+                    error="" if ok else "No se encontraron imagenes embebidas.",
+                    skipped_duplicates=skipped_duplicates,
+                    skipped_small=skipped_small,
+                )
+        except pikepdf.PasswordError:
             return ExtractImagesJobResult(
                 job=job,
-                image_results=results,
-                success=bool(ok),
-                error="" if ok else "No se encontraron imagenes embebidas.",
-                skipped_duplicates=skipped_duplicates,
-                skipped_small=skipped_small,
+                success=False,
+                error="El PDF esta protegido o cifrado.",
             )
         except Exception as exc:
             return ExtractImagesJobResult(job=job, success=False, error=str(exc))
-        finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
 
     def _extract_one(
         self,
-        doc: fitz.Document,
+        image_object: pikepdf.Stream,
         xref: int,
         out_dir: Path,
         base: str,
@@ -176,16 +180,16 @@ class PdfExtractImagesEngine:
         config: ExtractImagesConfig,
     ) -> ExtractedImageResult | None:
         try:
-            image = doc.extract_image(xref)
-            data = image.get("image", b"")
-            ext = _normalize_ext(str(image.get("ext", "bin")))
-            width = int(image.get("width", 0) or 0)
-            height = int(image.get("height", 0) or 0)
+            image = pikepdf.PdfImage(image_object)
+            width = int(image.width)
+            height = int(image.height)
             if width < config.min_width or height < config.min_height:
                 return None
+            buffer = io.BytesIO()
+            ext = _normalize_ext(image.extract_to(stream=buffer))
             filename = f"{base}_p{page_index + 1:03d}_x{xref}.{ext}"
             output = unique_output_path(out_dir, filename, reserved=reserved, fallback="imagen")
-            output.write_bytes(data)
+            output.write_bytes(buffer.getvalue())
             return ExtractedImageResult(
                 output_path=str(output),
                 success=True,

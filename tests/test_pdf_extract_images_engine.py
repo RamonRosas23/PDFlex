@@ -4,8 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-import fitz
 from PIL import Image
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen.canvas import Canvas
 
 from core.pdf_extract_images_engine import (
     ExtractImagesConfig,
@@ -34,6 +35,12 @@ class PdfExtractImagesEngineTests(unittest.TestCase):
             self.assertEqual(image_result.height, 50)
             self.assertIn(image_result.ext, {"png", "jpg"})
             self.assertGreater(result.skipped_duplicates, 0)
+            with Image.open(image_result.output_path) as extracted:
+                self.assertEqual(extracted.size, (80, 50))
+                red, green, blue = extracted.convert("RGB").getpixel((40, 25))
+                self.assertGreater(red, 180)
+                self.assertLess(green, 80)
+                self.assertLess(blue, 80)
 
     def test_extracts_each_occurrence_when_deduplication_is_off(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -70,22 +77,21 @@ class PdfExtractImagesEngineTests(unittest.TestCase):
         image = Image.new("RGB", (80, 50), (220, 40, 40))
         image.save(img_path)
 
-        doc = fitz.open()
-        page1 = doc.new_page(width=300, height=200)
-        xref = page1.insert_image(fitz.Rect(36, 36, 156, 111), filename=str(img_path))
-        page2 = doc.new_page(width=300, height=200)
-        page2.insert_image(fitz.Rect(48, 48, 168, 123), xref=xref)
-        doc.save(path)
-        doc.close()
+        canvas = Canvas(str(path), pagesize=(300, 200))
+        image_reader = ImageReader(str(img_path))
+        canvas.drawImage(image_reader, 36, 89, width=120, height=75)
+        canvas.showPage()
+        canvas.drawImage(image_reader, 48, 77, width=120, height=75)
+        canvas.showPage()
+        canvas.save()
         return path
 
     @staticmethod
     def _make_text_pdf(path: Path) -> Path:
-        doc = fitz.open()
-        page = doc.new_page(width=300, height=200)
-        page.insert_text((36, 72), "Solo texto")
-        doc.save(path)
-        doc.close()
+        canvas = Canvas(str(path), pagesize=(300, 200))
+        canvas.drawString(36, 128, "Solo texto")
+        canvas.showPage()
+        canvas.save()
         return path
 
 

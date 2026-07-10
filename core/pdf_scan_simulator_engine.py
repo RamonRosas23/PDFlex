@@ -13,11 +13,11 @@ import math
 from pathlib import Path
 from typing import Callable, List, Literal, Optional
 
-import fitz
 import numpy as np
 from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 from .output_naming import output_stem_for_source
+from .pdf_backend import ImagePdfPage, PdfRenderDocument, create_image_pdf, pdf_page_count
 from .pdf_to_images_engine import parse_page_selection
 
 try:  # pragma: no cover - fallback is used only when OpenCV is unavailable.
@@ -335,62 +335,52 @@ class PdfScanSimulatorEngine:
             )
 
         output.parent.mkdir(parents=True, exist_ok=True)
-        src_doc: fitz.Document | None = None
-        out_doc = fitz.open()
         processed_pages = 0
 
         try:
-            src_doc = fitz.open(str(source))
-            page_indexes = parse_page_selection(cfg.page_range, src_doc.page_count)
-            if not page_indexes:
-                raise RuntimeError("El rango no contiene paginas validas.")
+            with PdfRenderDocument(source) as source_document:
+                page_indexes = parse_page_selection(cfg.page_range, source_document.page_count)
+                if not page_indexes:
+                    raise RuntimeError("El rango no contiene paginas validas.")
 
-            total = len(page_indexes)
-            page_source_id = str(source.resolve())
-            session = _build_scan_session(cfg, session_source_id or page_source_id)
-            for local_index, page_index in enumerate(page_indexes):
-                if _is_cancelled(should_cancel):
-                    raise _CancelledError
+                total = len(page_indexes)
+                page_source_id = str(source.resolve())
+                session = _build_scan_session(cfg, session_source_id or page_source_id)
 
-                page = src_doc[page_index]
-                if progress:
-                    progress(
-                        local_index,
-                        total,
-                        f"{source.name}: simulando pagina {page_index + 1}/{src_doc.page_count}",
-                    )
+                def scanned_pages():
+                    nonlocal processed_pages
+                    for local_index, page_index in enumerate(page_indexes):
+                        if _is_cancelled(should_cancel):
+                            raise _CancelledError
+                        info = source_document.page_info(page_index)
+                        if progress:
+                            progress(
+                                local_index,
+                                total,
+                                f"{source.name}: simulando pagina {page_index + 1}/{source_document.page_count}",
+                            )
+                        rendered = _render_page(source_document, page_index, cfg.dpi)
+                        simulated = simulate_scan_image(
+                            rendered,
+                            cfg,
+                            source_id=page_source_id,
+                            page_index=page_index,
+                            session=session,
+                        )
+                        processed_pages += 1
+                        yield ImagePdfPage(
+                            _encode_jpeg(simulated, cfg),
+                            info.width_pt,
+                            info.height_pt,
+                        )
+                        if progress:
+                            progress(
+                                local_index + 1,
+                                total,
+                                f"{source.name}: pagina {page_index + 1} lista",
+                            )
 
-                rendered = _render_page(page, cfg.dpi)
-                simulated = simulate_scan_image(
-                    rendered,
-                    cfg,
-                    source_id=page_source_id,
-                    page_index=page_index,
-                    session=session,
-                )
-
-                out_page = out_doc.new_page(width=page.rect.width, height=page.rect.height)
-                out_page.insert_image(out_page.rect, stream=_encode_jpeg(simulated, cfg))
-                processed_pages += 1
-
-                if progress:
-                    progress(
-                        local_index + 1,
-                        total,
-                        f"{source.name}: pagina {page_index + 1} lista",
-                    )
-
-            if processed_pages <= 0:
-                raise RuntimeError("No se genero ninguna pagina.")
-
-            _copy_basic_metadata(src_doc, out_doc, source)
-            out_doc.save(
-                str(output),
-                garbage=4,
-                deflate=True,
-                deflate_images=False,
-                use_objstms=1,
-            )
+                create_image_pdf(scanned_pages(), output)
         except _CancelledError:
             _remove_file(output)
             return ScanSimulationResult(
@@ -415,11 +405,6 @@ class PdfScanSimulatorEngine:
                 page_count=processed_pages,
                 input_bytes=input_bytes,
             )
-        finally:
-            out_doc.close()
-            if src_doc is not None:
-                src_doc.close()
-
         try:
             _validate_output(output, processed_pages)
         except Exception as exc:
@@ -455,8 +440,7 @@ class PdfScanSimulatorEngine:
         total = 0
         for job in jobs:
             try:
-                with fitz.open(job.pdf_path) as doc:
-                    total += len(parse_page_selection(cfg.page_range, doc.page_count))
+                total += len(parse_page_selection(cfg.page_range, pdf_page_count(job.pdf_path)))
             except Exception:
                 total += 1
         return max(1, total)
@@ -663,15 +647,12 @@ def simulate_scan_image(
     return final.convert("RGB")
 
 
-def _render_page(page: fitz.Page, dpi: int) -> Image.Image:
-    scale = dpi / 72.0
-    pix = page.get_pixmap(
-        matrix=fitz.Matrix(scale, scale),
-        colorspace=fitz.csRGB,
-        alpha=False,
-        annots=True,
-    )
-    return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+def _render_page(
+    document: PdfRenderDocument,
+    page_index: int,
+    dpi: int,
+) -> Image.Image:
+    return document.render_page(page_index, scale=dpi / 72.0).to_pil()
 
 
 def _prepare_sheet(
@@ -1074,26 +1055,17 @@ def _normalized_config(cfg: ScanSimulationConfig | None) -> ScanSimulationConfig
     )
 
 
-def _copy_basic_metadata(src: fitz.Document, out: fitz.Document, source: Path) -> None:
-    metadata = dict(src.metadata or {})
-    metadata["producer"] = "PDFlex - Simular escaneo"
-    metadata["title"] = metadata.get("title") or source.stem
-    try:
-        out.set_metadata(metadata)
-    except Exception:
-        pass
-
-
 def _validate_output(path: Path, expected_pages: int) -> None:
     if not path.exists() or path.stat().st_size <= 0:
         raise RuntimeError("archivo vacio")
-    with fitz.open(str(path)) as doc:
-        if doc.page_count != expected_pages:
+    with PdfRenderDocument(path) as document:
+        if document.page_count != expected_pages:
             raise RuntimeError(
-                f"paginas inesperadas ({doc.page_count}; se esperaban {expected_pages})"
+                f"paginas inesperadas ({document.page_count}; se esperaban {expected_pages})"
             )
-        for index in range(doc.page_count):
-            if doc[index].rect.width <= 0 or doc[index].rect.height <= 0:
+        for index in range(document.page_count):
+            info = document.page_info(index)
+            if info.width_pt <= 0 or info.height_pt <= 0:
                 raise RuntimeError(f"pagina {index + 1} sin tamano valido")
 
 

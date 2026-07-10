@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from io import BytesIO
 import os
 from pathlib import Path
 from typing import Iterable
@@ -19,7 +20,7 @@ from .rendering import PdfRenderDocument
 class ImagePdfPage:
     """One image placement using top-left PDFlex coordinates, in points."""
 
-    image: Image.Image
+    image: Image.Image | bytes
     page_width_pt: float
     page_height_pt: float
     left_pt: float = 0.0
@@ -58,8 +59,9 @@ def create_image_pdf(
             # ReportLab uses a bottom-left origin; PDFlex placement uses the
             # top-left convention shared by the UI and rendering APIs.
             draw_y = page_height - float(spec.top_pt) - draw_height
+            image_source = BytesIO(spec.image) if isinstance(spec.image, bytes) else spec.image
             canvas.drawImage(
-                ImageReader(spec.image),
+                ImageReader(image_source),
                 float(spec.left_pt),
                 draw_y,
                 width=draw_width,

@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
 from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -20,6 +19,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from core.pdf_backend import pdf_page_count
 
 from core.logo_removal_engine import (
     LogoRemovalEngine,
@@ -888,10 +888,6 @@ class QuitarLogosWindow(PipelineWindow):
     @staticmethod
     def _read_page_count(path: str) -> int:
         try:
-            doc = fitz.open(path)
-            try:
-                return doc.page_count
-            finally:
-                doc.close()
+            return pdf_page_count(path)
         except Exception:
             return 0

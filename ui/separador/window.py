@@ -7,7 +7,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
 from PySide6.QtCore import Qt, QObject, QThread, Signal
 from PySide6.QtGui import (
     QPixmap,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QScrollArea, QSpinBox,
     QSizePolicy,
 )
+from core.pdf_backend import pdf_page_count
 
 from core.split_ranges import (
     SplitRange,
@@ -540,9 +540,7 @@ class SeparadorWindow(PipelineWindow):
 
     def _load_pdf(self, path: str) -> None:
         try:
-            doc = fitz.open(path)
-            self._total_pages = doc.page_count
-            doc.close()
+            self._total_pages = pdf_page_count(path)
         except Exception as e:
             show_warning(self, "Error al abrir", str(e))
             return

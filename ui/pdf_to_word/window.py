@@ -4,13 +4,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
 from PySide6.QtCore import QObject, QThread, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QCheckBox, QComboBox, QGridLayout,
 )
+from core.pdf_backend import PdfRenderDocument
 
 from core.output_paths import make_run_dir
 from core.pdf_to_word_engine import (
@@ -364,7 +364,7 @@ class PdfToWordWindow(PipelineWindow):
             else:
                 doc = None
                 try:
-                    doc = fitz.open(str(path))
+                    doc = PdfRenderDocument(path)
                     count = doc.page_count
                     self._pdf_page_cache[raw_path] = count
                     pages += count

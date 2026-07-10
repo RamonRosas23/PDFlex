@@ -7,11 +7,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
-from PIL import Image
 from PySide6.QtCore import Qt, QObject, QThread, Signal, QRectF, QSize
 from PySide6.QtGui import (
-    QPixmap, QImage, QPainter, QPen, QColor, QBrush,
+    QPixmap, QPainter, QPen, QColor, QBrush,
     QDragEnterEvent, QDropEvent, QDesktopServices,
 )
 from PySide6.QtWidgets import (
@@ -23,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.margin_detector import MembreteMargins, detect_margins
+from core.pdf_backend import PdfRenderDocument, pdf_page_count
 from core.membrete_library import (
     SavedLetterhead,
     add_letterhead_to_library,
@@ -57,6 +56,7 @@ from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import ask_question, show_error, show_info, show_success, show_warning
 from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
+from ui.common.pdf_render_utils import rendered_page_to_qimage
 from ui.common.result_ui import ElidedLabel, configure_file_list, elide_middle_text
 
 
@@ -84,49 +84,28 @@ class _MembretePageLoader(QObject):
         self._source_name = source_name
 
     def run(self) -> None:
-        doc = None
         try:
-            doc = fitz.open(self._path)
-            if doc.is_encrypted:
-                self.error.emit(self._path, "El PDF esta protegido o cifrado.")
-                return
-            if doc.page_count <= 0:
-                self.error.emit(self._path, "El PDF no tiene paginas.")
-                return
-            page_count = int(doc.page_count)
-            page = doc[0]
-            pw = page.rect.width
-            ph = page.rect.height
+            with PdfRenderDocument(self._path) as doc:
+                if doc.page_count <= 0:
+                    self.error.emit(self._path, "El PDF no tiene paginas.")
+                    return
+                page_count = doc.page_count
+                page = doc.page_info(0)
+                pw, ph = page.width_pt, page.height_pt
 
-            # Thumbnail 0.4× (~30 ms)
-            mat = fitz.Matrix(0.4, 0.4)
-            pm = page.get_pixmap(matrix=mat, alpha=False)
-            img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
-            data = img.tobytes("raw", "RGBA")
-            qimg_thumb = QImage(
-                data, img.width, img.height, QImage.Format.Format_RGBA8888
-            ).copy()
+                # Thumbnail 0.4× (~30 ms)
+                qimg_thumb = rendered_page_to_qimage(
+                    doc.render_page(0, scale=0.4)
+                )
 
-            # Preview 1.5× (puede ser 200–500 ms en PDFs complejos)
-            mat_prev = fitz.Matrix(1.5, 1.5)
-            pm_prev = page.get_pixmap(matrix=mat_prev, alpha=False)
-            img_prev = Image.frombytes(
-                "RGB", (pm_prev.width, pm_prev.height), pm_prev.samples
-            ).convert("RGBA")
-            data_prev = img_prev.tobytes("raw", "RGBA")
-            qimg_prev = QImage(
-                data_prev, img_prev.width, img_prev.height, QImage.Format.Format_RGBA8888
-            ).copy()
+                # Preview 1.5× (puede ser 200–500 ms en PDFs complejos)
+                qimg_prev = rendered_page_to_qimage(
+                    doc.render_page(0, scale=1.5)
+                )
 
         except Exception as e:
             self.error.emit(self._path, str(e))
             return
-        finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
 
         # detect_margins abre el PDF de nuevo (rápido pero bloquea si se hace en GUI)
         margins = detect_margins(self._path)
@@ -1280,8 +1259,7 @@ class MembretadoWindow(PipelineWindow):
     def _page_count_for_doc(self, path: str) -> int:
         if path not in self._page_count_cache:
             try:
-                with fitz.open(path) as doc:
-                    self._page_count_cache[path] = int(doc.page_count)
+                self._page_count_cache[path] = pdf_page_count(path)
             except Exception:
                 self._page_count_cache[path] = 0
         return self._page_count_cache[path]

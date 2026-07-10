@@ -6,7 +6,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
-import fitz
 from PySide6.QtCore import Qt, QEvent, QPoint, QRect, QSize, QTimer, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent,
@@ -19,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.page_organizer_engine import PageRef
+from core.pdf_backend import PdfRenderDocument
 from core.media_conversion import DOCUMENT_IMPORT_EXTENSIONS, DOCUMENT_IMPORT_FILTER
 from ui.common.file_dialogs import get_open_file_names
 from ui.common.icons import set_button_icon
@@ -556,8 +556,7 @@ class DocLane(QFrame):
             self._record_before_mutation()
         inserted_ids: list[str] = []
         try:
-            doc = fitz.open(path)
-            try:
+            with PdfRenderDocument(path) as doc:
                 insert_at = self._normalized_insert_row(at_row)
                 new_items: list[QListWidgetItem] = []
                 for idx in range(doc.page_count):
@@ -585,8 +584,6 @@ class DocLane(QFrame):
                         item.setSelected(True)
                     self._list.setCurrentItem(new_items[-1])
                     self._flash_items(new_items, "paste")
-            finally:
-                doc.close()
         except Exception:
             pass
         self._update_count()

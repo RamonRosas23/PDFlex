@@ -1,15 +1,13 @@
 """Motor de separación de PDFs.
 
 Extrae tramos de páginas de un PDF fuente y los guarda como archivos
-independientes, usando fitz.Document.insert_pdf para copiar las páginas
-sin reprocesarlas (preserva calidad, fuentes y metadatos).
+independientes mediante QPDF, sin reprocesar su contenido y preservando
+calidad, fuentes, anotaciones y formularios AcroForm.
 
 Flujo:
     SplitterEngine.run_job(SplitterJob, progress)
       → para cada SplitRange:
-           new_doc = fitz.open()
-           new_doc.insert_pdf(src, from_page=r.start-1, to_page=r.end-1)
-           new_doc.save(output_path)
+           extract_pages(src, range(r.start-1, r.end), output_path)
       → retorna SplitterJobResult con una SplitResult por tramo
 """
 from __future__ import annotations
@@ -17,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
-import fitz
+from core.pdf_backend import PdfCancelledError, extract_pages, pdf_page_count
 
 from .split_ranges import SplitRange
 from .output_paths import unique_output_path
@@ -80,9 +78,15 @@ class SplitterEngine:
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> SplitterJobResult:
         try:
-            src = fitz.open(job.pdf_path)
+            source_page_count = pdf_page_count(job.pdf_path)
         except Exception as e:
             return SplitterJobResult(job=job, success=False, error=str(e))
+        if source_page_count <= 0:
+            return SplitterJobResult(
+                job=job,
+                success=False,
+                error="El PDF no tiene páginas.",
+            )
 
         base = job.base_name or Path(job.pdf_path).stem
         out_dir = Path(job.output_dir)
@@ -116,21 +120,20 @@ class SplitterEngine:
                 )
 
                 try:
-                    new_doc = fitz.open()
-                    # from_page / to_page son 0-based en PyMuPDF
-                    new_doc.insert_pdf(
-                        src,
-                        from_page=rng.start - 1,
-                        to_page=rng.end - 1,
+                    report = extract_pages(
+                        job.pdf_path,
+                        range(rng.start - 1, rng.end),
+                        out_path,
+                        should_cancel=should_cancel,
                     )
-                    new_doc.save(str(out_path), garbage=4, deflate=True)
-                    new_doc.close()
                     split_results.append(SplitResult(
                         range=rng,
                         output_path=str(out_path),
                         success=True,
-                        page_count=rng.page_count,
+                        page_count=report.page_count,
                     ))
+                except PdfCancelledError:
+                    raise _CancelledError()
                 except Exception as e:
                     split_results.append(SplitResult(
                         range=rng,
@@ -149,11 +152,6 @@ class SplitterEngine:
                 success=False,
                 error="Operación cancelada.",
             ))
-        finally:
-            try:
-                src.close()
-            except Exception:
-                pass
 
         ok = sum(1 for r in split_results if r.success)
         return SplitterJobResult(

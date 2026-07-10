@@ -1,4 +1,4 @@
-"""Hilo de render dedicado: ÚNICO dueño del fitz.Document de lectura (spec §5.3).
+"""Hilo dedicado para renderizar páginas mediante el backend PDFium.
 
 La UI pide (página, escala) y recibe pixmap_ready(page, scale, generation, QImage).
 bump_generation() invalida lo encolado (cambio de zoom): los trabajos con
@@ -13,9 +13,10 @@ from __future__ import annotations
 import queue
 import threading
 
-import fitz
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QImage
+
+from core.pdf_backend import PdfRenderDocument
 
 from .pixmap_cache import ByteBudgetLRU
 
@@ -64,10 +65,9 @@ class RenderService(QObject):
         """Bloquea hasta vaciar la cola (solo para tests)."""
         self._queue.join()
 
-    # ── Hilo de render (único dueño del fitz.Document) ──────────────
+    # ── Hilo de render ──────────────────────────────────────────────
     def _run(self) -> None:
-        doc = fitz.open(self._path)
-        try:
+        with PdfRenderDocument(self._path) as doc:
             while True:
                 item = self._queue.get()
                 if item is _SENTINEL:
@@ -79,10 +79,14 @@ class RenderService(QObject):
                         current = self._generation
                     if gen < current:
                         continue  # obsoleto: descartar sin renderizar
-                    pix = doc[page_idx].get_pixmap(matrix=fitz.Matrix(scale, scale),
-                                                   alpha=False)
-                    img = QImage(pix.samples, pix.width, pix.height,
-                                 pix.stride, QImage.Format.Format_RGB888).copy()
+                    rendered = doc.render_page(page_idx, scale=scale)
+                    img = QImage(
+                        rendered.data,
+                        rendered.width,
+                        rendered.height,
+                        rendered.stride,
+                        QImage.Format.Format_RGB888,
+                    ).copy()
                     with self._lock:
                         self._cache.put((page_idx, round(scale, 3)), img,
                                         img.sizeInBytes())
@@ -91,5 +95,3 @@ class RenderService(QObject):
                     self.render_failed.emit(page_idx, str(exc))
                 finally:
                     self._queue.task_done()
-        finally:
-            doc.close()

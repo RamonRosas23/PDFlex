@@ -11,10 +11,8 @@ from __future__ import annotations
 from typing import List, Optional
 from pathlib import Path
 
-import fitz
-from PIL import Image
 from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QPixmap, QImage, QIcon, QColor, QBrush
+from PySide6.QtGui import QPixmap, QIcon, QColor, QBrush
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
     QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy, QSpinBox,
@@ -22,20 +20,14 @@ from PySide6.QtWidgets import (
 
 from ui.styles import COLORS as _COLORS
 
+from core.pdf_backend import PdfRenderDocument
 from core.signature_engine import JobResult
 from ui.common.open_utils import open_file, open_folder
 from ui.common.save_utils import save_file_as, save_files_as_batch
 from ui.common.result_ui import ElidedLabel, configure_result_list
 from ui.common.icons import icon, set_button_icon, set_compact_icon_button
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog
-
-
-def _pil_to_qpixmap(img: Image.Image) -> QPixmap:
-    if img.mode != "RGBA":
-        img = img.convert("RGBA")
-    data = img.tobytes("raw", "RGBA")
-    qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-    return QPixmap.fromImage(qimg.copy())
+from ui.common.pdf_render_utils import rendered_page_to_qpixmap
 
 
 # Niveles de zoom (multiplicador sobre el DPI base "fit width")
@@ -51,7 +43,7 @@ class ResultsViewer(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._results: List[JobResult] = []
-        self._current_doc: Optional[fitz.Document] = None
+        self._current_doc: Optional[PdfRenderDocument] = None
         self._current_result: Optional[JobResult] = None
         self._current_page: int = 0
         self._zoom_index: int = 2  # 1.00 = ajustado al ancho
@@ -372,7 +364,7 @@ class ResultsViewer(QWidget):
 
         self._current_page = 0  # reset antes de abrir, evita crash por resizeEvent con índice antiguo
         try:
-            self._current_doc = fitz.open(result.output_path)
+            self._current_doc = PdfRenderDocument(result.output_path)
         except Exception as e:
             self.meta_label.setText(f"No se pudo abrir resultado: {e}")
             return
@@ -460,8 +452,8 @@ class ResultsViewer(QWidget):
         """DPI adaptativo para miniaturas: lado largo ≤ _THUMB_TARGET_PX."""
         if self._current_doc is None:
             return 12.0
-        page = self._current_doc[page_idx]
-        page_long = max(1.0, page.rect.width, page.rect.height)
+        page = self._current_doc.page_info(page_idx)
+        page_long = max(1.0, page.width_pt, page.height_pt)
         return max(3.0, min(_THUMB_TARGET_PX * 72.0 / page_long, 32.0))
 
     def _compute_target_dpi(self) -> float:
@@ -477,9 +469,9 @@ class ResultsViewer(QWidget):
         if self._current_page >= self._current_doc.page_count:
             return 96.0
 
-        page = self._current_doc[self._current_page]
-        pw_pt = max(1.0, page.rect.width)
-        ph_pt = max(1.0, page.rect.height)
+        page = self._current_doc.page_info(self._current_page)
+        pw_pt = max(1.0, page.width_pt)
+        ph_pt = max(1.0, page.height_pt)
 
         vp_w = max(200, self.scroll.viewport().width() - 24)
         vp_h = max(200, self.scroll.viewport().height() - 24)
@@ -513,11 +505,8 @@ class ResultsViewer(QWidget):
         self._update_zoom_label()
 
     def _render_page_pixmap(self, page_index: int, dpi: float) -> QPixmap:
-        page = self._current_doc[page_index]
-        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pm = page.get_pixmap(matrix=mat, alpha=False)
-        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples)
-        return _pil_to_qpixmap(img)
+        rendered = self._current_doc.render_page(page_index, scale=dpi / 72.0)
+        return rendered_page_to_qpixmap(rendered)
 
     def _update_zoom_label(self) -> None:
         zoom = ZOOM_LEVELS[self._zoom_index]

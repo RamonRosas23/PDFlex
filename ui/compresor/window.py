@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 
 from core.output_naming import unique_output_path_for_source
 from core.output_paths import make_run_dir
+from core.pdf_backend import pdf_page_count
 from core.pdf_compress_engine import (
     PROFILES,
     CompressJob,
@@ -1691,12 +1692,7 @@ def _page_rules_error_for_request(request: _CompressRunRequest) -> str:
 
 def _pdf_page_count(path: str) -> int:
     try:
-        import fitz
-        doc = fitz.open(path)
-        try:
-            return int(doc.page_count)
-        finally:
-            doc.close()
+        return pdf_page_count(path)
     except Exception:
         return 0
 

@@ -7,13 +7,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
 from PySide6.QtCore import Qt, QObject, QThread, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QComboBox, QCheckBox, QGridLayout, QLineEdit, QFrame, QScrollArea,
 )
+from core.pdf_backend import PdfRenderDocument, pdf_page_count
 
 from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
@@ -351,9 +351,7 @@ class PdfToImgsWindow(PipelineWindow):
         for p in paths:
             if p not in self._pdf_page_cache:
                 try:
-                    doc = fitz.open(p)
-                    self._pdf_page_cache[p] = doc.page_count
-                    doc.close()
+                    self._pdf_page_cache[p] = pdf_page_count(p)
                 except Exception:
                     self._pdf_page_cache[p] = 0
 
@@ -449,7 +447,7 @@ class PdfToImgsWindow(PipelineWindow):
             else:
                 doc = None
                 try:
-                    doc = fitz.open(str(path))
+                    doc = PdfRenderDocument(path)
                     page_count = doc.page_count
                     self._pdf_page_cache[raw_path] = page_count
                 except Exception as exc:

@@ -5,6 +5,9 @@ from typing import Optional
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBrush
 
+from core.pdf_backend import PdfRenderDocument
+from ui.common.pdf_render_utils import rendered_page_to_qimage
+
 
 def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QImage]:
     """Renderiza la primera página del PDF como thumbnail.
@@ -12,44 +15,16 @@ def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QImage]:
     Retorna None si el archivo no se puede abrir o no es un PDF válido.
     Retorna QImage (seguro en cualquier hilo) — convertir a QPixmap en el GUI thread.
     """
-    doc = None
     try:
-        import fitz
+        with PdfRenderDocument(pdf_path) as doc:
+            if doc.page_count <= 0:
+                return None
+            page_width = max(1.0, doc.page_info(0).width_pt)
+            scale = max(0.05, width / page_width)
+            rendered = rendered_page_to_qimage(
+                doc.render_page(0, scale=scale, include_annotations=True)
+            )
 
-        doc = fitz.open(pdf_path)
-        if doc.page_count <= 0:
-            return None
-        if doc.is_encrypted and not doc.authenticate(""):
-            return None
-
-        page = doc[0]
-        page_width = max(1.0, float(page.rect.width))
-        scale = max(0.05, width / page_width)
-        mat = fitz.Matrix(scale, scale)
-
-        # Render en RGB con alpha para capturar correctamente PDFs con fondos
-        # transparentes; luego se compone sobre blanco para evitar miniaturas
-        # negras sobre el tema oscuro de la app.
-        pm = page.get_pixmap(
-            matrix=mat,
-            colorspace=fitz.csRGB,
-            alpha=True,
-            annots=True,
-        )
-        if pm.width <= 0 or pm.height <= 0:
-            return None
-
-        qimg = QImage(
-            pm.samples,
-            pm.width,
-            pm.height,
-            pm.stride,
-            QImage.Format.Format_RGBA8888,
-        )
-        if qimg.isNull():
-            return None
-
-        rendered = qimg.copy()
         canvas = QImage(
             rendered.width(),
             rendered.height(),
@@ -67,12 +42,6 @@ def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QImage]:
         return canvas
     except Exception:
         return None
-    finally:
-        if doc is not None:
-            try:
-                doc.close()
-            except Exception:
-                pass
 
 
 def make_placeholder_pixmap(width: int, height: int) -> QPixmap:

@@ -9,7 +9,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-import fitz
+from core.pdf_backend import PdfRenderDocument
 
 
 MEMBRETE_LIBRARY_ENV = "PDFLEX_MEMBRETE_LIBRARY_DIR"
@@ -169,16 +169,11 @@ def _safe_config(value) -> dict:
 
 
 def _pdf_metadata(path: Path) -> tuple[int, float, float]:
-    doc = fitz.open(str(path))
-    try:
-        if doc.is_encrypted:
-            raise RuntimeError("El PDF esta protegido o cifrado.")
+    with PdfRenderDocument(path) as doc:
         if doc.page_count <= 0:
             raise RuntimeError("El PDF no tiene paginas.")
-        page = doc[0]
-        return int(doc.page_count), float(page.rect.width), float(page.rect.height)
-    finally:
-        doc.close()
+        page = doc.page_info(0)
+        return doc.page_count, page.width_pt, page.height_pt
 
 
 def _file_digest(path: Path) -> str:

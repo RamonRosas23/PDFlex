@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from typing import Optional
 
-import fitz
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPixmap
+from PySide6.QtGui import QBrush, QColor, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
+
+from core.pdf_backend import PdfRenderDocument
+from ui.common.pdf_render_utils import rendered_page_to_qpixmap
 
 from core.split_ranges import SplitRange
 from ui.common.icons import icon, set_button_icon
@@ -33,7 +35,7 @@ class SplitPreviewPanel(QFrame):
         self.setMinimumWidth(320)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._pdf_path = ""
-        self._doc: Optional[fitz.Document] = None
+        self._doc: Optional[PdfRenderDocument] = None
         self._total_pages = 0
         self._current_page = 0  # 0-based
         self._ranges: list[SplitRange] = []
@@ -211,7 +213,7 @@ class SplitPreviewPanel(QFrame):
         self._pdf_path = pdf_path
         self._total_pages = max(0, int(total_pages))
         try:
-            self._doc = fitz.open(pdf_path)
+            self._doc = PdfRenderDocument(pdf_path)
         except Exception as exc:
             self._canvas.setText(f"No se pudo previsualizar: {exc}")
             self._sync_controls()
@@ -389,18 +391,18 @@ class SplitPreviewPanel(QFrame):
     def _thumb_dpi_for_page(self, page_idx: int) -> float:
         if self._doc is None:
             return 12.0
-        page = self._doc[page_idx]
-        long_side = max(1.0, page.rect.width, page.rect.height)
+        page = self._doc.page_info(page_idx)
+        long_side = max(1.0, page.width_pt, page.height_pt)
         return max(3.0, min(_THUMB_TARGET_PX * 72.0 / long_side, 30.0))
 
     def _compute_dpi(self) -> float:
         if self._doc is None:
             return 96.0
-        page = self._doc[self._current_page]
+        page = self._doc.page_info(self._current_page)
         vp_w = max(220, self._scroll.viewport().width() - 24)
         vp_h = max(220, self._scroll.viewport().height() - 24)
-        page_w = max(1.0, page.rect.width)
-        page_h = max(1.0, page.rect.height)
+        page_w = max(1.0, page.width_pt)
+        page_h = max(1.0, page.height_pt)
         dpi_w = vp_w / page_w * 72.0
         dpi_h = vp_h / page_h * 72.0
         base = dpi_w if self._fit_mode == "width" else min(dpi_w, dpi_h)
@@ -419,17 +421,8 @@ class SplitPreviewPanel(QFrame):
         self._refresh_page_status()
 
     def _render_page(self, page_index: int, dpi: float) -> QPixmap:
-        page = self._doc[page_index]
-        matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
-        qimg = QImage(
-            pix.samples,
-            pix.width,
-            pix.height,
-            pix.stride,
-            QImage.Format.Format_RGB888,
-        )
-        return QPixmap.fromImage(qimg.copy())
+        rendered = self._doc.render_page(page_index, scale=dpi / 72.0)
+        return rendered_page_to_qpixmap(rendered)
 
     def _on_thumb_selected(self) -> None:
         row = self._page_list.currentRow()

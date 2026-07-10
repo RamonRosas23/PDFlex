@@ -27,7 +27,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-import fitz
 from PIL import Image
 from PySide6.QtCore import (
     Qt, QSize, Signal, QThread, QObject, QUrl, QStandardPaths, QTimer,
@@ -53,6 +52,8 @@ from core.signature_engine import (
     plan_job_in_process,
     run_job_in_process,
 )
+
+from core.pdf_backend import PdfRenderDocument, pdf_page_count
 from core.signature_review import (
     ReviewDocument,
     ReviewSignatureInstance,
@@ -381,8 +382,7 @@ class SignWorker(QObject):
                 estimated_pages += len(job.pages)
                 continue
             try:
-                with fitz.open(job.pdf_path) as doc:
-                    estimated_pages += doc.page_count
+                estimated_pages += pdf_page_count(job.pdf_path)
             except Exception:
                 estimated_pages += 1
 
@@ -1730,8 +1730,7 @@ class FirmadorWindow(PipelineWindow):
     def _page_count_for_doc(self, path: str) -> int:
         if path not in self._page_count_cache:
             try:
-                with fitz.open(path) as doc:
-                    self._page_count_cache[path] = doc.page_count
+                self._page_count_cache[path] = pdf_page_count(path)
             except Exception:
                 self._page_count_cache[path] = 0
         return self._page_count_cache[path]
@@ -3485,10 +3484,9 @@ class FirmadorWindow(PipelineWindow):
                 page_w_pt, page_h_pt = self._doc_page_sizes[pdf_path]
             else:
                 try:
-                    _doc = fitz.open(pdf_path)
-                    _page = _doc[0]
-                    page_w_pt, page_h_pt = _page.rect.width, _page.rect.height
-                    _doc.close()
+                    with PdfRenderDocument(pdf_path) as document:
+                        page = document.page_info(0)
+                        page_w_pt, page_h_pt = page.width_pt, page.height_pt
                 except Exception:
                     page_w_pt, page_h_pt = 595.0, 842.0
 
@@ -3800,8 +3798,7 @@ class FirmadorWindow(PipelineWindow):
             else max(0, self._review_page_list.currentRow())
         )
         try:
-            with fitz.open(review.source_path) as doc:
-                page_count = doc.page_count
+            page_count = pdf_page_count(review.source_path)
         except Exception:
             page_count = max((inst.page_index for inst in review.instances), default=-1) + 1
 

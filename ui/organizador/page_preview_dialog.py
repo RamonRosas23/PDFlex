@@ -4,13 +4,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-import fitz
 from PySide6.QtCore import Qt, QPoint, Signal
-from PySide6.QtGui import QImage, QKeyEvent, QPixmap, QWheelEvent
+from PySide6.QtGui import QKeyEvent, QPixmap, QWheelEvent
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
+
+from core.pdf_backend import PageInfo, PdfRenderDocument
+from ui.common.pdf_render_utils import rendered_page_to_qpixmap
 
 from core.page_organizer_engine import PageRef
 from ui.common.icons import app_qicon, set_button_icon
@@ -37,7 +39,7 @@ class OrganizerPagePreviewDialog(QDialog):
         super().__init__(parent)
         self._refs = list(refs)
         self._current_index = max(0, min(current_index, len(self._refs) - 1))
-        self._current_doc: Optional[fitz.Document] = None
+        self._current_doc: Optional[PdfRenderDocument] = None
         self._current_doc_path: str = ""
         self._zoom_index = _FIT_ZOOM_IDX
         self._fit_mode = "page"
@@ -272,12 +274,12 @@ class OrganizerPagePreviewDialog(QDialog):
             return None
         return self._refs[self._current_index]
 
-    def _ensure_doc(self, path: str) -> Optional[fitz.Document]:
+    def _ensure_doc(self, path: str) -> Optional[PdfRenderDocument]:
         if self._current_doc is not None and self._current_doc_path == path:
             return self._current_doc
         self._close_doc()
         try:
-            self._current_doc = fitz.open(path)
+            self._current_doc = PdfRenderDocument(path)
             self._current_doc_path = path
         except Exception as exc:
             self._show_error(f"No se pudo abrir: {exc}")
@@ -293,14 +295,14 @@ class OrganizerPagePreviewDialog(QDialog):
         self._current_doc = None
         self._current_doc_path = ""
 
-    def _display_size_for(self, page: fitz.Page, rotation_deg: int) -> tuple[float, float]:
-        width = max(1.0, page.rect.width)
-        height = max(1.0, page.rect.height)
+    def _display_size_for(self, page: PageInfo, rotation_deg: int) -> tuple[float, float]:
+        width = max(1.0, page.width_pt)
+        height = max(1.0, page.height_pt)
         if rotation_deg % 180:
             return height, width
         return width, height
 
-    def _compute_dpi(self, page: fitz.Page, rotation_deg: int) -> float:
+    def _compute_dpi(self, page: PageInfo, rotation_deg: int) -> float:
         vp_w = max(220, self._scroll.viewport().width() - 28)
         vp_h = max(220, self._scroll.viewport().height() - 28)
         page_w, page_h = self._display_size_for(page, rotation_deg)
@@ -318,19 +320,12 @@ class OrganizerPagePreviewDialog(QDialog):
             self._show_error("Pagina fuera de rango.")
             return QPixmap()
 
-        page = doc[ref.page_index]
-        matrix = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        if ref.rotation_deg:
-            matrix = matrix.prerotate(ref.rotation_deg)
-        pix = page.get_pixmap(matrix=matrix, alpha=False)
-        qimg = QImage(
-            pix.samples,
-            pix.width,
-            pix.height,
-            pix.stride,
-            QImage.Format.Format_RGB888,
+        rendered = doc.render_page(
+            ref.page_index,
+            scale=dpi / 72.0,
+            rotation=ref.rotation_deg,
         )
-        return QPixmap.fromImage(qimg.copy())
+        return rendered_page_to_qpixmap(rendered)
 
     def _render_current(self) -> None:
         ref = self._current_ref()
@@ -344,7 +339,7 @@ class OrganizerPagePreviewDialog(QDialog):
             self._show_error("Pagina fuera de rango.")
             return
 
-        page = doc[ref.page_index]
+        page = doc.page_info(ref.page_index)
         dpi = self._compute_dpi(page, ref.rotation_deg)
         pix = self._render_ref(ref, dpi)
         if pix.isNull():

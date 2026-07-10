@@ -4,17 +4,16 @@ Exporta cada página de un PDF como imagen de alta resolución (PNG, JPG o WebP)
 También soporta modo "imagen panorámica vertical": concatena todas las páginas
 en una sola imagen alta.
 
-La renderización usa fitz.Page.get_pixmap() sin rasterización intermedia,
-conservando la calidad máxima posible al DPI configurado.
+La renderización usa PDFium directamente a la resolución configurada.
 """
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Literal, Optional
 
-import fitz
 from PIL import Image
 
+from core.pdf_backend import PdfRenderDocument
 from .output_naming import output_stem_for_source
 
 
@@ -106,7 +105,7 @@ class PdfToImagesEngine:
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> PdfToImagesJobResult:
         try:
-            doc = fitz.open(job.pdf_path)
+            doc = PdfRenderDocument(job.pdf_path)
         except Exception as e:
             return PdfToImagesJobResult(job=job, success=False, error=str(e))
 
@@ -119,7 +118,7 @@ class PdfToImagesEngine:
         out_dir = Path(job.output_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
 
-        mat = fitz.Matrix(cfg.dpi / 72.0, cfg.dpi / 72.0)
+        scale = cfg.dpi / 72.0
         image_results: List[ImageResult] = []
 
         try:
@@ -129,7 +128,7 @@ class PdfToImagesEngine:
                     self._export_panoramic(
                         doc,
                         page_indexes,
-                        mat,
+                        scale,
                         cfg,
                         out_dir,
                         base,
@@ -141,7 +140,7 @@ class PdfToImagesEngine:
                     if should_cancel and should_cancel():
                         break
                     image_results.append(
-                        self._export_page(doc, page_idx, mat, cfg, out_dir, base)
+                        self._export_page(doc, page_idx, scale, cfg, out_dir, base)
                     )
         except Exception as e:
             return PdfToImagesJobResult(job=job, success=False, error=str(e))
@@ -158,9 +157,9 @@ class PdfToImagesEngine:
 
     def _export_page(
         self,
-        doc: fitz.Document,
+        doc: PdfRenderDocument,
         page_idx: int,
-        mat: fitz.Matrix,
+        scale: float,
         cfg: PdfToImagesConfig,
         out_dir: Path,
         base: str,
@@ -168,8 +167,12 @@ class PdfToImagesEngine:
     ) -> ImageResult:
         out_path = out_dir / f"{base}_p{page_idx + 1:03d}.{cfg.format}"
         try:
-            pm = doc[page_idx].get_pixmap(matrix=mat, alpha=(cfg.format == "png"))
-            img = self._pixmap_to_pil(pm, cfg.format)
+            rendered = doc.render_page(
+                page_idx,
+                scale=scale,
+                transparent_background=(cfg.format == "png"),
+            )
+            img = rendered.to_pil()
             self._save_image(img, out_path, cfg)
             return ImageResult(output_path=str(out_path), success=True, page_index=page_idx)
         except Exception as e:
@@ -177,9 +180,9 @@ class PdfToImagesEngine:
 
     def _export_panoramic(
         self,
-        doc: fitz.Document,
+        doc: PdfRenderDocument,
         page_indexes: List[int],
-        mat: fitz.Matrix,
+        scale: float,
         cfg: PdfToImagesConfig,
         out_dir: Path,
         base: str,
@@ -196,8 +199,9 @@ class PdfToImagesEngine:
                         error="Operación cancelada.",
                         page_index=-1,
                     )
-                pm = doc[page_idx].get_pixmap(matrix=mat, alpha=False)
-                pages_pil.append(self._pixmap_to_pil(pm, "png"))
+                pages_pil.append(
+                    doc.render_page(page_idx, scale=scale).to_pil()
+                )
 
             total_h = sum(p.height for p in pages_pil)
             max_w = max(p.width for p in pages_pil)
@@ -212,16 +216,6 @@ class PdfToImagesEngine:
             return ImageResult(output_path=str(out_path), success=True, page_index=-1)
         except Exception as e:
             return ImageResult(output_path="", success=False, error=str(e), page_index=-1)
-
-    @staticmethod
-    def _pixmap_to_pil(pm: fitz.Pixmap, fmt: str) -> Image.Image:
-        mode = "RGBA" if pm.alpha else "RGB"
-        img = Image.frombytes(mode, (pm.width, pm.height), pm.samples)
-        if fmt != "png" and mode == "RGBA":
-            bg = Image.new("RGB", img.size, (255, 255, 255))
-            bg.paste(img, mask=img.split()[3])
-            return bg
-        return img
 
     @staticmethod
     def _save_image(img: Image.Image, path: Path, cfg: PdfToImagesConfig) -> None:

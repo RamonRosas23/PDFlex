@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui.common.thumb_utils import make_pdf_thumb, ThumbnailLoader, make_placeholder_pixmap
+from core.pdf_backend import pdf_page_count
 from ui.common.clipboard_utils import clipboard_file_paths, copy_files_to_clipboard
 from ui.common.icons import icon_pixmap, make_icon_label, set_button_icon
 from core.media_conversion import (
@@ -1139,12 +1140,6 @@ class DocumentsCard(QFrame):
 
 def _pdf_page_count(path: str) -> int:
     try:
-        import fitz
-
-        doc = fitz.open(path)
-        try:
-            return int(doc.page_count)
-        finally:
-            doc.close()
+        return pdf_page_count(path)
     except Exception:
         return 0

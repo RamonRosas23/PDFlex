@@ -6,10 +6,11 @@ from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Optional
 
-import fitz
-from PIL import Image
 from PySide6.QtCore import QObject, QThread, Signal
 from PySide6.QtGui import QImage
+
+from core.pdf_backend import PdfRenderDocument
+from ui.common.pdf_render_utils import rendered_page_to_qimage
 
 
 @dataclass(frozen=True)
@@ -60,21 +61,16 @@ def render_page_thumb(
     QImage is thread-safe; callers in the GUI thread must convert to QPixmap.
     """
     try:
-        doc = fitz.open(source_path)
-        try:
-            page = doc[page_index]
-            width = max(1.0, page.rect.width)
+        with PdfRenderDocument(source_path) as doc:
+            page = doc.page_info(page_index)
+            width = max(1.0, page.width_pt)
             scale = target_w / width
-            mat = fitz.Matrix(scale, scale)
-            if rotation_deg:
-                mat = mat.prerotate(rotation_deg)
-            pix = page.get_pixmap(matrix=mat, alpha=False)
-            img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
-            data = img.tobytes("raw", "RGBA")
-            qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-            return qimg.copy()  # .copy() owns its data after buffer goes out of scope
-        finally:
-            doc.close()
+            rendered = doc.render_page(
+                page_index,
+                scale=scale,
+                rotation=rotation_deg,
+            )
+            return rendered_page_to_qimage(rendered)
     except Exception:
         return None
 

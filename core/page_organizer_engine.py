@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List
 
-import fitz
+from core.pdf_backend import (
+    PdfCancelledError,
+    SourcePage,
+    assemble_pages,
+)
 
 
 @dataclass(frozen=True)
@@ -69,75 +73,49 @@ class PageOrganizerEngine:
         output_path = Path(job.output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        source_docs: dict[str, fitz.Document] = {}
-        out_doc: fitz.Document | None = None
         total = len(job.pages)
+        source_pages = [
+            SourcePage(
+                path=page.source_path,
+                index=page.page_index,
+                rotation=_normalize_rotation(page.rotation_deg),
+            )
+            for page in job.pages
+        ]
 
         try:
-            out_doc = fitz.open()
-            for index, page_ref in enumerate(job.pages):
-                if should_cancel and should_cancel():
-                    return OrganizerResult(
-                        job=job,
-                        success=False,
-                        error="Operacion cancelada.",
-                    )
-
-                source_path = str(Path(page_ref.source_path).resolve())
-                src = source_docs.get(source_path)
-                if src is None:
-                    src = fitz.open(source_path)
-                    source_docs[source_path] = src
-
-                if src.page_count <= 0:
-                    raise ValueError(f"{Path(source_path).name} no tiene paginas.")
-                if page_ref.page_index < 0 or page_ref.page_index >= src.page_count:
-                    raise IndexError(
-                        f"Pagina {page_ref.page_index + 1} fuera de rango en "
-                        f"{Path(source_path).name}."
-                    )
-
+            def on_page_copied(index: int, _total: int, page_ref: SourcePage) -> None:
                 if progress:
                     progress(
                         index,
                         total,
-                        f"Copiando pagina {page_ref.page_index + 1} de {Path(source_path).name}...",
+                        f"Copiando pagina {page_ref.index + 1} de {Path(page_ref.path).name}...",
                     )
 
-                out_doc.insert_pdf(
-                    src,
-                    from_page=page_ref.page_index,
-                    to_page=page_ref.page_index,
-                )
-                inserted = out_doc[out_doc.page_count - 1]
-                rotation = _normalize_rotation(page_ref.rotation_deg)
-                if rotation:
-                    inserted.set_rotation((inserted.rotation + rotation) % 360)
+            report = assemble_pages(
+                source_pages,
+                output_path,
+                progress=on_page_copied,
+                should_cancel=should_cancel,
+            )
 
             if progress:
                 progress(total, total, "Guardando PDF organizado...")
-
-            out_doc.save(str(output_path), garbage=4, deflate=True)
             return OrganizerResult(
                 job=job,
                 output_path=str(output_path),
                 success=True,
-                total_pages=out_doc.page_count,
-                source_count=len(source_docs),
+                total_pages=report.page_count,
+                source_count=report.source_count,
+            )
+        except PdfCancelledError:
+            return OrganizerResult(
+                job=job,
+                success=False,
+                error="Operacion cancelada.",
             )
         except Exception as exc:
             return OrganizerResult(job=job, success=False, error=str(exc))
-        finally:
-            if out_doc is not None:
-                try:
-                    out_doc.close()
-                except Exception:
-                    pass
-            for doc in source_docs.values():
-                try:
-                    doc.close()
-                except Exception:
-                    pass
 
     def run_multi_job(
         self,
@@ -187,5 +165,5 @@ class PageOrganizerEngine:
 
 
 def _normalize_rotation(value: int) -> int:
-    """Return a PyMuPDF-compatible rotation in 90-degree steps."""
+    """Return a clockwise rotation in 90-degree steps."""
     return (int(round(value / 90.0)) * 90) % 360

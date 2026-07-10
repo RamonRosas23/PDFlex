@@ -18,13 +18,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 
-import fitz
-from PIL import Image
 from PySide6.QtCore import (
     Qt, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer,
 )
 from PySide6.QtGui import (
-    QIcon, QPixmap, QImage, QKeyEvent, QWheelEvent, QPainter, QColor,
+    QIcon, QPixmap, QKeyEvent, QWheelEvent, QPainter, QColor,
 )
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
@@ -33,6 +31,8 @@ from PySide6.QtWidgets import (
 )
 
 from ui.common.icons import set_button_icon
+from core.pdf_backend import PdfRenderDocument
+from ui.common.pdf_render_utils import rendered_page_to_qpixmap
 from ui.common.result_ui import ElidedLabel
 from ui.styles import COLORS
 
@@ -45,14 +45,6 @@ _THUMB_TARGET_PX = 140   # lado largo objetivo de miniaturas en px
 _SIDEBAR_W = 120
 _TOOLBAR_H = 46
 _STRIP_H = 52
-
-
-def _pil_to_qpixmap(img: Image.Image) -> QPixmap:
-    if img.mode != "RGBA":
-        img = img.convert("RGBA")
-    data = img.tobytes("raw", "RGBA")
-    qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-    return QPixmap.fromImage(qimg.copy())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -69,7 +61,7 @@ class PdfFullViewDialog(QDialog):
         super().__init__(parent)
         self._results = list(results)
         self._current_doc_idx = max(0, min(current_index, len(results) - 1))
-        self._current_doc: Optional[fitz.Document] = None
+        self._current_doc: Optional[PdfRenderDocument] = None
         self._current_page: int = 0
         self._zoom_index: int = _FIT_ZOOM_IDX
         self._fit_mode: str = "width"
@@ -551,16 +543,15 @@ class PdfFullViewDialog(QDialog):
             return
 
         try:
-            self._current_doc = fitz.open(out_path)
-            if self._current_doc.needs_pass:
-                pwd = (
-                    getattr(result, "user_password", "")
-                    or getattr(result, "open_password", "")
-                    or getattr(getattr(result, "job", None), "open_password", "")
-                )
-                if not pwd or not self._current_doc.authenticate(pwd):
-                    self._show_canvas_error("El PDF requiere contraseña para abrirse")
-                    return
+            pwd = (
+                getattr(result, "user_password", "")
+                or getattr(result, "open_password", "")
+                or getattr(getattr(result, "job", None), "open_password", "")
+            )
+            self._current_doc = PdfRenderDocument(
+                out_path,
+                password=pwd or None,
+            )
         except Exception as exc:
             self._show_canvas_error(f"No se pudo abrir: {exc}")
             return
@@ -594,7 +585,7 @@ class PdfFullViewDialog(QDialog):
             self._page_list.clear()
             for i in range(self._current_doc.page_count):
                 dpi = self._thumb_dpi(i)
-                pix = self._render_fitz(i, dpi)
+                pix = self._render_pdf(i, dpi)
                 item = QListWidgetItem(QIcon(pix), str(i + 1))
                 item.setToolTip(f"Página {i + 1}")
                 self._page_list.addItem(item)
@@ -618,8 +609,8 @@ class PdfFullViewDialog(QDialog):
     def _thumb_dpi(self, page_idx: int) -> float:
         if self._current_doc is None:
             return 12.0
-        page = self._current_doc[page_idx]
-        long_side = max(1.0, page.rect.width, page.rect.height)
+        page = self._current_doc.page_info(page_idx)
+        long_side = max(1.0, page.width_pt, page.height_pt)
         return max(3.0, min(_THUMB_TARGET_PX * 72.0 / long_side, 30.0))
 
     def _compute_dpi(self) -> float:
@@ -627,11 +618,11 @@ class PdfFullViewDialog(QDialog):
             return 96.0
         if not (0 <= self._current_page < self._current_doc.page_count):
             return 96.0
-        page = self._current_doc[self._current_page]
+        page = self._current_doc.page_info(self._current_page)
         vp_w = max(200, self._scroll.viewport().width() - 24)
         vp_h = max(200, self._scroll.viewport().height() - 24)
-        pw = max(1.0, page.rect.width)
-        ph = max(1.0, page.rect.height)
+        pw = max(1.0, page.width_pt)
+        ph = max(1.0, page.height_pt)
         dpi_w = vp_w / pw * 72.0
         dpi_h = vp_h / ph * 72.0
         base = dpi_w if self._fit_mode == "width" else min(dpi_w, dpi_h)
@@ -639,12 +630,9 @@ class PdfFullViewDialog(QDialog):
         max_dpi = min(320.0, _CANVAS_MAX_PX / max(pw, ph) * 72.0)
         return max(min_dpi, min(base * ZOOM_LEVELS[self._zoom_index], max_dpi))
 
-    def _render_fitz(self, page_idx: int, dpi: float) -> QPixmap:
-        page = self._current_doc[page_idx]
-        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pm = page.get_pixmap(matrix=mat, alpha=False)
-        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples)
-        return _pil_to_qpixmap(img)
+    def _render_pdf(self, page_idx: int, dpi: float) -> QPixmap:
+        rendered = self._current_doc.render_page(page_idx, scale=dpi / 72.0)
+        return rendered_page_to_qpixmap(rendered)
 
     def _render_page(self) -> None:
         if self._current_doc is None:
@@ -652,7 +640,7 @@ class PdfFullViewDialog(QDialog):
         if not (0 <= self._current_page < self._current_doc.page_count):
             return
         dpi = self._compute_dpi()
-        pix = self._render_fitz(self._current_page, dpi)
+        pix = self._render_pdf(self._current_page, dpi)
         self._canvas.setStyleSheet("background: transparent;")
         self._canvas.clear()
         self._canvas.setPixmap(pix)

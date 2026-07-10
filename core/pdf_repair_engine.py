@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List
 
-import fitz
+from core.pdf_backend import normalize_pdf
 
 
 @dataclass(frozen=True)
@@ -85,40 +85,25 @@ class PdfRepairEngine:
 
         output.parent.mkdir(parents=True, exist_ok=True)
         original_size = source.stat().st_size
-        doc: fitz.Document | None = None
         try:
-            doc = fitz.open(str(source))
-            if doc.needs_pass or doc.is_encrypted:
-                raise RuntimeError("El PDF esta protegido o cifrado.")
-            if doc.page_count <= 0:
-                raise RuntimeError("El PDF no tiene paginas.")
-
-            page_count = doc.page_count
-            repaired_on_open = bool(getattr(doc, "is_repaired", False))
-            warnings: list[str] = []
+            report = normalize_pdf(
+                source,
+                output,
+                preserve_metadata=job.options.preserve_metadata,
+                normalize_content=job.options.clean,
+                generate_object_streams=job.options.use_objstms,
+                fallback_rebuild=job.options.fallback_rebuild,
+            )
+            page_count = report.page_count
+            repaired_on_open = report.repaired_on_open
+            rebuilt_pages = report.rebuilt_pages
+            warnings = list(report.warnings)
             if repaired_on_open:
-                warnings.append("MuPDF reparo la estructura al abrir el documento.")
-
-            if not job.options.preserve_metadata:
-                _clear_metadata(doc)
-
-            rebuilt_pages = False
-            try:
-                _save_normalized(doc, output, job.options)
-            except Exception:
-                if not job.options.fallback_rebuild:
-                    raise
-                rebuilt_pages = True
+                warnings.append("QPDF reparo la estructura al abrir el documento.")
+            if rebuilt_pages:
                 warnings.append("Se reconstruyeron las paginas porque el guardado directo fallo.")
-                _remove_partial(output)
-                _rebuild_pages(doc, output, job.options)
 
             output_size = output.stat().st_size if output.exists() else 0
-            verified_pages = _verify_output(output)
-            if verified_pages != page_count:
-                raise RuntimeError(
-                    f"El resultado tiene {verified_pages} paginas; se esperaban {page_count}."
-                )
             if output_size > original_size and not repaired_on_open:
                 warnings.append("El PDF normalizado pesa mas que el original.")
 
@@ -140,73 +125,6 @@ class PdfRepairEngine:
                 error=str(exc),
                 original_size=original_size,
             )
-        finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
-
-
-def _save_normalized(doc: fitz.Document, output: Path, options: PdfRepairOptions) -> None:
-    doc.save(
-        str(output),
-        garbage=max(0, min(4, int(options.garbage))),
-        clean=options.clean,
-        deflate=options.deflate,
-        deflate_images=options.deflate_images,
-        deflate_fonts=options.deflate_fonts,
-        use_objstms=1 if options.use_objstms else 0,
-        preserve_metadata=1 if options.preserve_metadata else 0,
-        encryption=fitz.PDF_ENCRYPT_NONE,
-    )
-
-
-def _rebuild_pages(doc: fitz.Document, output: Path, options: PdfRepairOptions) -> None:
-    rebuilt = fitz.open()
-    try:
-        rebuilt.insert_pdf(doc)
-        if options.preserve_metadata:
-            rebuilt.set_metadata(doc.metadata or {})
-        _save_normalized(
-            rebuilt,
-            output,
-            PdfRepairOptions(
-                clean=options.clean,
-                garbage=options.garbage,
-                deflate=options.deflate,
-                deflate_images=options.deflate_images,
-                deflate_fonts=options.deflate_fonts,
-                use_objstms=options.use_objstms,
-                preserve_metadata=options.preserve_metadata,
-                fallback_rebuild=False,
-            ),
-        )
-    finally:
-        rebuilt.close()
-
-
-def _verify_output(output: Path) -> int:
-    if not output.exists():
-        raise RuntimeError("No se genero el PDF de salida.")
-    doc = fitz.open(str(output))
-    try:
-        if doc.needs_pass or doc.is_encrypted:
-            raise RuntimeError("El PDF generado quedo protegido o cifrado inesperadamente.")
-        return doc.page_count
-    finally:
-        doc.close()
-
-
-def _clear_metadata(doc: fitz.Document) -> None:
-    try:
-        doc.set_metadata({})
-    except Exception:
-        pass
-    try:
-        doc.del_xml_metadata()
-    except Exception:
-        pass
 
 
 def _same_path(a: Path, b: Path) -> bool:
@@ -214,14 +132,6 @@ def _same_path(a: Path, b: Path) -> bool:
         return a.resolve() == b.resolve()
     except Exception:
         return str(a) == str(b)
-
-
-def _remove_partial(output: Path) -> None:
-    try:
-        if output.exists():
-            output.unlink()
-    except Exception:
-        pass
 
 
 def _format_size(size: int) -> str:

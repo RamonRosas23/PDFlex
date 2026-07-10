@@ -5,7 +5,6 @@ from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
 from PySide6.QtCore import QObject, QThread, Signal, Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
@@ -22,6 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from core.pdf_backend import pdf_page_count
 
 from core.output_paths import make_run_dir
 from core.pdf_scan_simulator_engine import (
@@ -380,8 +380,7 @@ class ScanSimulatorWindow(PipelineWindow):
         for path in paths:
             if path not in self._pdf_page_cache:
                 try:
-                    with fitz.open(path) as doc:
-                        self._pdf_page_cache[path] = doc.page_count
+                    self._pdf_page_cache[path] = pdf_page_count(path)
                 except Exception:
                     self._pdf_page_cache[path] = 0
 
@@ -445,9 +444,8 @@ class ScanSimulatorWindow(PipelineWindow):
                 page_count = self._pdf_page_cache[raw_path]
             else:
                 try:
-                    with fitz.open(str(path)) as doc:
-                        page_count = doc.page_count
-                        self._pdf_page_cache[raw_path] = page_count
+                    page_count = pdf_page_count(path)
+                    self._pdf_page_cache[raw_path] = page_count
                 except Exception as exc:
                     return 0, f"{path.name}: {exc}"
             try:

@@ -12,10 +12,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-import fitz
-from PIL import Image
 from PySide6.QtCore import Qt, QSize, QTimer, Signal
-from PySide6.QtGui import QCursor, QKeySequence, QPixmap, QImage, QIcon, QShortcut
+from PySide6.QtGui import QCursor, QKeySequence, QPixmap, QIcon, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
@@ -24,7 +22,10 @@ from PySide6.QtWidgets import (
 
 from ui.styles import COLORS as _COLORS
 
+from core.pdf_backend import PdfRenderDocument
+
 from ui.common.clipboard_utils import copy_files_to_clipboard
+from ui.common.pdf_render_utils import rendered_page_to_qpixmap
 from ui.common.open_utils import open_file, open_folder
 from ui.common.save_utils import save_file_as, save_files_as_batch
 from ui.common.result_ui import (
@@ -49,14 +50,6 @@ _CANVAS_MAX_PX = 2200
 _THUMB_TARGET_PX = 180
 
 
-def _pil_to_qpixmap(img: Image.Image) -> QPixmap:
-    if img.mode != "RGBA":
-        img = img.convert("RGBA")
-    data = img.tobytes("raw", "RGBA")
-    qimg = QImage(data, img.width, img.height, QImage.Format.Format_RGBA8888)
-    return QPixmap.fromImage(qimg.copy())
-
-
 class GenericPdfViewer(QWidget):
     """Visor genérico: lista de documentos resultado + render PDF interactivo."""
 
@@ -67,7 +60,7 @@ class GenericPdfViewer(QWidget):
         self._doc_list_title = doc_list_title
         self._results: list = []
         self._source_dirs: dict = {}
-        self._current_doc: fitz.Document | None = None
+        self._current_doc: PdfRenderDocument | None = None
         self._current_result = None
         self._current_page: int = 0
         self._zoom_index: int = 2
@@ -525,15 +518,15 @@ class GenericPdfViewer(QWidget):
         self._set_zoom_enabled(True)
 
         try:
-            self._current_doc = fitz.open(out_path)
-            if self._current_doc.needs_pass:
-                password = (
-                    getattr(result, "user_password", "")
-                    or getattr(result, "open_password", "")
-                    or getattr(getattr(result, "job", None), "open_password", "")
-                )
-                if not password or not self._current_doc.authenticate(password):
-                    raise RuntimeError("El PDF requiere contraseña para previsualizarse.")
+            password = (
+                getattr(result, "user_password", "")
+                or getattr(result, "open_password", "")
+                or getattr(getattr(result, "job", None), "open_password", "")
+            )
+            self._current_doc = PdfRenderDocument(
+                out_path,
+                password=password or None,
+            )
         except Exception as e:
             self.meta_label.setText(f"No se pudo abrir: {e}")
             self._close_doc()
@@ -640,8 +633,8 @@ class GenericPdfViewer(QWidget):
         """
         if self._current_doc is None:
             return 12.0
-        page = self._current_doc[page_idx]
-        page_long = max(1.0, page.rect.width, page.rect.height)
+        page = self._current_doc.page_info(page_idx)
+        page_long = max(1.0, page.width_pt, page.height_pt)
         return max(3.0, min(_THUMB_TARGET_PX * 72.0 / page_long, 30.0))
 
     def _compute_dpi(self) -> float:
@@ -661,11 +654,11 @@ class GenericPdfViewer(QWidget):
             return 96.0
         if self._current_page < 0 or self._current_page >= self._current_doc.page_count:
             return 96.0
-        page = self._current_doc[self._current_page]
+        page = self._current_doc.page_info(self._current_page)
         vp_w = max(200, self.scroll.viewport().width() - 24)
         vp_h = max(200, self.scroll.viewport().height() - 24)
-        page_w = max(1.0, page.rect.width)
-        page_h = max(1.0, page.rect.height)
+        page_w = max(1.0, page.width_pt)
+        page_h = max(1.0, page.height_pt)
         dpi_w = vp_w / page_w * 72.0
         dpi_h = vp_h / page_h * 72.0
         base = dpi_w if self._fit_mode == "width" else min(dpi_w, dpi_h)
@@ -691,11 +684,8 @@ class GenericPdfViewer(QWidget):
         self._update_page_status()
 
     def _render(self, page_idx: int, dpi: float) -> QPixmap:
-        page = self._current_doc[page_idx]
-        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pm = page.get_pixmap(matrix=mat, alpha=False)
-        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples)
-        return _pil_to_qpixmap(img)
+        rendered = self._current_doc.render_page(page_idx, scale=dpi / 72.0)
+        return rendered_page_to_qpixmap(rendered)
 
     # ------------------------------------------------------------------ #
     # Zoom

@@ -1,5 +1,4 @@
 """Caché LRU por presupuesto de bytes + RenderService con cancelación por generación."""
-import fitz
 import pytest
 
 from core.editor.render.pixmap_cache import ByteBudgetLRU

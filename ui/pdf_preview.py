@@ -18,7 +18,6 @@ from __future__ import annotations
 from typing import Dict, List, Optional, Tuple
 import math
 
-import fitz
 from PIL import Image
 from PySide6.QtCore import Qt, QRectF, QPointF, Signal
 from PySide6.QtGui import (
@@ -28,6 +27,9 @@ from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsPixmapItem, QGraphicsObject, QGraphicsDropShadowEffect,
 )
+
+from core.pdf_backend import PageInfo, PdfRenderDocument
+from ui.common.pdf_render_utils import rendered_page_to_qpixmap
 
 from core.safe_zone import Placement, fit_placement_inside_page
 
@@ -511,7 +513,7 @@ class PdfPreviewView(QGraphicsView):
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
 
-        self._doc: Optional[fitz.Document] = None
+        self._doc: Optional[PdfRenderDocument] = None
         self._pdf_path: Optional[str] = None
         self._page_index: int = 0
         self._page_pixmap_item: Optional[QGraphicsPixmapItem] = None
@@ -546,7 +548,7 @@ class PdfPreviewView(QGraphicsView):
         self._configured_placements.clear()
         self._active_uid = None
 
-        self._doc = fitz.open(path)
+        self._doc = PdfRenderDocument(path)
         self._pdf_path = path
         self._page_index = 0
         self._has_fit_once = False
@@ -886,7 +888,7 @@ class PdfPreviewView(QGraphicsView):
     # Internos
     # ==================================================================== #
 
-    def _page_render_dpi(self, page: "fitz.Page") -> float:
+    def _page_render_dpi(self, page: PageInfo) -> float:
         """DPI adaptativo para el canvas de posicionamiento.
 
         Usa PREVIEW_DPI (144) para páginas normales.  Para páginas muy grandes
@@ -898,7 +900,7 @@ class PdfPreviewView(QGraphicsView):
         vez que se renderiza, para que la conversión píxeles↔puntos PDF sea
         correcta y las firmas/folios aparezcan al tamaño proporcional correcto.
         """
-        page_long = max(1.0, page.rect.width, page.rect.height)
+        page_long = max(1.0, page.width_pt, page.height_pt)
         dpi = min(PREVIEW_DPI, _PREVIEW_MAX_LONG_PX * 72.0 / page_long)
         return max(36.0, dpi)
 
@@ -907,12 +909,11 @@ class PdfPreviewView(QGraphicsView):
         if not self._doc:
             return
 
-        page = self._doc[self._page_index]
+        page = self._doc.page_info(self._page_index)
         dpi = self._page_render_dpi(page)
-        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pm = page.get_pixmap(matrix=mat, alpha=False)
-        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
-        pix = pil_to_qpixmap(img)
+        pix = rendered_page_to_qpixmap(
+            self._doc.render_page(self._page_index, scale=dpi / 72.0)
+        )
 
         # Actualizar la relación píxel/punto para este DPI específico.
         # Debe hacerse ANTES de que cualquier _apply_placement use el valor.
@@ -928,8 +929,8 @@ class PdfPreviewView(QGraphicsView):
         self._page_pixmap_item.setGraphicsEffect(shadow)
         self._scene.addItem(self._page_pixmap_item)
 
-        self._page_w_pt = page.rect.width
-        self._page_h_pt = page.rect.height
+        self._page_w_pt = page.width_pt
+        self._page_h_pt = page.height_pt
 
         self._update_scene_rect(pix)
 
@@ -943,19 +944,18 @@ class PdfPreviewView(QGraphicsView):
         """Solo actualiza el pixmap de página; los items de firma se conservan."""
         if not self._doc or not self._page_pixmap_item:
             return
-        page = self._doc[self._page_index]
+        page = self._doc.page_info(self._page_index)
         dpi = self._page_render_dpi(page)
-        mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
-        pm = page.get_pixmap(matrix=mat, alpha=False)
-        img = Image.frombytes("RGB", (pm.width, pm.height), pm.samples).convert("RGBA")
-        pix = pil_to_qpixmap(img)
+        pix = rendered_page_to_qpixmap(
+            self._doc.render_page(self._page_index, scale=dpi / 72.0)
+        )
 
         # Actualizar escala píxel/punto ANTES de que _apply_placement use el valor.
         self._scene_to_pdf = 72.0 / dpi
 
         self._page_pixmap_item.setPixmap(pix)
-        self._page_w_pt = page.rect.width
-        self._page_h_pt = page.rect.height
+        self._page_w_pt = page.width_pt
+        self._page_h_pt = page.height_pt
         self._update_scene_rect(pix)
 
     def _on_item_geometry_changed(self, uid: str) -> None:

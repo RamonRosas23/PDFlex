@@ -72,7 +72,7 @@ class ProtectorWindowTests(unittest.TestCase):
                 self.app.processEvents()
 
                 self.assertIsNotNone(viewer._current_doc)
-                self.assertIn("Documento protegido", viewer._current_doc[0].get_text())
+                self.assertIn("Documento protegido", viewer._current_doc.extract_text(0))
             finally:
                 viewer.clear_results()
                 viewer.deleteLater()

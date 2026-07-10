@@ -8,7 +8,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
-import fitz
+import pikepdf
+
+from core.pdf_backend import PdfRenderDocument
 
 
 @dataclass
@@ -27,40 +29,47 @@ class OpenReport:
 def inspect_pdf(path: Path, password: str | None = None) -> OpenReport:
     rep = OpenReport()
     try:
-        doc = fitz.open(str(path))
-    except Exception as exc:                      # noqa: BLE001 — se reporta
+        with pikepdf.Pdf.open(path, password=password or "") as structure:
+            rep.was_repaired = bool(structure.get_warnings())
+            rep.page_count = len(structure.pages)
+            rep.has_signatures = _has_signature_fields(structure)
+    except pikepdf.PasswordError:
+        rep.needs_password = True
+        rep.error = "El PDF está protegido con contraseña"
+        return rep
+    except Exception as exc:  # noqa: BLE001 — se reporta
         rep.error = f"No se pudo abrir el PDF: {exc}"
         return rep
+
     try:
-        if doc.needs_pass:
-            if not password or not doc.authenticate(password):
-                rep.needs_password = True
-                rep.error = "El PDF está protegido con contraseña"
-                return rep
-        rep.was_repaired = bool(getattr(doc, "is_repaired", False))
-        rep.page_count = doc.page_count
-
         sizes: set[tuple[int, ...]] = set()
-        for i, page in enumerate(doc, start=1):
-            if page.rotation % 360 != 0:
-                rep.rotated_pages.append(i)
-            # Par ordenado: el /Rotate transpone el display, pero el papel físico
-            # es el mismo (carta rotada sigue siendo carta)
-            sizes.add(tuple(sorted((round(page.rect.width), round(page.rect.height)))))
-            if not page.get_text("words"):
-                rep.scanned_pages.append(i)
+        with PdfRenderDocument(path, password=password) as document:
+            for index in range(document.page_count):
+                info = document.page_info(index)
+                page_number = index + 1
+                if info.rotation % 360 != 0:
+                    rep.rotated_pages.append(page_number)
+                # /Rotate transpone el display, pero el papel físico es el mismo.
+                sizes.add(tuple(sorted((round(info.width_pt), round(info.height_pt)))))
+                if not document.extract_text(index).strip():
+                    rep.scanned_pages.append(page_number)
         rep.mixed_sizes = len(sizes) > 1
-
-        # Firmas digitales: campos widget de tipo firma en cualquier página
-        for page in doc:
-            for w in page.widgets() or []:
-                if w.field_type == fitz.PDF_WIDGET_TYPE_SIGNATURE:
-                    rep.has_signatures = True
-                    break
-            if rep.has_signatures:
-                break
-
         rep.ok = True
         return rep
-    finally:
-        doc.close()
+    except Exception as exc:  # noqa: BLE001 — se reporta
+        rep.error = f"No se pudo inspeccionar el PDF: {exc}"
+        return rep
+
+
+def _has_signature_fields(document: pikepdf.Pdf) -> bool:
+    acro_form = document.Root.get("/AcroForm")
+    if not acro_form:
+        return False
+
+    def visit(field, inherited_type=None) -> bool:
+        field_type = field.get("/FT", inherited_type)
+        if str(field_type) == "/Sig":
+            return True
+        return any(visit(kid, field_type) for kid in field.get("/Kids", []))
+
+    return any(visit(field) for field in acro_form.get("/Fields", []))

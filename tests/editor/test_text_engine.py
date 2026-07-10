@@ -1,7 +1,4 @@
 """Resolución de estilo de texto a parámetros de primitiva."""
-import fitz
-import pytest
-
 from core.editor.text_engine import alignment_flag, resolve_font
 
 
@@ -18,8 +15,8 @@ def test_unknown_family_falls_back_to_helv():
 
 
 def test_alignment_flags():
-    assert alignment_flag("left") == fitz.TEXT_ALIGN_LEFT
-    assert alignment_flag("center") == fitz.TEXT_ALIGN_CENTER
-    assert alignment_flag("right") == fitz.TEXT_ALIGN_RIGHT
-    assert alignment_flag("justify") == fitz.TEXT_ALIGN_JUSTIFY
-    assert alignment_flag("???") == fitz.TEXT_ALIGN_LEFT
+    assert alignment_flag("left") == 0
+    assert alignment_flag("center") == 1
+    assert alignment_flag("right") == 2
+    assert alignment_flag("justify") == 3
+    assert alignment_flag("???") == 0

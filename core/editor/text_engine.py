@@ -6,8 +6,6 @@ Fase 2 añade fuentes embebidas OFL + sistema (fontTools) sin tocar este contrat
 """
 from __future__ import annotations
 
-import fitz
-
 _FONT_VARIANTS: dict[tuple[str, bool, bool], str] = {
     ("helv", False, False): "helv", ("helv", True, False): "hebo",
     ("helv", False, True): "heit", ("helv", True, True): "hebi",
@@ -18,8 +16,7 @@ _FONT_VARIANTS: dict[tuple[str, bool, bool], str] = {
 }
 
 _ALIGN = {
-    "left": fitz.TEXT_ALIGN_LEFT, "center": fitz.TEXT_ALIGN_CENTER,
-    "right": fitz.TEXT_ALIGN_RIGHT, "justify": fitz.TEXT_ALIGN_JUSTIFY,
+    "left": 0, "center": 1, "right": 2, "justify": 3,
 }
 
 
@@ -29,4 +26,4 @@ def resolve_font(family: str, *, bold: bool, italic: bool) -> str:
 
 
 def alignment_flag(align: str) -> int:
-    return _ALIGN.get(align, fitz.TEXT_ALIGN_LEFT)
+    return _ALIGN.get(align, 0)

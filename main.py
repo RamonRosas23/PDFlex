@@ -47,14 +47,6 @@ def _run_internal_worker_if_requested() -> int | None:
     return None
 
 
-# Suprimir warnings de MuPDF (PDFs con xref rotos imprimen spam al stderr).
-try:
-    import fitz
-    fitz.TOOLS.mupdf_display_errors(False)
-except Exception:
-    pass
-
-
 def main() -> int:
     from shell.shell_window import ShellWindow
     from ui.styles import DARK_THEME

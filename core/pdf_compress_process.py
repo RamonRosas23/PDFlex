@@ -154,6 +154,46 @@ def page_rewrite_main(argv: Optional[list[str]] = None) -> int:
         return 1
 
 
+def doc_rewrite_main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="PDFlex whole-document compression worker")
+    parser.add_argument("--doc-source", required=True)
+    parser.add_argument("--doc-output", required=True)
+    parser.add_argument("--dpi-threshold", required=True, type=int)
+    parser.add_argument("--dpi-target", required=True, type=int)
+    parser.add_argument("--quality", required=True, type=int)
+    parser.add_argument("--lossy", default="1")
+    parser.add_argument("--lossless", default="1")
+    parser.add_argument("--set-to-gray", default="0")
+    args = parser.parse_args(argv)
+
+    try:
+        from core.pdf_compress_engine import (
+            CompressProfile,
+            _write_image_candidate,
+        )
+
+        profile = CompressProfile(
+            id="doc-worker",
+            label="Doc worker",
+            description="",
+            dpi_threshold=int(args.dpi_threshold),
+            dpi_target=int(args.dpi_target),
+            quality=int(args.quality),
+            set_to_gray=str(args.set_to_gray).strip() == "1",
+            rewrite_lossy=str(args.lossy).strip() != "0",
+            rewrite_lossless=str(args.lossless).strip() != "0",
+        )
+        _write_image_candidate(
+            Path(args.doc_source),
+            Path(args.doc_output),
+            profile,
+        )
+        return 0
+    except Exception:
+        traceback.print_exc()
+        return 1
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     raw_args = list(argv) if argv is not None else None
     if raw_args is None:
@@ -161,6 +201,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         raw_args = sys.argv[1:]
     if raw_args and raw_args[0] == "--page-rewrite":
         return page_rewrite_main(raw_args[1:])
+    if raw_args and raw_args[0] == "--doc-rewrite":
+        return doc_rewrite_main(raw_args[1:])
 
     parser = argparse.ArgumentParser(description="PDFlex PDF compression worker")
     parser.add_argument("--request", required=True)

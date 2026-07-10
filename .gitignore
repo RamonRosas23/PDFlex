@@ -46,3 +46,4 @@ desktop.ini
 # ── Archivos temporales de PDFlex ─────────────────────────────────────────────
 # Directorio de descarga del auto-updater (se crea en runtime)
 # %TEMP%/PDFlex/updates/ — no está en el proyecto, solo referencia
+tmp/pdfs/compression_benchmark/

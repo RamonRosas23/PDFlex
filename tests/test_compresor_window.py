@@ -82,6 +82,30 @@ class CompresorWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+    def test_window_builds_jobs_with_fast_and_turbo_engines(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf_path = self._make_pdf(Path(tmp) / "input.pdf")
+            window = CompresorWindow(
+                ShellContext(
+                    tray=PdfTray(),
+                    word_converter=WordToPdfConverter(),
+                    open_tool=lambda *_: None,
+                )
+            )
+            try:
+                window._docs_card.add_paths([str(pdf_path)])
+
+                fast_idx = window._engine_combo.findData("fast")
+                window._engine_combo.setCurrentIndex(fast_idx)
+                self.assertEqual(window._build_jobs()[0].options.engine_mode, "fast")
+
+                turbo_idx = window._engine_combo.findData("turbo")
+                window._engine_combo.setCurrentIndex(turbo_idx)
+                self.assertEqual(window._build_jobs()[0].options.engine_mode, "turbo")
+            finally:
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_window_builds_jobs_with_page_rules(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pdf_path = self._make_pdf(Path(tmp) / "input.pdf")

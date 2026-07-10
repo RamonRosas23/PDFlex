@@ -25,6 +25,8 @@ _VALIDATION_MAX_SIDE = 1200
 _VALIDATION_MIN_DPI = 24.0
 _VALIDATION_MAX_DPI = 72.0
 _AUTO_GHOSTSCRIPT_FAST_ACCEPT_REDUCTION = 10.0
+_AUTO_FAST_GHOSTSCRIPT_ACCEPT_REDUCTION = 25.0
+_AUTO_FAST_GHOSTSCRIPT_QUALITY_ACCEPT_REDUCTION = 20.0
 _MIN_USEFUL_REDUCTION_PCT = 1.0
 
 
@@ -84,7 +86,7 @@ PROFILES: dict[str, CompressProfile] = {
 
 @dataclass(frozen=True)
 class CompressOptions:
-    engine_mode: str = "auto"  # auto, pymupdf, qpdf, ghostscript
+    engine_mode: str = "auto"  # auto, pymupdf, qpdf, ghostscript, fast, turbo
     dpi_threshold: int | None = None
     dpi_target: int | None = None
     quality: int | None = None
@@ -283,7 +285,12 @@ class PdfCompressEngine:
         base_profile = profile_for(job.profile_id)
         try:
             options = _normalized_options(job.options)
-            if job.page_rules and options.engine_mode in {"qpdf", "ghostscript"}:
+            if job.page_rules and options.engine_mode in {
+                "qpdf",
+                "ghostscript",
+                "fast",
+                "turbo",
+            }:
                 raise RuntimeError(
                     "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
                 )
@@ -330,7 +337,12 @@ class PdfCompressEngine:
                 job.profile_id,
                 job.page_rules,
             )
-            if page_plan.has_explicit_rules and options.engine_mode in {"qpdf", "ghostscript"}:
+            if page_plan.has_explicit_rules and options.engine_mode in {
+                "qpdf",
+                "ghostscript",
+                "fast",
+                "turbo",
+            }:
                 raise RuntimeError(
                     "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
                 )
@@ -448,6 +460,48 @@ class PdfCompressEngine:
                 qpdf_exe = _find_qpdf()
                 ghostscript_exe = _find_ghostscript()
                 ghostscript_attempted = False
+                fast_ghostscript_attempted = False
+
+                def _try_fast_ghostscript_candidate(*, allow_early: bool = True) -> _Candidate | None:
+                    nonlocal fast_ghostscript_attempted, early_chosen
+                    fast_ghostscript_attempted = True
+                    fast_path = _temp_output_path(output, "rapido")
+                    temp_paths.append(fast_path)
+                    try:
+                        _emit_status(status, 24, "Probando compresion rapida con Ghostscript...")
+                        _write_ghostscript_fast_candidate(
+                            source,
+                            fast_path,
+                            ghostscript_exe or "",
+                        )
+                        _emit_status(status, 38, "Validando candidato rapido...")
+                        fast_candidate = _validate_candidate(
+                            source,
+                            fast_path,
+                            analysis,
+                            validation_pages,
+                            profile,
+                            "ghostscript rapido",
+                            visual_cache=visual_cache,
+                        )
+                        candidates.append(fast_candidate)
+                        if (
+                            allow_early
+                            and _should_accept_fast_ghostscript_candidate(
+                                analysis,
+                                options,
+                                profile,
+                                fast_candidate,
+                                input_size,
+                            )
+                        ):
+                            early_chosen = fast_candidate
+                        return fast_candidate
+                    except Exception as exc:
+                        rejected_notes.append(
+                            f"ghostscript rapido rechazado: {_short_error(exc)}"
+                        )
+                        return None
 
                 def _try_ghostscript_candidate() -> None:
                     nonlocal ghostscript_attempted, early_chosen
@@ -490,7 +544,15 @@ class PdfCompressEngine:
                             f"ghostscript rechazado: {_short_error(exc)}"
                         )
 
-                if _should_prioritize_ghostscript(
+                if _should_prioritize_fast_ghostscript(
+                    analysis,
+                    options,
+                    profile,
+                    ghostscript_exe,
+                ):
+                    _try_fast_ghostscript_candidate()
+
+                if early_chosen is None and _should_prioritize_ghostscript(
                     analysis,
                     options,
                     ghostscript_exe,
@@ -524,6 +586,46 @@ class PdfCompressEngine:
                         rejected_notes.append(f"qpdf rechazado: {_short_error(exc)}")
 
                 image_candidate_useful = False
+                turbo_candidate_useful = False
+                if early_chosen is None and _engine_allows(options, "pymupdf_turbo"):
+                    turbo_path = _temp_output_path(output, "turbo")
+                    temp_paths.append(turbo_path)
+                    try:
+                        _emit_status(status, 34, "Probando PyMuPDF turbo aislado...")
+                        _write_isolated_image_candidate(
+                            source,
+                            turbo_path,
+                            _turbo_worker_profile(profile),
+                        )
+                        _emit_status(status, 58, "Validando candidato turbo...")
+                        turbo_candidate = _validate_candidate(
+                            source,
+                            turbo_path,
+                            analysis,
+                            validation_pages,
+                            profile,
+                            "pymupdf turbo aislado",
+                            visual_cache=visual_cache,
+                        )
+                        candidates.append(turbo_candidate)
+                        turbo_candidate_useful = _candidate_is_useful(
+                            turbo_candidate,
+                            input_size,
+                        )
+                    except Exception as exc:
+                        rejected_notes.append(
+                            f"pymupdf turbo rechazado: {_short_error(exc)}"
+                        )
+
+                if (
+                    early_chosen is None
+                    and options.engine_mode == "turbo"
+                    and not turbo_candidate_useful
+                    and ghostscript_exe
+                    and not fast_ghostscript_attempted
+                ):
+                    _try_fast_ghostscript_candidate(allow_early=False)
+
                 if early_chosen is None and _engine_allows(options, "pymupdf"):
                     if should_try_images:
                         image_path = _temp_output_path(output, "imagenes")
@@ -715,7 +817,7 @@ def optional_engine_status() -> list[OptionalEngineStatus]:
 def _normalized_options(options: CompressOptions | None) -> CompressOptions:
     raw = options or CompressOptions()
     engine_mode = (raw.engine_mode or "auto").strip().lower()
-    if engine_mode not in {"auto", "pymupdf", "qpdf", "ghostscript"}:
+    if engine_mode not in {"auto", "pymupdf", "qpdf", "ghostscript", "fast", "turbo"}:
         raise RuntimeError("Motor de compresion no reconocido.")
     validation_level = (raw.validation_level or "standard").strip().lower()
     if validation_level not in {"strict", "standard", "relaxed"}:
@@ -786,15 +888,17 @@ def _effective_profile(
 def _validate_engine_availability(options: CompressOptions) -> None:
     if options.engine_mode == "qpdf" and not _find_qpdf():
         raise RuntimeError("QPDF no esta disponible en esta PC.")
-    if options.engine_mode == "ghostscript" and not _find_ghostscript():
+    if options.engine_mode in {"ghostscript", "fast"} and not _find_ghostscript():
         raise RuntimeError("Ghostscript no esta disponible en esta PC.")
 
 
 def _engine_allows(options: CompressOptions, engine: str) -> bool:
     if options.engine_mode == "auto":
-        return True
+        return engine != "pymupdf_turbo"
     if options.engine_mode == "pymupdf":
         return engine == "pymupdf"
+    if options.engine_mode == "turbo":
+        return engine == "pymupdf_turbo"
     return options.engine_mode == engine
 
 
@@ -1053,6 +1157,35 @@ def _should_try_pagewise_image_rewrite(analysis: _PdfAnalysis) -> bool:
     )
 
 
+def _is_long_visual_workload(analysis: _PdfAnalysis) -> bool:
+    return (
+        _is_image_heavy_pdf(analysis)
+        and (
+            analysis.page_count >= 80
+            or analysis.image_count >= 700
+            or analysis.large_image_pixels >= 120_000_000
+        )
+    )
+
+
+def _should_prioritize_fast_ghostscript(
+    analysis: _PdfAnalysis,
+    options: CompressOptions,
+    profile: CompressProfile,
+    ghostscript_exe: str | None,
+) -> bool:
+    if not ghostscript_exe:
+        return False
+    if options.engine_mode == "fast":
+        return True
+    return (
+        options.engine_mode == "auto"
+        and profile.id in {"balanced", "quality"}
+        and _has_visual_compression_opportunity(analysis)
+        and _is_long_visual_workload(analysis)
+    )
+
+
 def _should_prioritize_ghostscript(
     analysis: _PdfAnalysis,
     options: CompressOptions,
@@ -1073,6 +1206,25 @@ def _should_prioritize_ghostscript(
     )
 
 
+def _should_accept_fast_ghostscript_candidate(
+    analysis: _PdfAnalysis,
+    options: CompressOptions,
+    profile: CompressProfile,
+    candidate: _Candidate,
+    input_size: int,
+) -> bool:
+    if options.engine_mode == "fast":
+        return True
+    if options.engine_mode != "auto" or not _is_long_visual_workload(analysis):
+        return False
+    reduction = _candidate_reduction_pct(candidate, input_size)
+    if profile.id == "quality":
+        return reduction >= _AUTO_FAST_GHOSTSCRIPT_QUALITY_ACCEPT_REDUCTION
+    if profile.id == "balanced":
+        return reduction >= _AUTO_FAST_GHOSTSCRIPT_ACCEPT_REDUCTION
+    return False
+
+
 def _should_accept_fast_ghostscript(
     analysis: _PdfAnalysis,
     options: CompressOptions,
@@ -1084,6 +1236,15 @@ def _should_accept_fast_ghostscript(
         and _has_visual_compression_opportunity(analysis)
         and _candidate_reduction_pct(candidate, input_size)
         >= _AUTO_GHOSTSCRIPT_FAST_ACCEPT_REDUCTION
+    )
+
+
+def _turbo_worker_profile(profile: CompressProfile) -> CompressProfile:
+    return replace(
+        profile,
+        dpi_threshold=min(profile.dpi_threshold, 130),
+        dpi_target=min(profile.dpi_target, 110),
+        quality=min(profile.quality, 62),
     )
 
 
@@ -1203,7 +1364,43 @@ def _write_single_page_image_candidate_in_process(
             "--page-rewrite",
             *command_args,
         ]
-    _run_command(command, "pymupdf por pagina")
+    _run_command(command, "pymupdf por pagina", timeout=420)
+
+
+def _write_isolated_image_candidate(
+    source: Path,
+    output: Path,
+    profile: CompressProfile,
+) -> None:
+    command_args = [
+        "--doc-source",
+        str(source),
+        "--doc-output",
+        str(output),
+        "--dpi-threshold",
+        str(int(profile.dpi_threshold)),
+        "--dpi-target",
+        str(int(profile.dpi_target)),
+        "--quality",
+        str(int(profile.quality)),
+        "--lossy",
+        "1" if profile.rewrite_lossy else "0",
+        "--lossless",
+        "1" if profile.rewrite_lossless else "0",
+        "--set-to-gray",
+        "1" if profile.set_to_gray else "0",
+    ]
+    if getattr(sys, "frozen", False):
+        command = [sys.executable, "--pdflex-compress-doc-worker", *command_args]
+    else:
+        command = [
+            sys.executable,
+            "-m",
+            "core.pdf_compress_process",
+            "--doc-rewrite",
+            *command_args,
+        ]
+    _run_command(command, "pymupdf turbo", timeout=420)
 
 
 def _write_single_page_image_candidate(
@@ -1408,6 +1605,7 @@ def _write_qpdf_candidate(source: Path, output: Path, executable: str) -> None:
     _run_command(
         [
             executable,
+            "--warning-exit-0",
             str(source),
             "--object-streams=generate",
             "--stream-data=compress",
@@ -1456,7 +1654,32 @@ def _write_ghostscript_candidate(
         f"-sOutputFile={output}",
         str(source),
     ]
-    _run_command(command, "ghostscript")
+    _run_command(command, "ghostscript", timeout=420)
+
+
+def _write_ghostscript_fast_candidate(
+    source: Path,
+    output: Path,
+    executable: str,
+) -> None:
+    command = [
+        executable,
+        "-dSAFER",
+        "-dBATCH",
+        "-dNOPAUSE",
+        "-dQUIET",
+        "-sDEVICE=pdfwrite",
+        "-dCompatibilityLevel=1.7",
+        "-dPDFSETTINGS=/printer",
+        "-dAutoRotatePages=/None",
+        "-dDetectDuplicateImages=true",
+        "-dCompressFonts=true",
+        "-dSubsetFonts=true",
+        "-dEmbedAllFonts=true",
+        f"-sOutputFile={output}",
+        str(source),
+    ]
+    _run_command(command, "ghostscript rapido", timeout=240)
 
 
 def _save_optimized(doc: fitz.Document, output: Path) -> None:
@@ -1945,13 +2168,13 @@ def _engine_source(path: str | None) -> str:
     return "instalado"
 
 
-def _run_command(command: list[str], label: str) -> None:
+def _run_command(command: list[str], label: str, *, timeout: int = 180) -> None:
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     completed = subprocess.run(
         command,
         capture_output=True,
         text=True,
-        timeout=180,
+        timeout=timeout,
         creationflags=flags,
         check=False,
     )

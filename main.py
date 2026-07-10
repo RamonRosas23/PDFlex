@@ -38,6 +38,12 @@ def _run_internal_worker_if_requested() -> int | None:
         marker_index = sys.argv.index(marker)
         return page_rewrite_main(sys.argv[marker_index + 1:])
 
+    marker = "--pdflex-compress-doc-worker"
+    if marker in sys.argv:
+        from core.pdf_compress_process import doc_rewrite_main
+        marker_index = sys.argv.index(marker)
+        return doc_rewrite_main(sys.argv[marker_index + 1:])
+
     return None
 
 

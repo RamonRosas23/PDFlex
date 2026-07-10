@@ -710,15 +710,17 @@ class CompresorWindow(PipelineWindow):
 
         engine_card = make_card(
             "Motor",
-            "Automatico prueba los candidatos disponibles y elige el menor que pase validacion.",
+            "Automatico prioriza rutas rapidas en PDFs visuales grandes y valida antes de aceptar.",
         )
         self._engine_combo = QComboBox()
         self._engine_combo.addItem("Automático recomendado", "auto")
         self._engine_combo.addItem("PyMuPDF interno", "pymupdf")
         self._engine_combo.addItem("QPDF reforzado", "qpdf")
         self._engine_combo.addItem("Ghostscript visual", "ghostscript")
+        self._engine_combo.addItem("Rápido visual", "fast")
+        self._engine_combo.addItem("Turbo PyMuPDF", "turbo")
         self._engine_combo.setToolTip(
-            "QPDF limpia estructura; si el PDF es visual, se refuerza con compresion validada."
+            "Rapido visual usa Ghostscript /printer; Turbo usa PyMuPDF aislado para recomprimir imagenes."
         )
         self._engine_combo.currentIndexChanged.connect(self._sync_profile_desc)
         card_layout(engine_card).addWidget(self._engine_combo)
@@ -775,7 +777,8 @@ class CompresorWindow(PipelineWindow):
         guidance = QLabel(
             "Maxima reduccion prioriza peso bajo. Equilibrado suele ser la mejor opcion para oficina. "
             "Alta calidad conserva legibilidad con reduccion real. Si un motor externo produce cambios "
-            "riesgosos, se descarta automaticamente."
+            "riesgosos, se descarta automaticamente. Para escaneos grandes, Rapido visual evita la ruta "
+            "fuerte lenta cuando la ganancia ya es suficiente."
         )
         guidance.setProperty("class", "CardHint")
         guidance.setWordWrap(True)
@@ -1073,7 +1076,11 @@ class CompresorWindow(PipelineWindow):
 
     def _sync_profile_desc(self) -> None:
         profile = profile_for(self._profile_id())
-        engines = ["PyMuPDF interno", *self._available_optional_engine_labels()]
+        engines = [
+            "PyMuPDF interno",
+            "PyMuPDF turbo aislado",
+            *self._available_optional_engine_labels(),
+        ]
         engine_mode = self._engine_mode()
         validation = self._validation_combo.currentText()
         self._profile_desc_lbl.setText(
@@ -1088,7 +1095,7 @@ class CompresorWindow(PipelineWindow):
             f"Reglas: {self._page_rules_panel.summary_text()}\n"
             f"{profile.description}"
         )
-        if engine_mode in {"qpdf", "ghostscript"}:
+        if engine_mode in {"qpdf", "ghostscript", "fast"}:
             missing = self._missing_selected_engine()
             if missing:
                 self._profile_desc_lbl.setText(
@@ -1100,7 +1107,11 @@ class CompresorWindow(PipelineWindow):
         return [engine.label for engine in self._engine_statuses if engine.available]
 
     def _engine_status_text(self) -> str:
-        lines = ["Disponibilidad en esta PC:", "PyMuPDF interno: disponible"]
+        lines = [
+            "Disponibilidad en esta PC:",
+            "PyMuPDF interno: disponible",
+            "PyMuPDF turbo aislado: disponible",
+        ]
         if self._engine_status_loading and not self._engine_statuses:
             lines.append("Motores externos: detectando...")
             return "\n".join(lines)
@@ -1172,7 +1183,12 @@ class CompresorWindow(PipelineWindow):
     def _validate_ready(self) -> Optional[str]:
         if self._docs_card.is_empty():
             return "Agrega al menos un PDF."
-        if self._page_rules_panel.has_rules() and self._engine_mode() in {"qpdf", "ghostscript"}:
+        if self._page_rules_panel.has_rules() and self._engine_mode() in {
+            "qpdf",
+            "ghostscript",
+            "fast",
+            "turbo",
+        }:
             return "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
         missing = self._missing_selected_engine()
         if missing:
@@ -1208,7 +1224,7 @@ class CompresorWindow(PipelineWindow):
         statuses = {engine.id: engine.available for engine in self._engine_statuses}
         if mode == "qpdf" and not statuses.get("qpdf", False):
             return "QPDF"
-        if mode == "ghostscript" and not statuses.get("ghostscript", False):
+        if mode in {"ghostscript", "fast"} and not statuses.get("ghostscript", False):
             return "Ghostscript"
         return ""
 
@@ -1595,7 +1611,12 @@ def _prepare_compress_jobs(
         return []
     if not request.paths:
         raise RuntimeError("Agrega al menos un PDF.")
-    if request.page_rules and request.options.engine_mode in {"qpdf", "ghostscript"}:
+    if request.page_rules and request.options.engine_mode in {
+        "qpdf",
+        "ghostscript",
+        "fast",
+        "turbo",
+    }:
         raise RuntimeError(
             "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
         )
@@ -1640,12 +1661,12 @@ def _prepare_compress_jobs(
 
 def _missing_engine_for_options(options: CompressOptions) -> str:
     mode = options.engine_mode
-    if mode not in {"qpdf", "ghostscript"}:
+    if mode not in {"qpdf", "ghostscript", "fast"}:
         return ""
     statuses = {engine.id: engine.available for engine in optional_engine_status()}
     if mode == "qpdf" and not statuses.get("qpdf", False):
         return "QPDF"
-    if mode == "ghostscript" and not statuses.get("ghostscript", False):
+    if mode in {"ghostscript", "fast"} and not statuses.get("ghostscript", False):
         return "Ghostscript"
     return ""
 

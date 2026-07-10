@@ -62,6 +62,13 @@ class UnirWindowTests(unittest.TestCase):
                 window.deleteLater()
                 self.app.processEvents()
 
+            # PDFium thumbnail workers must release inputs before their owning
+            # window disappears; Windows otherwise refuses an immediate delete.
+            first.unlink()
+            second.unlink()
+            self.assertFalse(first.exists())
+            self.assertFalse(second.exists())
+
     def test_run_button_requires_at_least_two_pdfs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

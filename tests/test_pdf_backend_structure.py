@@ -11,7 +11,9 @@ from core.pdf_backend import (
     SourcePage,
     assemble_pages,
     extract_pages,
+    merge_documents,
     normalize_pdf,
+    raster_merge_documents,
 )
 
 
@@ -94,3 +96,42 @@ def test_structure_backend_rejects_source_overwrite(tmp_path: Path):
         assert "sobrescribir" in str(exc)
     else:
         raise AssertionError("assemble_pages allowed overwriting a source")
+
+
+def test_merge_documents_preserves_forms_blanks_and_bookmarks(tmp_path: Path):
+    first = _make_pdf(tmp_path / "first.pdf", ["A1", "A2"], with_form=True)
+    second = _make_pdf(tmp_path / "second.pdf", ["B1"])
+    output = tmp_path / "merged.pdf"
+
+    report = merge_documents(
+        [first, second],
+        output,
+        blank_between=True,
+        add_bookmarks=True,
+    )
+
+    assert report.page_count == 4
+    assert report.blank_pages == 1
+    assert [item.start_page for item in report.sources] == [1, 4]
+    reader = PdfReader(output)
+    assert len(reader.pages) == 4
+    assert "cliente" in (reader.get_fields() or {})
+    assert [item.title for item in reader.outline] == ["first", "second"]
+    with PdfRenderDocument(output) as document:
+        assert "A1" in document.extract_text(0)
+        assert not document.extract_text(2).strip()
+        assert "B1" in document.extract_text(3)
+
+
+def test_raster_merge_is_renderable_last_resort(tmp_path: Path):
+    first = _make_pdf(tmp_path / "first.pdf", ["A1"])
+    second = _make_pdf(tmp_path / "second.pdf", ["B1", "B2"])
+    output = tmp_path / "raster.pdf"
+
+    report = raster_merge_documents([first, second], output, dpi=96)
+
+    assert report.page_count == 3
+    with PdfRenderDocument(output) as document:
+        assert document.page_count == 3
+        assert not document.extract_text(0).strip()
+        assert document.render_page(2, scale=0.5).width > 0

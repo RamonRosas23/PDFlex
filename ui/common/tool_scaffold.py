@@ -9,7 +9,7 @@ Provee:
 from __future__ import annotations
 from typing import TYPE_CHECKING, List, Tuple
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QEvent, QThread, Signal
 from ui.styles import COLORS
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
@@ -181,6 +181,24 @@ class PipelineWindow(QWidget):
         # Event filter para sidebar hover (muestra/oculta hint de atajos)
         if hasattr(self, "_sidebar_frame"):
             self._sidebar_frame.installEventFilter(self)
+
+    def _shutdown_descendant_jobs(self) -> None:
+        """Release file-backed worker resources before child destruction."""
+        for child in self.findChildren(QWidget):
+            shutdown = getattr(child, "shutdown_background_jobs", None)
+            if callable(shutdown):
+                shutdown()
+
+    def closeEvent(self, event) -> None:
+        self._shutdown_descendant_jobs()
+        super().closeEvent(event)
+
+    def event(self, event) -> bool:
+        # Tests and the application shell may use deleteLater() directly,
+        # which does not pass through closeEvent().
+        if event.type() == QEvent.Type.DeferredDelete:
+            self._shutdown_descendant_jobs()
+        return super().event(event)
 
     # ------------------------------------------------------------------ #
     # Construcción del caparazón (sidebar + stack)

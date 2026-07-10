@@ -7,16 +7,22 @@ from .errors import PdfBackendError, PdfCancelledError, PdfClosedError, PdfPassw
 from .rendering import PageInfo, PdfRenderDocument, RenderedPage, pdf_page_count
 from .structure import (
     AssemblyReport,
+    MergeReport,
+    MergeSourceReport,
     NormalizeReport,
     SourcePage,
     assemble_pages,
     extract_pages,
+    merge_documents,
     normalize_pdf,
+    raster_merge_documents,
 )
 
 __all__ = [
     "PageInfo",
     "AssemblyReport",
+    "MergeReport",
+    "MergeSourceReport",
     "NormalizeReport",
     "PdfBackendError",
     "PdfCancelledError",
@@ -27,6 +33,8 @@ __all__ = [
     "SourcePage",
     "assemble_pages",
     "extract_pages",
+    "merge_documents",
     "normalize_pdf",
+    "raster_merge_documents",
     "pdf_page_count",
 ]

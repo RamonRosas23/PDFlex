@@ -1056,6 +1056,24 @@ class DocumentsCard(QFrame):
         if thread in self._thumb_threads:
             self._thumb_threads.remove(thread)
 
+    def shutdown_background_jobs(self) -> None:
+        """Wait until thumbnail readers have released their source files.
+
+        PDFium keeps the input file open for the lifetime of its document.  A
+        card can be destroyed while a thumbnail is still being rendered (for
+        example immediately after reordering a list), so every owning window
+        calls this hook before Qt destroys its children.  Waiting is bounded by
+        the work already in flight; no new jobs are accepted during teardown.
+        """
+        threads = list(self._thumb_threads)
+        for thread in threads:
+            thread.requestInterruption()
+        for thread in threads:
+            if thread.isRunning():
+                thread.wait()
+        self._thumb_workers.clear()
+        self._thumb_threads.clear()
+
     def _apply_thumb(self, item: "QListWidgetItem", pix) -> None:
         """Actualiza icono del item si aún existe en la lista.
 

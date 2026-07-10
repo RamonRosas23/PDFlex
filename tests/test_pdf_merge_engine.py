@@ -71,17 +71,17 @@ class PdfMergeEngineTests(unittest.TestCase):
             with fitz.open(str(output)) as doc:
                 self.assertEqual(doc.page_count, 5)
 
-    def test_falls_back_to_pagewise_when_bulk_copy_loses_pages(self) -> None:
+    def test_falls_back_to_normalized_copy_when_direct_copy_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             first = self._make_pdf(root / "a.pdf", pages=2)
             second = self._make_pdf(root / "b.pdf", pages=1)
             output = root / "merged.pdf"
 
-            def broken_bulk(out_doc: fitz.Document, src_doc: fitz.Document) -> None:
-                out_doc.insert_pdf(src_doc, from_page=0, to_page=0)
-
-            with patch("core.pdf_merge_engine._insert_bulk", broken_bulk):
+            with patch(
+                "core.pdf_merge_engine._merge_direct",
+                side_effect=RuntimeError("fallo directo simulado"),
+            ):
                 result = PdfMergeEngine().run(
                     [str(first), str(second)],
                     str(output),
@@ -104,13 +104,15 @@ class PdfMergeEngineTests(unittest.TestCase):
             second = self._make_pdf(root / "b.pdf", pages=1)
             output = root / "merged.pdf"
 
-            def broken_insert(out_doc: fitz.Document, src_doc: fitz.Document) -> None:
-                if src_doc.page_count:
-                    out_doc.insert_pdf(src_doc, from_page=0, to_page=0)
-
             with (
-                patch("core.pdf_merge_engine._insert_bulk", broken_insert),
-                patch("core.pdf_merge_engine._insert_pagewise", broken_insert),
+                patch(
+                    "core.pdf_merge_engine._merge_direct",
+                    side_effect=RuntimeError("fallo directo simulado"),
+                ),
+                patch(
+                    "core.pdf_merge_engine._merge_normalized",
+                    side_effect=RuntimeError("fallo normalizado simulado"),
+                ),
             ):
                 result = PdfMergeEngine().run(
                     [str(first), str(second)],

@@ -13,9 +13,9 @@ from pathlib import Path
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QIcon, QColor, QBrush
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtGui import QPixmap, QImage, QIcon, QColor, QBrush
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
     QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy, QSpinBox,
 )
@@ -46,7 +46,7 @@ _THUMB_TARGET_PX = 180  # lado largo objetivo de las miniaturas
 
 
 class ResultsViewer(QWidget):
-    openInExplorer = pyqtSignal(str)
+    openInExplorer = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)

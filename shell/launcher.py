@@ -4,9 +4,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
-from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QRadialGradient
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPixmap, QRadialGradient
+from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -277,7 +277,7 @@ class ToolCard(QFrame):
 class LauncherWidget(QWidget):
     """Catalogo compacto, filtrable y ordenado por uso."""
 
-    ready = pyqtSignal()  # emitida cuando todas las tarjetas están renderizadas
+    ready = Signal()  # emitida cuando todas las tarjetas están renderizadas
 
     def __init__(
         self,

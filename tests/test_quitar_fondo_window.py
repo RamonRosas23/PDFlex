@@ -8,7 +8,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image, ImageDraw
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from core.background_removal_engine import BackgroundRemovalEngine, BackgroundRemovalJob
 from shell.context import ShellContext

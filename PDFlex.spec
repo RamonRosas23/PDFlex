@@ -10,9 +10,14 @@ hiddenimports = []
 if os.path.isdir('tools'):
     datas.append(('tools', 'tools'))
 
-for pkg in ('pymupdf', 'PIL', 'PyQt6', 'docx', 'numpy', 'cv2', 'requests'):
+for pkg in ('pymupdf', 'PIL', 'docx', 'numpy', 'cv2', 'requests'):
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
+
+# PyInstaller's built-in PySide6 hooks collect the imported Qt modules and
+# their required plugins. Avoid collect_all('PySide6'): it would copy every Qt
+# add-on installed in the build environment, including modules PDFlex never
+# imports, increasing both the artifact size and its compliance surface.
 
 # win32com para conversión Word→PDF
 hiddenimports += ['win32com.client', 'win32com.gen_py', 'pythoncom', 'pywintypes']
@@ -51,10 +56,9 @@ UPX_EXCLUDE = [
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
     name='PDFlex',
+    exclude_binaries=True,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -68,4 +72,14 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['assets\\icon.ico'],
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=True,
+    upx_exclude=UPX_EXCLUDE,
+    name='PDFlex',
 )

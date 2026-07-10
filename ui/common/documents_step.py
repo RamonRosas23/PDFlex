@@ -16,9 +16,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent
+from PySide6.QtCore import Qt, QObject, QThread, QTimer, Signal, QSize, QEvent
 from ui.common.tool_scaffold import RunnerThread
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QIcon,
@@ -26,7 +26,7 @@ from PyQt6.QtGui import (
     QKeySequence,
     QPixmap,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QStackedWidget, QMenu, QToolTip,
 )
@@ -61,7 +61,7 @@ class DocumentsCard(QFrame):
         files_changed(list[str]): Emitida cuando la lista cambia (orden incluido).
     """
 
-    files_changed = pyqtSignal(list)
+    files_changed = Signal(list)
 
     def __init__(
         self,
@@ -130,7 +130,7 @@ class DocumentsCard(QFrame):
         row.addWidget(self._add_btn)
 
         # Separador visual — solo visible cuando la lista tiene items
-        from PyQt6.QtWidgets import QFrame as _QFrame
+        from PySide6.QtWidgets import QFrame as _QFrame
         self._sep_actions = _QFrame()
         self._sep_actions.setFixedSize(1, 18)
         self._sep_actions.setStyleSheet(f"background: {COLORS['border_strong']}; border: none;")
@@ -579,8 +579,8 @@ class DocumentsCard(QFrame):
                     button.setText(text)
 
     def _show_sort_menu(self) -> None:
-        from PyQt6.QtWidgets import QMenu
-        from PyQt6.QtGui import QAction
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QAction
         menu = QMenu(self)
 
         act_name = QAction("Por nombre (A → Z)", menu)

@@ -13,9 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QPoint, QTimer
-from PyQt6.QtGui import QAction
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QPoint, QTimer
+from PySide6.QtGui import QAction
+from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QStackedWidget, QMenu, QMessageBox,
 )

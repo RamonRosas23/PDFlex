@@ -5,7 +5,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from core.ocr_engine import OcrJob, OcrJobResult, OcrPageResult
 from ui.ocr.window import TextResultsViewer

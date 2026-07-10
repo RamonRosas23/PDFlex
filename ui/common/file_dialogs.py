@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QSettings
-from PyQt6.QtWidgets import QFileDialog, QWidget
+from PySide6.QtCore import QSettings
+from PySide6.QtWidgets import QFileDialog, QWidget
 
 from ui.common.file_ordering import import_paths
 

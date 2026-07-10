@@ -20,11 +20,11 @@ import math
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
-from PyQt6.QtGui import (
+from PySide6.QtCore import Qt, QRectF, QPointF, Signal
+from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QBrush, QCursor,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsItem,
     QGraphicsPixmapItem, QGraphicsObject, QGraphicsDropShadowEffect,
 )
@@ -58,10 +58,10 @@ class SignatureItem(QGraphicsObject):
     # Distancia del handle de rotación por encima del borde superior
     ROTATE_HANDLE_OFFSET = 36
 
-    geometryChanged = pyqtSignal()
-    activated  = pyqtSignal()   # click sobre item inactivo → activarlo
-    dragStarted  = pyqtSignal()   # inicio de move o resize
-    dragFinished = pyqtSignal()   # fin de move o resize (mouse release)
+    geometryChanged = Signal()
+    activated  = Signal()   # click sobre item inactivo → activarlo
+    dragStarted  = Signal()   # inicio de move o resize
+    dragFinished = Signal()   # fin de move o resize (mouse release)
 
     def __init__(self, uid: str, pixmap: QPixmap, color: QColor, parent=None):
         super().__init__(parent)
@@ -478,20 +478,20 @@ class PdfPreviewView(QGraphicsView):
 
     # ── Señales ──────────────────────────────────────────────────────── #
     # Backward compat: emitida para cualquier cambio (sin uid)
-    placementChanged = pyqtSignal()
+    placementChanged = Signal()
     # Nueva: emitida con el uid de la firma que cambió
-    sig_placement_changed = pyqtSignal(str)
+    sig_placement_changed = Signal(str)
     # Emitida cuando el usuario hace click sobre una firma (para sincronizar lista)
-    item_activated = pyqtSignal(str)
+    item_activated = Signal(str)
     # Emitidas al inicio y fin de un drag (mover o redimensionar).
     # Permiten a herramientas como el foleador diferir cálculos costosos
     # hasta que el usuario suelte el ratón, evitando lag durante el arrastre.
-    drag_started = pyqtSignal()
-    drag_finished = pyqtSignal()
+    drag_started = Signal()
+    drag_finished = Signal()
     # Cambio de página
-    pageChanged = pyqtSignal(int, int)   # current, total
+    pageChanged = Signal(int, int)   # current, total
     # Emitida cuando el usuario hace clic derecho sobre una firma
-    sig_context_requested = pyqtSignal(str, int, object)  # uid, page_0based, QPoint
+    sig_context_requested = Signal(str, int, object)  # uid, page_0based, QPoint
 
     def __init__(self, parent=None):
         super().__init__(parent)

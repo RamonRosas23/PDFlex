@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QEvent, QObject, QThread, pyqtSignal, QUrl, QSize
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QKeyEvent, QDesktopServices
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QEvent, QObject, QThread, Signal, QUrl, QSize
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeyEvent, QDesktopServices
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFrame, QStackedWidget,
 )
@@ -53,7 +53,7 @@ class WordPdfResult:
 class WordListCard(QFrame):
     """Carga y administra documentos Word sin convertirlos todavía."""
 
-    files_changed = pyqtSignal(list)
+    files_changed = Signal(list)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

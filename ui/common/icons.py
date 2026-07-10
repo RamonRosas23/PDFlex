@@ -1,4 +1,4 @@
-"""Small inline SVG icon set for PyQt widgets.
+"""Small inline SVG icon set for PySide6 widgets.
 
 Keeps UI iconography independent from system fonts and avoids embedding
 decorative Unicode glyphs directly in labels/buttons.
@@ -9,10 +9,10 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSize, QRectF, QByteArray
-from PyQt6.QtGui import QIcon, QPixmap, QPainter
-from PyQt6.QtSvg import QSvgRenderer
-from PyQt6.QtWidgets import QLabel, QPushButton
+from PySide6.QtCore import Qt, QSize, QRectF, QByteArray
+from PySide6.QtGui import QIcon, QPixmap, QPainter
+from PySide6.QtSvg import QSvgRenderer
+from PySide6.QtWidgets import QLabel, QPushButton
 
 # ── Ícono de la aplicación ────────────────────────────────────────────────────
 
@@ -309,7 +309,7 @@ def make_tool_icon_card(
 
     Replaces the letter+radial-gradient circle used by the old launcher.
     """
-    from PyQt6.QtGui import QBrush, QColor, QPen  # QPixmap, QPainter, QSvgRenderer, etc. ya en módulo
+    from PySide6.QtGui import QBrush, QColor, QPen  # QPixmap, QPainter, QSvgRenderer, etc. ya en módulo
 
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)

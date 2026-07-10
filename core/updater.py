@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PySide6.QtCore import QObject, QThread, Signal
 
 from core.update_config import (
     APP_VERSION,
@@ -137,9 +137,9 @@ def format_bytes(n: int) -> str:
 class UpdateCheckWorker(QObject):
     """Consulta la API en segundo plano y emite el resultado."""
 
-    update_available = pyqtSignal(object)   # UpdateInfo
-    up_to_date       = pyqtSignal(str)      # version_actual
-    check_error      = pyqtSignal(str)      # mensaje de error
+    update_available = Signal(object)   # UpdateInfo
+    up_to_date       = Signal(str)      # version_actual
+    check_error      = Signal(str)      # mensaje de error
 
     def run(self) -> None:
         try:
@@ -252,12 +252,12 @@ class UpdateCheckThread(QThread):
 class UpdateDownloadWorker(QObject):
     """Descarga el instalador y verifica su integridad."""
 
-    progress       = pyqtSignal(int, int, float)  # descargado, total, velocidad_bps
-    status_message = pyqtSignal(str)
-    verifying      = pyqtSignal()                  # comienza verificación SHA-256
-    verified       = pyqtSignal(str)               # ruta del instalador
-    hash_mismatch  = pyqtSignal()
-    download_error = pyqtSignal(str)
+    progress       = Signal(int, int, float)  # descargado, total, velocidad_bps
+    status_message = Signal(str)
+    verifying      = Signal()                  # comienza verificación SHA-256
+    verified       = Signal(str)               # ruta del instalador
+    hash_mismatch  = Signal()
+    download_error = Signal(str)
 
     def __init__(self, info: UpdateInfo, parent=None) -> None:
         super().__init__(parent)
@@ -442,7 +442,7 @@ def launch_installer_and_quit(installer_path: str) -> None:
     /CLOSEAPPLICATIONS cierra instancias adicionales de PDFlex si las hay.
     """
     import subprocess
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
 
     path = Path(installer_path)
     if not path.exists():

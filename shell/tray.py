@@ -12,8 +12,8 @@ from pathlib import Path
 from typing import Dict, List, Optional
 from uuid import uuid4
 
-from PyQt6.QtCore import QObject, Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtWidgets import (
     QWidget, QFrame, QVBoxLayout, QHBoxLayout,
     QPushButton, QCheckBox, QLabel, QScrollArea, QSizePolicy,
 )
@@ -59,7 +59,7 @@ class TrayItem:
 class PdfTray(QObject):
     """Modelo observable de la bandeja de PDFs."""
 
-    changed = pyqtSignal()
+    changed = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -221,7 +221,7 @@ class PdfTray(QObject):
 class TrayPopup(QFrame):
     """Popup flotante mostrado bajo el botón de la bandeja en la topbar."""
 
-    use_in_active_tool_requested = pyqtSignal(list)
+    use_in_active_tool_requested = Signal(list)
 
     def __init__(
         self,

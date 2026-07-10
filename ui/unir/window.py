@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import fitz
-from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, QThread, QUrl, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QFrame, QLineEdit, QCheckBox,
 )
@@ -33,9 +33,9 @@ from ui.common.icons import set_button_icon
 # ====================================================================== #
 
 class MergeWorker(QObject):
-    progress = pyqtSignal(int, int, str)    # current, total, message
-    finished = pyqtSignal(object)           # MergeResult
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)    # current, total, message
+    finished = Signal(object)           # MergeResult
+    error = Signal(str)
 
     def __init__(
         self,

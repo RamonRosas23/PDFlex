@@ -7,7 +7,7 @@ import shutil
 import uuid
 from typing import Iterable, Sequence
 
-from PyQt6.QtWidgets import QWidget
+from PySide6.QtWidgets import QWidget
 
 from core.output_paths import unique_name
 from ui.common.dialogs import (

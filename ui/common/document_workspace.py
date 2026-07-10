@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional, TYPE_CHECKING
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtWidgets import (
     QBoxLayout,
     QFrame,
     QHBoxLayout,
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 class DocumentWorkspace(QFrame):
     """Componente comun que separa bandeja global y lote de trabajo."""
 
-    files_changed = pyqtSignal(list)
+    files_changed = Signal(list)
 
     def __init__(
         self,

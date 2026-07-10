@@ -6,8 +6,8 @@ from typing import List, Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import QObject, QPointF, QRectF, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import (
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, QThread, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import (
     QBrush,
     QColor,
     QDesktopServices,
@@ -20,7 +20,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget,
     QAbstractScrollArea,
     QFrame,
@@ -61,9 +61,9 @@ from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 class HighlightWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, jobs: List[HighlightJob]) -> None:
         super().__init__()
@@ -91,7 +91,7 @@ class HighlightWorker(QObject):
 class PageRenderWorker(QObject):
     """Renderiza una pagina PDF en hilo secundario y emite QImage."""
 
-    ready = pyqtSignal(object, int)
+    ready = Signal(object, int)
 
     def __init__(self, path: str, page_index: int, guard: int) -> None:
         super().__init__()
@@ -124,9 +124,9 @@ class PageRenderWorker(QObject):
 
 
 class HighlightCanvas(QWidget):
-    changed = pyqtSignal()
-    pageChanged = pyqtSignal(int, int)
-    viewChanged = pyqtSignal(float, str)
+    changed = Signal()
+    pageChanged = Signal(int, int)
+    viewChanged = Signal(float, str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

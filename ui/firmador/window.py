@@ -1,4 +1,4 @@
-﻿"""FirmadorWindow — pipeline de firma masiva de PDFs.
+"""FirmadorWindow — pipeline de firma masiva de PDFs.
 
 v3 — Reescritura completa:
   - Modelo de datos estable: _SigEntry con uid único (uuid) en vez de índice entero.
@@ -29,14 +29,14 @@ from typing import Dict, List, Optional, Set, Tuple
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import (
-    Qt, QSize, pyqtSignal, QThread, QObject, QUrl, QStandardPaths, QTimer,
+from PySide6.QtCore import (
+    Qt, QSize, Signal, QThread, QObject, QUrl, QStandardPaths, QTimer,
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QPixmap, QIcon, QDragEnterEvent, QDropEvent, QDesktopServices,
     QColor, QPainter, QImage,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFrame,
     QSpinBox, QCheckBox, QProgressBar,
@@ -249,11 +249,11 @@ def compact_page_intervals(page_indices: List[int]) -> str:
 # ====================================================================== #
 
 class SignWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    doc_started = pyqtSignal(str)
-    doc_finished = pyqtSignal(object)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    doc_started = Signal(str)
+    doc_finished = Signal(object)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(
         self,
@@ -392,9 +392,9 @@ class SignWorker(QObject):
 
 
 class ReviewExportWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(
         self,
@@ -934,7 +934,7 @@ class FirmadorWindow(PipelineWindow):
         cw_layout.setSpacing(0)
 
         # Stack: preview encima, empty-state debajo (se alternan)
-        from PyQt6.QtWidgets import QStackedWidget
+        from PySide6.QtWidgets import QStackedWidget
         self._canvas_stack = QStackedWidget()
 
         # Preview
@@ -1790,7 +1790,7 @@ class FirmadorWindow(PipelineWindow):
         return compact_page_intervals(pages)
 
     def _style_interval_item(self, item: QListWidgetItem, path: str) -> None:
-        from PyQt6.QtGui import QBrush
+        from PySide6.QtGui import QBrush
 
         invalid = False
         if path in self._page_interval_specific:
@@ -2919,7 +2919,7 @@ class FirmadorWindow(PipelineWindow):
 
     def _highlight_active_doc(self) -> None:
         """Marca el documento activo en la lista del paso 01 con color de acento."""
-        from PyQt6.QtGui import QBrush, QColor, QFont
+        from PySide6.QtGui import QBrush, QColor, QFont
         list_widget = self._docs_card.list_widget
         for i in range(list_widget.count()):
             item = list_widget.item(i)

@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
 from PIL import Image, ImageDraw, ImageStat
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from shell.context import ShellContext
 from shell.tool_registry import get_tool

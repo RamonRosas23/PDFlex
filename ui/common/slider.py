@@ -1,12 +1,12 @@
 """SliderWithValue — slider + spinbox sincronizados horizontalmente."""
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QWidget, QHBoxLayout, QSlider, QDoubleSpinBox
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QSlider, QDoubleSpinBox
 
 
 class SliderWithValue(QWidget):
-    valueChanged = pyqtSignal(float)
+    valueChanged = Signal(float)
 
     def __init__(
         self,

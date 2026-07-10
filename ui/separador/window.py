@@ -8,12 +8,12 @@ from pathlib import Path
 from typing import List, Optional
 
 import fitz
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
-from PyQt6.QtGui import (
+from PySide6.QtCore import Qt, QObject, QThread, Signal
+from PySide6.QtGui import (
     QPixmap,
     QDragEnterEvent, QDropEvent, QDesktopServices,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QFrame,
     QLineEdit, QScrollArea, QSpinBox,
@@ -56,9 +56,9 @@ from ui.common.icons import set_button_icon
 # ====================================================================== #
 
 class SplitterWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(object)   # SplitterJobResult
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(object)   # SplitterJobResult
+    error = Signal(str)
 
     def __init__(self, job: SplitterJob) -> None:
         super().__init__()

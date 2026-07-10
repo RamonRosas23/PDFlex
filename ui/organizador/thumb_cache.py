@@ -8,8 +8,8 @@ from typing import Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QImage
+from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtGui import QImage
 
 
 @dataclass(frozen=True)
@@ -102,7 +102,7 @@ class _ThumbRequest:
 class ThumbnailWorker(QObject):
     """Background worker that renders thumbnails and emits them via signal."""
 
-    thumb_ready = pyqtSignal(str, str, object)  # lane_id, page_id, QImage (convert to QPixmap in GUI thread)
+    thumb_ready = Signal(str, str, object)  # lane_id, page_id, QImage (convert to QPixmap in GUI thread)
 
     def __init__(self, cache: ThumbnailCache, parent=None) -> None:
         super().__init__(parent)

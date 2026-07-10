@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     QEasingCurve, QPropertyAnimation, QSequentialAnimationGroup,
     QTimer,
 )
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QLabel, QWidget, QGraphicsDropShadowEffect
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QLabel, QWidget, QGraphicsDropShadowEffect
 
 # Toggle global — Preferencias lo cambia cuando el usuario lo pide
 _reduced_motion: bool = False
@@ -40,7 +40,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 
 class AnimationHelper:
-    """Helpers estáticos para animaciones PyQt6."""
+    """Helpers estáticos para animaciones PySide6."""
 
     # ── Fade ────────────────────────────────────────────────────────────────
 
@@ -165,7 +165,7 @@ class AnimationHelper:
     @staticmethod
     def apply_glow(widget: QWidget, accent: str, blur: int = 18, alpha: int = 80) -> None:
         """Aplica QGraphicsDropShadowEffect de acento a un widget."""
-        from PyQt6.QtWidgets import QApplication
+        from PySide6.QtWidgets import QApplication
         app = QApplication.instance()
         if app is not None and app.platformName().lower() == "offscreen":
             widget.setGraphicsEffect(None)
@@ -180,7 +180,7 @@ class AnimationHelper:
     @staticmethod
     def apply_glow_to_primary_buttons(root: QWidget, accent: str) -> None:
         """Aplica glow a todos los QPushButton[class='Primary'] bajo root."""
-        from PyQt6.QtWidgets import QPushButton
+        from PySide6.QtWidgets import QPushButton
         for btn in root.findChildren(QPushButton):
             if btn.property("class") == "Primary":
                 if btn.isEnabled():

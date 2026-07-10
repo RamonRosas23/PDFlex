@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Optional
 
 import fitz
-from PyQt6.QtCore import Qt, QPoint, pyqtSignal
-from PyQt6.QtGui import QImage, QKeyEvent, QPixmap, QWheelEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QPoint, Signal
+from PySide6.QtGui import QImage, QKeyEvent, QPixmap, QWheelEvent
+from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
@@ -25,7 +25,7 @@ _CANVAS_MAX_PX = 2600
 class OrganizerPagePreviewDialog(QDialog):
     """Immersive preview for the current ordered PageRef list."""
 
-    page_action_requested = pyqtSignal(str, str)
+    page_action_requested = Signal(str, str)
 
     def __init__(
         self,

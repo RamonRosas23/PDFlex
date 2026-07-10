@@ -5,7 +5,7 @@ from pathlib import Path
 import re
 from typing import Iterable
 
-from PyQt6.QtCore import QSettings
+from PySide6.QtCore import QSettings
 
 
 _NATURAL_RE = re.compile(r"\d+|\D+")

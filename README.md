@@ -61,14 +61,14 @@ Dependencias principales:
 - `PyMuPDF` (lectura/escritura veloz de PDFs, Detección de bloques de texto)
 - `Pillow` y `OpenCV` (manipulación de firmas, remoción de fondos, pre-procesamiento)
 - `pytesseract` (enlace al motor de OCR Tesseract)
-- `PyQt6` (Interfaz moderna, QThreads, UX limpia)
+- `PySide6` (Interfaz moderna, QThreads, UX limpia)
 
 ### Opción B — Opciones de Compilación (distribución)
 
 El repositorio incluye automatizaciones para obtener ejecutables independientes de Python.
 
 - `build_nuitka.ps1`: Compilación preferida y más optimizada (convierte código Python a C y crea un binario rápido). Requiere gcc/msvc instalado.
-- `build_exe.ps1`: Construye el `.exe` portable standard mediante PyInstaller.
+- `build_exe.ps1`: Construye una distribución portable `onedir` mediante PyInstaller.
 - `build_setup.ps1`: Genera un instalador formal y un ZIP portable distribuyendo los artefactos con InnoSetup (`installer.iss`).
 
 > NOTA: Para el OCR, la carpeta `assets/tessdata/` debe ser distribuida junto con el ejecutable generado o empaquetada e instruido a Tesseract sobre su ubicación en ejecución temporal.
@@ -87,7 +87,7 @@ PDFlex/
 ├── shell/                     # Núcleo modular del sistema
 │   ├── launcher.py            # Orquestador del Grid de Herramientas
 │   └── tool_registry.py       # Registro dinámico de herramientas
-└── ui/                        # Implementación gráfica (PyQt6)
+└── ui/                        # Implementación gráfica (PySide6)
     ├── main_window.py         # Home (Grid Menu)
     └── common/                # Flujo estándar paso a paso (Files -> Config -> Result)
 ```
@@ -99,4 +99,4 @@ Todas las herramientas internas comparten una UI Wizard consistente bajo `ui/com
 
 1. El previsualizador renderiza el PDF a 144 DPI para nitidez. Las coordenadas se convierten a puntos PDF (72 DPI).
 2. Algoritmos como `safe_zone.py` implementan bounding-box collisions: si un foleo o firma caerá sobre un bloque de texto que el PDF declara o en una zona prohibida (márgenes estrictos), busca en espiral la zona válida más cercana intentando no alterar la legibilidad.
-3. El OCR es de alto consumo. Se aísla por `multiprocessing` con colas y señales cruzadas para evitar crashes en el loop principal de PyQt6. Se implementa auto-healing por crash.
+3. El OCR es de alto consumo. Se aísla por `multiprocessing` con colas y señales cruzadas para evitar crashes en el loop principal de PySide6. Se implementa auto-healing por crash.

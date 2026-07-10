@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QPoint, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
     QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
     QProgressBar, QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
@@ -129,7 +129,7 @@ class _FileRow(QFrame):
 class WordConvertDialog(QDialog):
     """Modal conversion progress for .doc/.docx files."""
 
-    cancel_requested = pyqtSignal()
+    cancel_requested = Signal()
 
     def __init__(self, parent: QWidget | None, paths: List[str]) -> None:
         super().__init__(parent)

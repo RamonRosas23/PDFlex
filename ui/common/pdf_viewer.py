@@ -14,9 +14,9 @@ from typing import List
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import QCursor, QKeySequence, QPixmap, QImage, QIcon, QShortcut
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QSize, QTimer, Signal
+from PySide6.QtGui import QCursor, QKeySequence, QPixmap, QImage, QIcon, QShortcut
+from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QListWidget, QListWidgetItem, QLabel, QPushButton,
     QMenu, QScrollArea, QSpinBox, QToolTip,
@@ -60,7 +60,7 @@ def _pil_to_qpixmap(img: Image.Image) -> QPixmap:
 class GenericPdfViewer(QWidget):
     """Visor genérico: lista de documentos resultado + render PDF interactivo."""
 
-    openInExplorer = pyqtSignal(str)
+    openInExplorer = Signal(str)
 
     def __init__(self, doc_list_title: str = "Documentos procesados", parent=None) -> None:
         super().__init__(parent)
@@ -332,7 +332,7 @@ class GenericPdfViewer(QWidget):
         Llamar después de set_results() para que quede debajo de los stats base.
         """
         self._extra_stat_bar.set_stats(stats)
-        from PyQt6.QtCore import QTimer
+        from PySide6.QtCore import QTimer
         QTimer.singleShot(60, self._extra_stat_bar.animate)
 
     def _refresh_auto_stats(self, results: list) -> None:
@@ -346,7 +346,7 @@ class GenericPdfViewer(QWidget):
         if errors > 0:
             stats.append({"value": errors, "label": "errores", "color": _C["danger"]})
         self._stat_bar.set_stats(stats)
-        from PyQt6.QtCore import QTimer
+        from PySide6.QtCore import QTimer
         QTimer.singleShot(30, self._stat_bar.animate)
 
     def clear_results(self) -> None:

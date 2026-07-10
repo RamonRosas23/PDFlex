@@ -14,12 +14,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from PIL import Image
-from PyQt6.QtCore import Qt, QSize, pyqtSignal, QThread, QObject, QUrl
+from PySide6.QtCore import Qt, QSize, Signal, QThread, QObject, QUrl
 from ui.common.tool_scaffold import RunnerThread
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QPixmap, QDragEnterEvent, QDropEvent, QDesktopServices, QColor, QFont,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QStackedWidget, QFrame,
     QSpinBox, QDoubleSpinBox, QCheckBox, QSlider, QProgressBar,
@@ -48,11 +48,11 @@ from .results_viewer import ResultsViewer
 # ====================================================================== #
 
 class SignWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    doc_started = pyqtSignal(str)
-    doc_finished = pyqtSignal(object)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    doc_started = Signal(str)
+    doc_finished = Signal(object)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, jobs: List[SignJob],
                  variation: VariationConfig):
@@ -137,7 +137,7 @@ def make_divider() -> QFrame:
 
 class SliderWithValue(QWidget):
     """Slider + spinbox alineados horizontalmente, con altura consistente."""
-    valueChanged = pyqtSignal(float)
+    valueChanged = Signal(float)
 
     def __init__(self, minimum: float, maximum: float, value: float,
                  step: float = 0.1, suffix: str = "", decimals: int = 1):

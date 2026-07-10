@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
 from PIL import Image
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from core.membrete_library import add_letterhead_to_library
 from shell.context import ShellContext

@@ -37,7 +37,7 @@ def test_lru_replaces_existing_key_accounting_bytes():
 
 import sys
 
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 
 @pytest.fixture(scope="module")
@@ -48,7 +48,7 @@ def qapp():
 
 
 def _wait_for(app, predicate, timeout_ms=8000):
-    from PyQt6.QtCore import QElapsedTimer
+    from PySide6.QtCore import QElapsedTimer
     t = QElapsedTimer()
     t.start()
     while not predicate():

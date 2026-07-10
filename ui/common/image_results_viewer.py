@@ -5,9 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QByteArray, QBuffer, QIODevice, QMimeData, Qt, QSize, QEvent, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QClipboard, QCursor, QImage, QKeySequence, QPixmap, QShortcut
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QMimeData, Qt, QSize, QEvent, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QClipboard, QCursor, QImage, QKeySequence, QPixmap, QShortcut
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFrame, QApplication, QMenu, QToolTip,
 )
@@ -40,7 +40,7 @@ class ImageResultsViewer(QWidget):
     attributes.  Also accepts grouped results via ``set_grouped_results``.
     """
 
-    openInExplorer = pyqtSignal(str)
+    openInExplorer = Signal(str)
 
     def __init__(
         self,
@@ -207,7 +207,7 @@ class ImageResultsViewer(QWidget):
 
     def _refresh_stat_bar(self, results: list) -> None:
         from ui.styles import COLORS as _C
-        from PyQt6.QtCore import QTimer
+        from PySide6.QtCore import QTimer
         ok = sum(1 for r in results if getattr(r, "success", False))
         errors = len(results) - ok
         stats: list[dict] = [

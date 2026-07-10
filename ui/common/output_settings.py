@@ -1,7 +1,7 @@
 """Global output naming preferences."""
 from __future__ import annotations
 
-from PyQt6.QtCore import QSettings
+from PySide6.QtCore import QSettings
 
 
 ORG_NAME = "GRUPO OCMX"

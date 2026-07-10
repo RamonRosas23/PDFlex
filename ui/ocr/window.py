@@ -17,9 +17,9 @@ import threading
 import time
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QObject, QThread, QSize, pyqtSignal
-from PyQt6.QtGui import QColor, QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QObject, QThread, QSize, Signal
+from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel, QListWidget,
     QListWidgetItem, QComboBox, QCheckBox, QFrame, QGridLayout,
     QApplication, QPlainTextEdit,
@@ -50,9 +50,9 @@ from ui.common.icons import icon, set_button_icon
 class OcrProcessWorker(QObject):
     """Supervisa un proceso OCR independiente para proteger la interfaz."""
 
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     _POLL_SECONDS = 0.10
     _FORCE_CANCEL_AFTER_SECONDS = 2.0
@@ -300,7 +300,7 @@ class OcrProcessWorker(QObject):
 class TextResultsViewer(QWidget):
     """Lista de transcripciones, metricas y preview del texto editable."""
 
-    openInExplorer = pyqtSignal(str)
+    openInExplorer = Signal(str)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

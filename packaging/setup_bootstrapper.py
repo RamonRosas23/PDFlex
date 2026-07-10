@@ -418,10 +418,10 @@ def run_headless(cli: CliOptions) -> int:
 
 
 def import_qt():
-    from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
-    from PyQt6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
-    from PyQt6.QtCore import QUrl
-    from PyQt6.QtWidgets import (
+    from PySide6.QtCore import Qt, QThread, QTimer, Signal
+    from PySide6.QtGui import QColor, QDesktopServices, QFont, QIcon, QPainter, QPixmap
+    from PySide6.QtCore import QUrl
+    from PySide6.QtWidgets import (
         QApplication,
         QCheckBox,
         QFileDialog,
@@ -466,7 +466,7 @@ def import_qt():
         "QVBoxLayout": QVBoxLayout,
         "QHBoxLayout": QHBoxLayout,
         "QWidget": QWidget,
-        "pyqtSignal": pyqtSignal,
+        "Signal": Signal,
     }
 
 
@@ -487,7 +487,7 @@ def create_qt_classes():
         QT = import_qt()
 
     QThread = QT["QThread"]
-    pyqtSignal = QT["pyqtSignal"]
+    Signal = QT["Signal"]
     QFrame = QT["QFrame"]
     QLabel = QT["QLabel"]
     QHBoxLayout = QT["QHBoxLayout"]
@@ -506,9 +506,9 @@ def create_qt_classes():
     QTextEdit = QT["QTextEdit"]
 
     class InstallerWorker(QThread):
-        progress = pyqtSignal(int, str)
-        detail = pyqtSignal(str)
-        finished = pyqtSignal(int, str, str)
+        progress = Signal(int, str)
+        detail = Signal(str)
+        finished = Signal(int, str, str)
 
         def __init__(self, options: InstallOptions) -> None:
             super().__init__()

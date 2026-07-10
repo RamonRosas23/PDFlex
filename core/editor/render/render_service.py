@@ -14,8 +14,8 @@ import queue
 import threading
 
 import fitz
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtGui import QImage
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QImage
 
 from .pixmap_cache import ByteBudgetLRU
 
@@ -23,8 +23,8 @@ _SENTINEL = None
 
 
 class RenderService(QObject):
-    pixmap_ready = pyqtSignal(int, float, int, QImage)   # page, scale, generation, image
-    render_failed = pyqtSignal(int, str)                  # page, error
+    pixmap_ready = Signal(int, float, int, QImage)   # page, scale, generation, image
+    render_failed = Signal(int, str)                  # page, error
 
     def __init__(self, pdf_path: str, cache_budget_mb: int = 384) -> None:
         super().__init__()

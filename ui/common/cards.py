@@ -2,7 +2,7 @@
 from __future__ import annotations
 from typing import Optional
 
-from PyQt6.QtWidgets import QFrame, QVBoxLayout, QLabel
+from PySide6.QtWidgets import QFrame, QVBoxLayout, QLabel
 
 
 def make_card(title: Optional[str] = None, hint: Optional[str] = None) -> QFrame:

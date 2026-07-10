@@ -57,7 +57,7 @@ def test_animation_helper_imports():
 def test_fade_in_returns_animation():
     """fade_in retorna una QPropertyAnimation configurada."""
     import sys
-    from PyQt6.QtWidgets import QApplication, QWidget
+    from PySide6.QtWidgets import QApplication, QWidget
     from ui.common.animations import AnimationHelper
     app = QApplication.instance() or QApplication(sys.argv)
     w = QWidget()
@@ -70,7 +70,7 @@ def test_fade_in_returns_animation():
 def test_count_up_smoke():
     """count_up no lanza excepciones."""
     import sys
-    from PyQt6.QtWidgets import QApplication, QLabel
+    from PySide6.QtWidgets import QApplication, QLabel
     from ui.common.animations import AnimationHelper
     app = QApplication.instance() or QApplication(sys.argv)
     lbl = QLabel("0")
@@ -81,7 +81,7 @@ def test_count_up_smoke():
 def test_apply_glow_smoke():
     """apply_glow no lanza excepciones."""
     import sys
-    from PyQt6.QtWidgets import QApplication, QPushButton
+    from PySide6.QtWidgets import QApplication, QPushButton
     from ui.common.animations import AnimationHelper
     app = QApplication.instance() or QApplication(sys.argv)
     btn = QPushButton("Test")
@@ -102,8 +102,8 @@ def test_all_tool_icons_exist():
 def test_make_tool_icon_card_renders():
     """make_tool_icon_card produce un QPixmap no nulo."""
     import sys
-    from PyQt6.QtWidgets import QApplication
-    from PyQt6.QtGui import QPixmap
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtGui import QPixmap
     from ui.common.icons import make_tool_icon_card
     app = QApplication.instance() or QApplication(sys.argv)
     pix = make_tool_icon_card("firmador", "#5E6AD2", size=40)
@@ -114,7 +114,7 @@ def test_make_tool_icon_card_renders():
 def test_step_btn_completed_state():
     """_StepBtn puede marcar un paso como completado (muestra checkmark)."""
     import sys
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     from ui.common.tool_scaffold import _StepBtn
     app = QApplication.instance() or QApplication(sys.argv)
     btn = _StepBtn("01", "Documentos")
@@ -129,7 +129,7 @@ def test_documents_card_has_inline_actions():
     """DocumentsCard muestra Quitar y Vaciar como botones inline visibles."""
     import sys
     from unittest.mock import MagicMock
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     ctx = MagicMock()
     ctx.tray.changed = MagicMock()
@@ -149,7 +149,7 @@ def test_documents_card_drag_feedback_uses_accent():
     """Drag highlight usa el acento inyectado y restaura estado base."""
     import sys
     from unittest.mock import MagicMock
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     ctx = MagicMock()
     ctx.tray.changed = MagicMock()
@@ -175,7 +175,7 @@ def test_process_step_running_ui_shimmer_state():
     verificamos el estado interno de ProcessStep y las señales que los controlan.
     """
     import sys
-    from PyQt6.QtWidgets import QApplication, QPushButton
+    from PySide6.QtWidgets import QApplication, QPushButton
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.process_step import ProcessStep
 
@@ -207,7 +207,7 @@ def test_process_step_running_ui_shimmer_state():
 def test_elided_label_has_compact_size_hint():
     """ElidedLabel no fuerza layouts anchos con nombres largos."""
     import sys
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.result_ui import ElidedLabel
     label = ElidedLabel("X" * 240)
@@ -218,7 +218,7 @@ def test_elided_label_has_compact_size_hint():
 def test_result_file_size_and_item_status(tmp_path):
     """Las filas compartidas describen estado y tamaño de salida."""
     import sys
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.result_ui import format_file_size, make_result_list_item
 
@@ -242,7 +242,7 @@ def test_pdf_viewer_page_status_and_navigation(tmp_path):
     import sys
     from types import SimpleNamespace
     import fitz
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.pdf_viewer import GenericPdfViewer
 
@@ -283,7 +283,7 @@ def test_pdf_viewer_copies_current_pdf_as_file(tmp_path):
     import sys
     from types import SimpleNamespace
     import fitz
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.pdf_viewer import GenericPdfViewer
 
@@ -314,7 +314,7 @@ def test_image_viewer_result_rows_include_status_and_size(tmp_path):
     import sys
     from types import SimpleNamespace
     from PIL import Image
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.image_results_viewer import ImageResultsViewer
 
@@ -340,7 +340,7 @@ def test_image_viewer_copies_full_image_to_clipboard(tmp_path):
     import sys
     from types import SimpleNamespace
     from PIL import Image
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.image_results_viewer import ImageResultsViewer
 
@@ -369,7 +369,7 @@ def test_image_viewer_copies_selected_file_to_clipboard(tmp_path):
     import sys
     from types import SimpleNamespace
     from PIL import Image
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.image_results_viewer import ImageResultsViewer
 
@@ -395,8 +395,8 @@ def test_image_viewer_keeps_context_menu_alive_until_it_is_closed(tmp_path):
     import sys
     from types import SimpleNamespace
     from PIL import Image
-    from PyQt6.QtCore import QPoint
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtCore import QPoint
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     from ui.common.image_results_viewer import ImageResultsViewer
 

@@ -6,8 +6,8 @@ from typing import List, Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import QObject, QPointF, QRectF, QThread, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import (
+from PySide6.QtCore import QObject, QPointF, QRectF, QThread, QUrl, Qt, Signal
+from PySide6.QtGui import (
     QBrush,
     QColor,
     QDesktopServices,
@@ -20,7 +20,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QComboBox, QScrollArea,
 )
@@ -47,9 +47,9 @@ from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 class RedactionWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, jobs: List[RedactionJob]) -> None:
         super().__init__()
@@ -76,7 +76,7 @@ class RedactionWorker(QObject):
 
 class PageRenderWorker(QObject):
     """Renderiza una página PDF en hilo secundario y emite QImage."""
-    ready = pyqtSignal(object, int)  # (QImage | None, guard_id)
+    ready = Signal(object, int)  # (QImage | None, guard_id)
 
     def __init__(self, path: str, page_index: int, guard: int) -> None:
         super().__init__()
@@ -110,8 +110,8 @@ class PageRenderWorker(QObject):
 
 
 class RedactionCanvas(QWidget):
-    changed = pyqtSignal()
-    pageChanged = pyqtSignal(int, int)
+    changed = Signal()
+    pageChanged = Signal(int, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

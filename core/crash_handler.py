@@ -26,9 +26,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Type
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QFont
+from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGraphicsDropShadowEffect,
     QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
@@ -423,7 +423,7 @@ class CrashDialog(QDialog):
         if isinstance(btn, QPushButton):
             original = btn.text()
             btn.setText("¡Copiado!")
-            from PyQt6.QtCore import QTimer
+            from PySide6.QtCore import QTimer
             QTimer.singleShot(1800, lambda: btn.setText(original))
 
     def mousePressEvent(self, event) -> None:
@@ -583,7 +583,7 @@ def install_crash_handlers() -> None:
 
 def wrap_qthread(thread_instance, *, fatal: bool = False) -> None:
     """Envuelve el run() de un QThread para capturar excepciones no esperadas."""
-    from PyQt6.QtCore import QThread
+    from PySide6.QtCore import QThread
     original_run = thread_instance.run
 
     def safe_run() -> None:

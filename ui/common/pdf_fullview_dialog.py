@@ -20,13 +20,13 @@ from typing import Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer,
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QIcon, QPixmap, QImage, QKeyEvent, QWheelEvent, QPainter, QColor,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QScrollArea,
     QSizePolicy, QSpinBox, QVBoxLayout, QWidget,

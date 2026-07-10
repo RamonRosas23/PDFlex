@@ -9,7 +9,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import fitz
 import pytest
 from PIL import Image, ImageDraw
-from PyQt6.QtWidgets import QApplication, QScrollArea, QWidget
+from PySide6.QtWidgets import QApplication, QScrollArea, QWidget
 
 from shell.context import ShellContext
 from shell.tray import PdfTray

@@ -3,12 +3,12 @@ from __future__ import annotations
 
 import sys
 import pytest
-from PyQt6.QtCore import QThread
+from PySide6.QtCore import QThread
 
 
 @pytest.fixture(scope="module")
 def app():
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     a = QApplication.instance() or QApplication(sys.argv)
     yield a
 
@@ -84,7 +84,7 @@ def test_double_start_raises_runtime_error(app):
 # ---------------------------------------------------------------------------
 
 def test_fast_worker_emits_finished(app):
-    from PyQt6.QtCore import Qt
+    from PySide6.QtCore import Qt
     from ui.common.base_worker import WorkerThread
 
     worker = _make_fast_worker()

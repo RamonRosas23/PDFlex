@@ -8,8 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Optional
 
-from PyQt6.QtCore import QPoint, Qt
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
     QSpinBox, QTextEdit, QVBoxLayout, QWidget,
 )

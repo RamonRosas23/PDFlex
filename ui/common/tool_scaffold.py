@@ -9,10 +9,10 @@ Provee:
 from __future__ import annotations
 from typing import TYPE_CHECKING, List, Tuple
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PySide6.QtCore import Qt, QThread, Signal
 from ui.styles import COLORS
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QStackedWidget,
 )
@@ -31,7 +31,7 @@ class _StepBtn(QWidget):
     """Botón de paso con badge numérico y nombre.  Reemplaza el QPushButton
     con texto de espacios que era frágil e inconsistente."""
 
-    _clicked = pyqtSignal()
+    _clicked = Signal()
 
     def __init__(self, num: str, name: str, hint: str = "", parent=None) -> None:
         super().__init__(parent)
@@ -122,14 +122,14 @@ class _StepBtn(QWidget):
 
 
 # ──────────────────────────────────────────────────────────────
-# RunnerThread — evita el bug de moveToThread+started.connect en PyQt6/Windows
+# RunnerThread — conserva el patrón robusto de ejecución de workers en Windows
 # ──────────────────────────────────────────────────────────────
 
 class RunnerThread(QThread):
     """QThread subclass that calls target() directly in run().
 
-    Use instead of QThread + moveToThread + started.connect, which fails on
-    PyQt6/Windows when the thread has a parent widget.
+    Use instead of QThread + moveToThread + started.connect. This keeps worker
+    execution deterministic when the thread has a parent widget on Windows.
     """
 
     def __init__(self, target, parent=None) -> None:
@@ -147,7 +147,7 @@ class RunnerThread(QThread):
 class PipelineWindow(QWidget):
     """Widget base para el pipeline de cada herramienta."""
 
-    outputs_ready = pyqtSignal(list)   # list[str] — paths de PDFs producidos
+    outputs_ready = Signal(list)   # list[str] — paths de PDFs producidos
 
     # Subclases deben definir estas constantes
     SECTIONS: List[Tuple[str, str, str]] = []   # (num, nombre, hint)
@@ -162,12 +162,12 @@ class PipelineWindow(QWidget):
         self._slide_animations: list = []
         self._build_scaffold()
         self._apply_tool_accent()
-        from PyQt6.QtCore import QTimer
+        from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self._apply_primary_glows)
         QTimer.singleShot(0, lambda: self._update_navbar(0) if self.SECTIONS else None)
 
         # Atajos Alt+1-9 para navegar entre pasos
-        from PyQt6.QtGui import QShortcut
+        from PySide6.QtGui import QShortcut
         self._alt_shortcuts: list = []
         for n in range(1, 10):
             sc = QShortcut(self)
@@ -248,7 +248,7 @@ class PipelineWindow(QWidget):
         sb.addWidget(div)
 
         # Barra de progreso de pasos — 3px, sin texto, coloreada por accent en _apply_tool_accent
-        from PyQt6.QtWidgets import QProgressBar
+        from PySide6.QtWidgets import QProgressBar
         self._step_progress = QProgressBar()
         self._step_progress.setRange(0, 100)
         self._step_progress.setValue(0)
@@ -622,7 +622,7 @@ QListWidget::item:selected:!active {{
         AnimationHelper.apply_glow_to_primary_buttons(self, accent)
 
     def eventFilter(self, obj, event) -> bool:
-        from PyQt6.QtCore import QEvent
+        from PySide6.QtCore import QEvent
         if obj is getattr(self, "_sidebar_frame", None):
             if event.type() == QEvent.Type.Enter:
                 if hasattr(self, "_shortcut_hint"):
@@ -638,8 +638,8 @@ QListWidget::item:selected:!active {{
 
     def _slide_to_section(self, idx: int) -> None:
         """Transición slide animada 220ms OutCubic entre pasos del pipeline."""
-        from PyQt6.QtCore import QPropertyAnimation, QRect, QEasingCurve
-        from PyQt6.QtWidgets import QLabel
+        from PySide6.QtCore import QPropertyAnimation, QRect, QEasingCurve
+        from PySide6.QtWidgets import QLabel
         from ui.common.animations import is_reduced_motion
 
         if idx < 0 or idx >= self.stack.count():

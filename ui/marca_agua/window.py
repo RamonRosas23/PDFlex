@@ -5,9 +5,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QObject, QThread, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QImage, QPixmap
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QImage, QPixmap
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QComboBox, QGridLayout, QLineEdit, QSlider, QSpinBox,
 )
@@ -49,8 +49,8 @@ from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 class WatermarkPreviewWorker(QObject):
     """Genera preview de marca de agua en hilo secundario. Emite QImage."""
-    ready = pyqtSignal(object)   # QImage
-    failed = pyqtSignal(str)
+    ready = Signal(object)   # QImage
+    failed = Signal(str)
 
     def __init__(
         self,
@@ -101,9 +101,9 @@ class WatermarkPreviewWorker(QObject):
 
 
 class WatermarkWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, jobs: List[WatermarkJob]) -> None:
         super().__init__()
@@ -523,7 +523,7 @@ class MarcaAguaWindow(PipelineWindow):
         self._stamp_conv_thread.finished.connect(worker.deleteLater)
         self._stamp_conv_thread.finished.connect(self._stamp_conv_thread.deleteLater)
         self._stamp_conv_dlg.cancel_requested.connect(worker.cancel)
-        from PyQt6.QtCore import QTimer
+        from PySide6.QtCore import QTimer
 
         QTimer.singleShot(0, self._stamp_conv_thread.start)
         self._stamp_conv_dlg.exec()

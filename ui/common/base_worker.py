@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PySide6.QtCore import QObject, QThread, Signal
 
 
 class BaseWorker(QObject):
@@ -16,9 +16,9 @@ class BaseWorker(QObject):
         error(message): mensaje de error si la tarea falla.
     """
 
-    progress = pyqtSignal(int, int, str)   # current, total, message
-    finished = pyqtSignal(list)            # lista de resultados
-    error = pyqtSignal(str)               # mensaje de error
+    progress = Signal(int, int, str)   # current, total, message
+    finished = Signal(list)            # lista de resultados
+    error = Signal(str)               # mensaje de error
 
     def __init__(self) -> None:
         super().__init__()

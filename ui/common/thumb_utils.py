@@ -2,8 +2,8 @@
 from __future__ import annotations
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBrush
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QPixmap, QImage, QPainter, QColor, QPen, QBrush
 
 
 def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QImage]:
@@ -132,7 +132,7 @@ class ThumbnailLoader(QObject):
             Convertir a QPixmap en el slot receptor (GUI thread).
     """
 
-    ready = pyqtSignal(str, object)  # (path, QImage | None)
+    ready = Signal(str, object)  # (path, QImage | None)
 
     def __init__(self, pdf_path: str, width: int = 72) -> None:
         super().__init__()

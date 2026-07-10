@@ -7,7 +7,7 @@ from unittest.mock import patch, MagicMock
 
 @pytest.fixture(scope="module")
 def app():
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     a = QApplication.instance() or QApplication(sys.argv)
     yield a
 

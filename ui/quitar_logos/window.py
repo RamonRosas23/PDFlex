@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import fitz
-from PyQt6.QtCore import QObject, QThread, QUrl, Qt, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QImage, QPixmap
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent, QImage, QPixmap
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QGridLayout,
@@ -80,9 +80,9 @@ class LogoListCard(ImageListCard):
 
 
 class LogoRemovalWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, jobs: List[LogoRemovalJob]) -> None:
         super().__init__()
@@ -110,8 +110,8 @@ class LogoRemovalWorker(QObject):
 
 
 class LogoPreviewWorker(QObject):
-    ready = pyqtSignal(object, list, int, int)
-    failed = pyqtSignal(str, int)
+    ready = Signal(object, list, int, int)
+    failed = Signal(str, int)
 
     def __init__(
         self,

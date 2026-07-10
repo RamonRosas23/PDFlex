@@ -20,7 +20,7 @@ from core.media_conversion import (
 
 if TYPE_CHECKING:
     from shell.context import ShellContext
-    from PyQt6.QtWidgets import QWidget
+    from PySide6.QtWidgets import QWidget
 
 
 DEFAULT_DOCUMENT_INPUT_EXTENSIONS = tuple(sorted(DOCUMENT_IMPORT_EXTENSIONS))

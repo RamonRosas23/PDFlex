@@ -6,9 +6,9 @@ import os
 import struct
 from typing import Iterable
 
-from PyQt6.QtCore import QByteArray, QMimeData, QUrl
-from PyQt6.QtGui import QClipboard
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtCore import QByteArray, QMimeData, QUrl
+from PySide6.QtGui import QClipboard
+from PySide6.QtWidgets import QApplication
 
 
 def existing_file_paths(paths: Iterable[str]) -> list[str]:

@@ -9,12 +9,12 @@ from typing import List, Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal, QRectF, QSize
-from PyQt6.QtGui import (
+from PySide6.QtCore import Qt, QObject, QThread, Signal, QRectF, QSize
+from PySide6.QtGui import (
     QPixmap, QImage, QPainter, QPen, QColor, QBrush,
     QDragEnterEvent, QDropEvent, QDesktopServices,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QFrame,
     QScrollArea, QListWidget, QListWidgetItem,
@@ -75,8 +75,8 @@ class _MembretePageLoader(QObject):
     """
 
     # path, source_name, QImage_thumb, QImage_prev, pw, ph, page_count, MembreteMargins
-    loaded = pyqtSignal(str, str, object, object, float, float, int, object)
-    error = pyqtSignal(str, str)  # path, error_msg
+    loaded = Signal(str, str, object, object, float, float, int, object)
+    error = Signal(str, str)  # path, error_msg
 
     def __init__(self, path: str, source_name: str) -> None:
         super().__init__()
@@ -142,9 +142,8 @@ class _MembretePageLoader(QObject):
 class _MembretaLoadThread(QThread):
     """Hilo que ejecuta _MembretePageLoader.run() en background.
 
-    Usar subclase de QThread en vez de moveToThread+started.connect evita
-    el problema de PyQt6 donde thread.started no dispara el slot cuando el
-    loader está en un QThread con padre (QThread(parent)).
+    Usar una subclase de QThread en vez de moveToThread+started.connect
+    conserva una ejecución determinista cuando el QThread tiene padre.
     El loader permanece en el hilo GUI: sus señales llegarán al slot receptor
     vía QueuedConnection automáticamente.
     """
@@ -162,9 +161,9 @@ class _MembretaLoadThread(QThread):
 # ====================================================================== #
 
 class MembreteWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(
         self,
@@ -216,7 +215,7 @@ class MarginPreviewWidget(QWidget):
         self._left: float = 18.0
         self._right: float = 18.0
         self.setMinimumSize(200, 260)
-        from PyQt6.QtWidgets import QSizePolicy
+        from PySide6.QtWidgets import QSizePolicy
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_letterhead(self, pixmap: QPixmap, page_w_pt: float, page_h_pt: float) -> None:

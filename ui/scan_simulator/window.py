@@ -6,9 +6,9 @@ from pathlib import Path
 from typing import List, Optional
 
 import fitz
-from PyQt6.QtCore import QObject, QThread, pyqtSignal, Qt, QUrl
-from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, QThread, Signal, Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
@@ -56,9 +56,9 @@ _TONE_ITEMS = (
 
 
 class ScanSimulatorWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(
         self,

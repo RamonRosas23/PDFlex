@@ -4,9 +4,9 @@ from __future__ import annotations
 from typing import Optional
 
 import fitz
-from PyQt6.QtCore import QSize, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QIcon, QImage, QPixmap
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QBrush, QColor, QIcon, QImage, QPixmap
+from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
     QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
@@ -25,7 +25,7 @@ _THUMB_TARGET_PX = 150
 class SplitPreviewPanel(QFrame):
     """Live PDF preview with page coverage awareness."""
 
-    addVisiblePageRequested = pyqtSignal(int)
+    addVisiblePageRequested = Signal(int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

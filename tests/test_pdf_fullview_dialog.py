@@ -11,7 +11,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog, ZOOM_LEVELS
 

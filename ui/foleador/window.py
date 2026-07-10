@@ -15,12 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QObject, QThread, pyqtSignal
-from PyQt6.QtGui import (
+from PySide6.QtCore import Qt, QObject, QThread, Signal
+from PySide6.QtGui import (
     QPixmap, QPainter, QColor, QFont, QFontMetrics,
     QDragEnterEvent, QDropEvent, QDesktopServices,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QFrame, QComboBox, QCheckBox,
     QLineEdit, QScrollArea, QSpinBox, QGridLayout, QListWidget, QListWidgetItem,
@@ -66,9 +66,9 @@ El número crece hacia la derecha, nunca se trunca.
 
 
 class FoleadorWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, jobs, config, style) -> None:
         super().__init__()
@@ -891,7 +891,7 @@ class FoleadorWindow(PipelineWindow):
         self._pos_saved_placement = (cx_n, cy_n, new_w_pt, new_h_pt, angle)
 
     def _on_pick_text_color(self) -> None:
-        from PyQt6.QtWidgets import QColorDialog
+        from PySide6.QtWidgets import QColorDialog
         color = QColorDialog.getColor(self._text_qcolor, self, "Color del texto")
         if color.isValid():
             self._text_qcolor = color
@@ -918,7 +918,7 @@ class FoleadorWindow(PipelineWindow):
         self._update_style_preview()
 
     def _on_pick_bg_color(self) -> None:
-        from PyQt6.QtWidgets import QColorDialog
+        from PySide6.QtWidgets import QColorDialog
         init = self._bg_qcolor or QColor(255, 255, 255)
         color = QColorDialog.getColor(init, self, "Color de fondo")
         if color.isValid():

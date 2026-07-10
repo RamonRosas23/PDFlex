@@ -34,7 +34,7 @@ def _wait_until(app, predicate, timeout_ms=2000):
 
 @pytest.fixture(scope="module")
 def app():
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     a = QApplication.instance() or QApplication(sys.argv)
     yield a
 
@@ -91,7 +91,7 @@ def test_thumbnail_loader_archivo_invalido_emite_none(app):
 
 def test_thumbnail_loader_pdf_valido_emite_qimage(app, tmp_path):
     import fitz
-    from PyQt6.QtGui import QImage
+    from PySide6.QtGui import QImage
     from ui.common.thumb_utils import ThumbnailLoader
     pdf_path = str(tmp_path / "test.pdf")
     doc = fitz.open()
@@ -108,11 +108,11 @@ def test_thumbnail_loader_pdf_valido_emite_qimage(app, tmp_path):
 
 def test_documents_card_reemplaza_placeholder_por_portada(app, tmp_path):
     import fitz
-    from PyQt6.QtCore import QObject, pyqtSignal
+    from PySide6.QtCore import QObject, Signal
     from ui.common.documents_step import DocumentsCard
 
     class Tray(QObject):
-        changed = pyqtSignal()
+        changed = Signal()
 
         def paths(self):
             return []

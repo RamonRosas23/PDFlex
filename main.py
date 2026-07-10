@@ -86,7 +86,7 @@ def main() -> int:
     font.setPointSize(10)
     app.setFont(font)
 
-    from PyQt6.QtCore import QTimer
+    from PySide6.QtCore import QTimer
     from shell.splash import SplashScreen
     splash = SplashScreen()
     splash.start()

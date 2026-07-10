@@ -196,11 +196,11 @@ if ($SkipBuild) {
     $nuitkaVer = & $VenvPython -m nuitka --version 2>&1 | Select-Object -First 1
     Ok "Nuitka: $nuitkaVer"
 
-    & $VenvPython -c "import cv2, fitz, numpy, PIL; print(cv2.__version__)" 2>$null | Out-Null
+    & $VenvPython -c "import cv2, fitz, numpy, PIL; from PySide6 import QtCore, QtGui, QtSvg, QtWidgets; print(cv2.__version__, QtCore.qVersion())" 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Err "El entorno de build no puede importar OpenCV/PyMuPDF/Numpy/Pillow."
+        Err "El entorno de build no puede importar OpenCV/PyMuPDF/Numpy/Pillow/PySide6."
     }
-    Ok "Motor visual OpenCV: OK"
+    Ok "Motores visuales OpenCV/PySide6: OK"
 }
 
 # ── 4. Verificar assets críticos ─────────────────────────────────────────────
@@ -236,8 +236,8 @@ if (-not $SkipBuild) {
         # ── Modo de distribución ──────────────────────────────────────────
         "--standalone",                          # carpeta portable (gratis)
 
-        # ── PyQt6 ────────────────────────────────────────────────────────
-        "--enable-plugin=pyqt6",
+        # ── PySide6 ────────────────────────────────────────────────────────
+        "--enable-plugin=pyside6",
         "--include-qt-plugins=platforms,styles,imageformats",
 
         # ── Assets y datos ────────────────────────────────────────────────

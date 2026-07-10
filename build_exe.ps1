@@ -1,5 +1,5 @@
 # ============================================================
-#  build_exe.ps1  —  Compila PDFlex.exe con entorno limpio
+#  build_exe.ps1  —  Compila PDFlex onedir con entorno limpio
 #  Ejecutar desde la carpeta del proyecto:
 #      .\build_exe.ps1
 # ============================================================
@@ -48,6 +48,10 @@ $SSLFlags = @(
 if ($LASTEXITCODE -ne 0) { throw "Error al instalar dependencias." }
 Write-Host "      Dependencias instaladas correctamente."
 
+& $VenvPython -c "from PySide6 import QtCore, QtGui, QtSvg, QtWidgets; print(QtCore.qVersion())" 2>$null | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "PySide6 no se puede importar en el entorno de build." }
+Write-Host "      PySide6 validado correctamente."
+
 # ── 3b. post-install script de pywin32 ───────────────────────
 #  pywin32 requiere correr su post-install para registrar las DLLs en el venv
 $PyWin32PostInstall = Join-Path $VenvDir "Scripts\pywin32_postinstall.py"
@@ -66,7 +70,7 @@ $SpecFile = Join-Path $ProjectDir "PDFlex.spec"
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller terminó con error." }
 
 # ── 5. Resultado ─────────────────────────────────────────────
-$ExePath = Join-Path $ProjectDir "dist\PDFlex.exe"
+$ExePath = Join-Path $ProjectDir "dist\PDFlex\PDFlex.exe"
 if (Test-Path $ExePath) {
     $SizeMB = [math]::Round((Get-Item $ExePath).Length / 1MB, 1)
     Write-Host "`n[5/5] ¡Listo! Ejecutable generado:" -ForegroundColor Green

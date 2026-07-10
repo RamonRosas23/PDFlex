@@ -1,8 +1,8 @@
 """Tests para transición launcher → herramienta con feedback inmediato."""
 import sys
 import pytest
-from PyQt6.QtWidgets import QApplication, QLabel, QWidget
-from PyQt6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QLabel, QWidget
+from PySide6.QtCore import Qt
 
 
 @pytest.fixture(scope="module")
@@ -18,7 +18,7 @@ def test_loading_widget_construction(app):
     # Sin instanciación completa (requiere display), solo verifica el método
     # Creamos manualmente un widget similar para el test
     w = QWidget()
-    from PyQt6.QtWidgets import QVBoxLayout
+    from PySide6.QtWidgets import QVBoxLayout
     layout = QVBoxLayout(w)
     layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
     lbl = QLabel("Cargando herramienta…")
@@ -28,7 +28,7 @@ def test_loading_widget_construction(app):
 
 def test_stacked_widget_transition(app):
     """QStackedWidget cambia de widget inmediatamente."""
-    from PyQt6.QtWidgets import QStackedWidget
+    from PySide6.QtWidgets import QStackedWidget
     stack = QStackedWidget()
     launcher = QLabel("launcher")
     loading = QLabel("Cargando…")

@@ -2,7 +2,7 @@
 import time
 import sys
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 from ui.common.base_worker import BaseWorker, WorkerThread
 
 
@@ -24,8 +24,8 @@ class LongRunningWorker(BaseWorker):
 
 def test_stop_active_worker_cancela_thread_activo(app):
     """_stop_active_worker debe cancelar y esperar el thread activo."""
-    from PyQt6.QtWidgets import QWidget
-    from PyQt6.QtCore import QThread
+    from PySide6.QtWidgets import QWidget
+    from PySide6.QtCore import QThread
 
     class MockWindow(QWidget):
         def __init__(self):

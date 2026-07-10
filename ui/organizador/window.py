@@ -11,9 +11,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import (
     QCheckBox, QHBoxLayout, QLabel, QLineEdit,
     QHeaderView, QPushButton, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -50,9 +50,9 @@ _ACCEPTED_IMPORT_EXTS = set(DOCUMENT_IMPORT_EXTENSIONS)
 
 
 class _MultiWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(object)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(object)
+    error = Signal(str)
 
     def __init__(self, job: MultiOrganizerJob) -> None:
         super().__init__()

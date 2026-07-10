@@ -7,9 +7,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import List, Tuple
 
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PySide6.QtCore import QThread, Qt, Signal
 from ui.common.tool_scaffold import RunnerThread
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QPushButton, QScrollArea, QSizePolicy,
     QVBoxLayout, QWidget,
 )
@@ -28,9 +28,9 @@ _MAX_UNDO = 50
 class LaneContainer(QWidget):
     """Scroll vertical con N DocLanes, portapapeles y pila de deshacer."""
 
-    layout_changed = pyqtSignal()
-    page_preview_requested = pyqtSignal(object)
-    files_add_requested = pyqtSignal(list, object, int)
+    layout_changed = Signal()
+    page_preview_requested = Signal(object)
+    files_add_requested = Signal(list, object, int)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

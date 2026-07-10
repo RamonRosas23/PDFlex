@@ -12,8 +12,8 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
-from PyQt6.QtCore import QThread
-from PyQt6.QtWidgets import QApplication, QScrollArea
+from PySide6.QtCore import QThread
+from PySide6.QtWidgets import QApplication, QScrollArea
 
 from shell.context import ShellContext
 from shell.tool_registry import get_tool

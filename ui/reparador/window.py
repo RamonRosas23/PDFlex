@@ -4,9 +4,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QObject, QThread, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QCheckBox, QComboBox, QGridLayout,
 )
@@ -32,9 +32,9 @@ from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 
 
 class RepairWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, jobs: List[PdfRepairJob]) -> None:
         super().__init__()

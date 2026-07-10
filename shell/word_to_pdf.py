@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PySide6.QtCore import QObject, Signal
 
 from core.output_paths import unique_output_path
 
@@ -155,9 +155,9 @@ class WordToPdfConverter:
 class WordConvertWorker(QObject):
     """Ejecuta la conversión Word→PDF en un QThread con COM inicializado."""
 
-    progress = pyqtSignal(int, int, str)    # current, total, message
-    finished = pyqtSignal(list)             # list[str] — PDFs convertidos
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)    # current, total, message
+    finished = Signal(list)             # list[str] — PDFs convertidos
+    error = Signal(str)
 
     def __init__(
         self,

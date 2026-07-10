@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
@@ -38,7 +38,7 @@ _PRESET_ORDER = ("exclude", "quality", "balanced", "email", "custom")
 class PageRulesPanel(QFrame):
     """Compact rule editor and page map for the compressor profile step."""
 
-    rulesChanged = pyqtSignal()
+    rulesChanged = Signal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)

@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Iterable, Mapping
 
-from PyQt6.QtCore import QSettings
+from PySide6.QtCore import QSettings
 
 
 ORG_NAME = "GRUPO OCMX"

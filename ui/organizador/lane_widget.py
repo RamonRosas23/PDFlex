@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 import fitz
-from PyQt6.QtCore import Qt, QEvent, QPoint, QRect, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import (
+from PySide6.QtCore import Qt, QEvent, QPoint, QRect, QSize, QTimer, Signal
+from PySide6.QtGui import (
     QBrush, QColor, QDrag, QDragEnterEvent, QDragMoveEvent, QDropEvent,
     QFont, QIcon, QKeyEvent, QPainter, QPixmap,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QPushButton, QSizePolicy,
     QVBoxLayout, QWidget,
@@ -64,10 +64,10 @@ class _PageStrip(QListWidget):
     """QListWidget horizontal con drag/drop intra- y cross-lane mejorado."""
 
     # src_id, dst_id, refs, ctrl, target_row (-1 = al final)
-    cross_lane_drop_received = pyqtSignal(str, str, list, bool, int)
-    before_internal_reorder  = pyqtSignal()   # disparado ANTES de _reorder_to
-    files_dropped             = pyqtSignal(list, int)
-    internal_reorder_done     = pyqtSignal()
+    cross_lane_drop_received = Signal(str, str, list, bool, int)
+    before_internal_reorder  = Signal()   # disparado ANTES de _reorder_to
+    files_dropped             = Signal(list, int)
+    internal_reorder_done     = Signal()
 
     def __init__(self, lane_id: str, parent=None) -> None:
         super().__init__(parent)
@@ -348,13 +348,13 @@ class _PageStrip(QListWidget):
 class DocLane(QFrame):
     """Header + horizontal page strip para un documento en el organizador."""
 
-    pages_changed            = pyqtSignal(str)
-    lane_delete_requested    = pyqtSignal(str)
-    reorder_requested        = pyqtSignal(str, int)
-    page_preview_requested   = pyqtSignal(object)
-    files_add_requested      = pyqtSignal(str, list, int)
+    pages_changed            = Signal(str)
+    lane_delete_requested    = Signal(str)
+    reorder_requested        = Signal(str, int)
+    page_preview_requested   = Signal(object)
+    files_add_requested      = Signal(str, list, int)
     # src_id, dst_id, refs, ctrl, target_row
-    cross_lane_drop_received = pyqtSignal(str, str, list, bool, int)
+    cross_lane_drop_received = Signal(str, str, list, bool, int)
 
     def __init__(
         self,

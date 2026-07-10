@@ -8,7 +8,7 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
-from PyQt6.QtWidgets import QApplication, QComboBox, QLineEdit, QPlainTextEdit
+from PySide6.QtWidgets import QApplication, QComboBox, QLineEdit, QPlainTextEdit
 
 from shell.context import ShellContext
 from shell.tool_registry import get_tool

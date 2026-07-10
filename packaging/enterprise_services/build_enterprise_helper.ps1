@@ -68,7 +68,7 @@ if (-not $SkipCompile) {
         "--windows-file-description=PDFlex Enterprise Services - Administrative Helper",
 
         # Modulos: solo stdlib + winreg + ctypes (ya incluidos)
-        # No se necesitan plugins adicionales (no PyQt6, no pandas, etc.)
+        # No se necesitan plugins adicionales (no PySide6, no pandas, etc.)
 
         # Salida
         "--output-dir=$BuildOut",

@@ -12,20 +12,20 @@ from typing import List, Optional, Tuple
 
 import fitz
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
-from PyQt6.QtCore import (
-    Qt, QObject, QThread, QTimer, pyqtSignal, QSize, QEvent,
+from PySide6.QtCore import (
+    Qt, QObject, QThread, QTimer, Signal, QSize, QEvent,
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QPixmap, QImage, QIcon, QColor,
     QDragEnterEvent, QDropEvent, QKeyEvent, QDesktopServices,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QFrame, QLineEdit,
     QCheckBox, QComboBox, QScrollArea, QListWidget,
     QListWidgetItem, QDoubleSpinBox, QGridLayout, QSizePolicy,
 )
-from PyQt6.QtCore import QUrl
+from PySide6.QtCore import QUrl
 
 from shell.context import ShellContext
 from core.media_conversion import (
@@ -256,9 +256,9 @@ def _pil_to_fitz_rect(
 
 
 class ImgsToPdfWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(object)    # ImgsPdfResult
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(object)    # ImgsPdfResult
+    error = Signal(str)
 
     def __init__(
         self,
@@ -415,7 +415,7 @@ def _make_img_placeholder(size: int = 80) -> QPixmap:
 
 class ImageThumbnailLoader(QObject):
     """Carga thumbnail de imagen en hilo secundario. Emite QImage (thread-safe)."""
-    ready = pyqtSignal(str, object)  # (path, QImage | None)
+    ready = Signal(str, object)  # (path, QImage | None)
 
     def __init__(self, img_path: str, size: int = 80) -> None:
         super().__init__()
@@ -449,7 +449,7 @@ def _image_detail(path: str) -> str:
 class ImageListCard(QFrame):
     """Tarjeta de carga y reordenado de imágenes."""
 
-    files_changed = pyqtSignal(list)   # list[str]
+    files_changed = Signal(list)   # list[str]
 
     def __init__(self, parent=None, *, accepted_exts=None, ctx=None) -> None:
         super().__init__(parent)

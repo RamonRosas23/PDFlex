@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PyQt6.QtCore import QPoint, Qt, QTimer
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import (
     QDialog, QFrame, QGraphicsDropShadowEffect, QHBoxLayout, QLabel,
     QProgressBar, QPushButton, QScrollArea, QSizePolicy, QStackedWidget,
     QVBoxLayout, QWidget, QApplication,

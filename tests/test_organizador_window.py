@@ -10,8 +10,8 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import QThread
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtCore import QThread
+from PySide6.QtWidgets import QApplication
 
 from shell.context import ShellContext
 from shell.tool_registry import get_tool
@@ -177,7 +177,7 @@ class ThumbnailCacheTests(unittest.TestCase):
         # Initially empty
         self.assertIsNone(cache.get(key))
         # Create a dummy pixmap
-        from PyQt6.QtGui import QPixmap
+        from PySide6.QtGui import QPixmap
         pix = QPixmap(116, 150)
         cache.put(key, pix)
         result = cache.get(key)
@@ -264,7 +264,7 @@ class PageMimeTests(unittest.TestCase):
 
     def test_decode_returns_none_for_foreign_mime(self) -> None:
         from ui.organizador.page_mime import decode_drag
-        from PyQt6.QtCore import QMimeData
+        from PySide6.QtCore import QMimeData
         mime = QMimeData()
         mime.setText("hello")
         self.assertIsNone(decode_drag(mime))

@@ -4,8 +4,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, List, TYPE_CHECKING
 
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -26,8 +26,8 @@ if TYPE_CHECKING:
 class TrayInputPanel(QFrame):
     """Muestra archivos compatibles de la bandeja y emite la selección elegida."""
 
-    add_requested = pyqtSignal(list)
-    replace_requested = pyqtSignal(list)
+    add_requested = Signal(list)
+    replace_requested = Signal(list)
 
     def __init__(
         self,

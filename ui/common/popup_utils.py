@@ -6,8 +6,8 @@ que se desborda fuera de la pantalla.  smart_popup_pos() calcula la posición
 es necesario para que quede siempre dentro del área disponible.
 """
 from __future__ import annotations
-from PyQt6.QtCore import QPoint, QSize
-from PyQt6.QtWidgets import QApplication, QWidget
+from PySide6.QtCore import QPoint, QSize
+from PySide6.QtWidgets import QApplication, QWidget
 
 
 def smart_popup_pos(

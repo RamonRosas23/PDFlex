@@ -21,8 +21,8 @@ Uso:
 from __future__ import annotations
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QLineEdit, QProgressBar, QSizePolicy,
 )
@@ -38,7 +38,7 @@ def _load_output_dir(settings_key: str, default: str) -> str:
     if not settings_key:
         return default
     try:
-        from PyQt6.QtCore import QSettings
+        from PySide6.QtCore import QSettings
         s = QSettings("GRUPO OCMX", "PDFlex")
         saved = s.value(settings_key, default)
         return str(saved) if saved else default
@@ -50,7 +50,7 @@ def _save_output_dir(settings_key: str, value: str) -> None:
     if not settings_key:
         return
     try:
-        from PyQt6.QtCore import QSettings
+        from PySide6.QtCore import QSettings
         s = QSettings("GRUPO OCMX", "PDFlex")
         s.setValue(settings_key, value)
     except Exception:
@@ -65,8 +65,8 @@ class ProcessStep(QWidget):
         running_changed(bool):    El estado de ejecución cambió.
     """
 
-    run_enabled_changed = pyqtSignal(bool)
-    running_changed = pyqtSignal(bool)
+    run_enabled_changed = Signal(bool)
+    running_changed = Signal(bool)
 
     def __init__(
         self,
@@ -236,7 +236,7 @@ class ProcessStep(QWidget):
 
     def animate_stats(self, stats: dict[str, int]) -> None:
         """Anima QLabel cuyos objectName coincidan con claves de stats."""
-        from PyQt6.QtWidgets import QLabel
+        from PySide6.QtWidgets import QLabel
         from ui.common.animations import AnimationHelper
         labels = {lbl.objectName(): lbl for lbl in self.findChildren(QLabel)}
         for name, value in stats.items():

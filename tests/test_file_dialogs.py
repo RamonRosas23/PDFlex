@@ -6,8 +6,8 @@ from uuid import uuid4
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QCoreApplication, QSettings
-from PyQt6.QtWidgets import QApplication, QFileDialog
+from PySide6.QtCore import QCoreApplication, QSettings
+from PySide6.QtWidgets import QApplication, QFileDialog
 
 
 def _reset_settings_scope() -> None:

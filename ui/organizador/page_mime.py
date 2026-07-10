@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import List, Optional, Tuple
 
-from PyQt6.QtCore import QMimeData
+from PySide6.QtCore import QMimeData
 
 from core.page_organizer_engine import PageRef
 

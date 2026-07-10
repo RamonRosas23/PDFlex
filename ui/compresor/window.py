@@ -13,9 +13,9 @@ import threading
 import time
 from typing import List, Optional
 
-from PyQt6.QtCore import QObject, QThread, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QObject, QThread, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
+from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QPushButton, QLabel,
     QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QSpinBox,
     QScrollArea, QSizePolicy, QFrame,
@@ -71,9 +71,9 @@ class _IsolatedCompressionError(RuntimeError):
 class CompressWorker(QObject):
     """Supervises PDF compression without running native work in the UI process."""
 
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(list)
+    error = Signal(str)
 
     _POLL_SECONDS = 0.10
     _FORCE_CANCEL_AFTER_SECONDS = 2.0
@@ -525,9 +525,9 @@ class CompressWorker(QObject):
 
 
 class CompressPrepareWorker(QObject):
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
+    progress = Signal(str)
+    finished = Signal(list)
+    error = Signal(str)
 
     def __init__(self, request: _CompressRunRequest) -> None:
         super().__init__()
@@ -551,14 +551,14 @@ class CompressPrepareWorker(QObject):
 
 
 class EngineStatusWorker(QObject):
-    finished = pyqtSignal(list)
+    finished = Signal(list)
 
     def run(self) -> None:
         self.finished.emit(optional_engine_status())
 
 
 class DocsInfoWorker(QObject):
-    finished = pyqtSignal(int, int, int, str)
+    finished = Signal(int, int, int, str)
 
     def __init__(self, paths: List[str], token: int) -> None:
         super().__init__()

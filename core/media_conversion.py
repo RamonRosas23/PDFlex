@@ -4,10 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Iterable, List, Sequence
 
-import fitz
 from PIL import Image, ImageOps
 
 from core.output_paths import make_run_dir, unique_output_path
+from core.pdf_backend import ImagePdfPage, create_image_pdf
 from core.pdf_to_images_engine import (
     PdfToImagesConfig,
     PdfToImagesEngine,
@@ -129,8 +129,7 @@ def images_to_pdf_exact(
     target_dir.mkdir(parents=True, exist_ok=True)
     output = unique_output_path(target_dir, _images_pdf_name(images, output_name))
 
-    doc = fitz.open()
-    try:
+    def page_specs():
         for source in images:
             with Image.open(source) as opened:
                 opened.seek(0)
@@ -139,17 +138,13 @@ def images_to_pdf_exact(
                 img = _normal_image_mode(visual)
                 width_px, height_px = img.size
                 page_w, page_h = _page_size_for_image(img)
-                page = doc.new_page(width=page_w, height=page_h)
-                page.insert_image(
-                    fitz.Rect(0, 0, page_w, page_h),
-                    stream=_png_bytes(img),
-                    keep_proportion=False,
-                    overlay=True,
+                yield ImagePdfPage(
+                    image=img,
+                    page_width_pt=page_w,
+                    page_height_pt=page_h,
                 )
 
-        doc.save(str(output), garbage=4, deflate=True)
-    finally:
-        doc.close()
+    create_image_pdf(page_specs(), output)
     return str(output)
 
 
@@ -228,11 +223,3 @@ def _image_dpi(image: Image.Image) -> tuple[float, float]:
         except (TypeError, ValueError):
             pass
     return 72.0, 72.0
-
-
-def _png_bytes(image: Image.Image) -> bytes:
-    import io
-
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return buffer.getvalue()

@@ -7,14 +7,15 @@ import unittest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import fitz
 from PIL import Image, ImageDraw, ImageStat
+from reportlab.pdfgen.canvas import Canvas
 from PySide6.QtWidgets import QApplication
 
 from shell.context import ShellContext
 from shell.tool_registry import get_tool
 from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
+from core.pdf_backend import PdfRenderDocument
 from ui.imgs_a_pdf.window import (
     ImgsAPdfWindow,
     ImgsToPdfWorker,
@@ -112,11 +113,8 @@ class ImgsAPdfWindowTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertTrue(results[0].success)
             self.assertTrue(output.exists())
-            doc = fitz.open(str(output))
-            try:
-                self.assertEqual(doc.page_count, 1)
-            finally:
-                doc.close()
+            with PdfRenderDocument(output) as document:
+                self.assertEqual(document.page_count, 1)
 
     def test_worker_flattens_transparent_sources_on_white_background(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,13 +147,10 @@ class ImgsAPdfWindowTests(unittest.TestCase):
 
             self.assertFalse(errors)
             self.assertTrue(results and results[0].success)
-            doc = fitz.open(str(output))
-            try:
-                pix = doc[0].get_pixmap(alpha=False)
-                self.assertEqual((pix.width, pix.height), (80, 40))
-                self.assertEqual(tuple(pix.samples[:3]), (255, 255, 255))
-            finally:
-                doc.close()
+            with PdfRenderDocument(output) as document:
+                rendered = document.render_page(0, scale=1).to_pil()
+                self.assertEqual(rendered.size, (80, 40))
+                self.assertEqual(rendered.getpixel((0, 0)), (255, 255, 255))
 
     def test_window_exposes_scan_profile_in_worker_options(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -210,10 +205,7 @@ class ImgsAPdfWindowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             pdf_path = root / "doc.pdf"
-            doc = fitz.open()
-            doc.new_page(width=72, height=36)
-            doc.save(pdf_path)
-            doc.close()
+            self._make_blank_pdf(pdf_path)
 
             card = ImageListCard()
             try:
@@ -238,10 +230,7 @@ class ImgsAPdfWindowTests(unittest.TestCase):
             Image.new("RGB", (70, 35), "white").save(second_image)
 
             pdf_path = root / "02-middle.pdf"
-            doc = fitz.open()
-            doc.new_page(width=72, height=36)
-            doc.save(pdf_path)
-            doc.close()
+            self._make_blank_pdf(pdf_path)
 
             card = ImageListCard()
             try:
@@ -273,6 +262,13 @@ class ImgsAPdfWindowTests(unittest.TestCase):
         draw.rectangle((52, 32, 208, 148), fill=(238, 238, 230), outline=(210, 210, 205))
         draw.text((82, 82), "Documento", fill=(50, 50, 50))
         image.save(path)
+        return path
+
+    @staticmethod
+    def _make_blank_pdf(path: Path) -> Path:
+        canvas = Canvas(str(path), pagesize=(72, 36))
+        canvas.showPage()
+        canvas.save()
         return path
 
 

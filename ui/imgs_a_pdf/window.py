@@ -10,7 +10,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-import fitz
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 from PySide6.QtCore import (
     Qt, QObject, QThread, QTimer, Signal, QSize, QEvent,
@@ -37,6 +36,7 @@ from core.media_conversion import (
     pdfs_to_images_exact,
 )
 from core.output_paths import filename_with_suffix, make_run_dir, unique_output_path
+from core.pdf_backend import ImagePdfPage, create_image_pdf
 from ui.common.cards import make_card, card_layout, make_page_header
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.process_step import ProcessStep
@@ -209,16 +209,14 @@ def _horizontal_projection_score(gray: Image.Image) -> float:
 #  Worker
 # ====================================================================== #
 
-def _pil_to_fitz_rect(
+def _image_placement_rect(
     img_w: int, img_h: int,
     page_w: float, page_h: float,
     margin: float,
     fit_mode: str,
     auto_rotate: bool,
-) -> fitz.Rect:
-    """
-    Calcula el rectángulo de colocación y devuelve la imagen (posiblemente rotada).
-    """
+) -> Tuple[float, float, float, float]:
+    """Calcula ``(izquierda, arriba, ancho, alto)`` en puntos PDF."""
     # Rotar imagen si page y imagen tienen orientaciones opuestas
     if auto_rotate:
         page_landscape = page_w > page_h
@@ -235,7 +233,7 @@ def _pil_to_fitz_rect(
         draw_h = img_h * scale
         x0 = margin + (available_w - draw_w) / 2
         y0 = margin + (available_h - draw_h) / 2
-        return fitz.Rect(x0, y0, x0 + draw_w, y0 + draw_h)
+        return x0, y0, draw_w, draw_h
 
     elif fit_mode == FIT_MODES[1]:  # Rellenar
         scale = max(available_w / img_w, available_h / img_h)
@@ -243,7 +241,7 @@ def _pil_to_fitz_rect(
         draw_h = img_h * scale
         x0 = margin + (available_w - draw_w) / 2
         y0 = margin + (available_h - draw_h) / 2
-        return fitz.Rect(x0, y0, x0 + draw_w, y0 + draw_h)
+        return x0, y0, draw_w, draw_h
 
     else:  # Tamaño original
         # 1 px = 1/96 pulgada = 72/96 pt
@@ -252,7 +250,7 @@ def _pil_to_fitz_rect(
         draw_h = img_h * pt_per_px
         x0 = margin + (available_w - draw_w) / 2
         y0 = margin + (available_h - draw_h) / 2
-        return fitz.Rect(x0, y0, x0 + draw_w, y0 + draw_h)
+        return x0, y0, draw_w, draw_h
 
 
 class ImgsToPdfWorker(QObject):
@@ -320,7 +318,6 @@ class ImgsToPdfWorker(QObject):
 
     def run(self) -> None:
         try:
-            out_doc = fitz.open()
             total = len(self.image_paths)
             margin_pt = (
                 0.0
@@ -328,45 +325,37 @@ class ImgsToPdfWorker(QObject):
                 else self._margin_pt()
             )
 
-            for i, img_path in enumerate(self.image_paths):
-                if self._cancel:
-                    out_doc.close()
-                    self.error.emit("Operación cancelada.")
-                    return
+            def page_specs():
+                for i, img_path in enumerate(self.image_paths):
+                    if self._cancel:
+                        raise _ImagePdfCancelled()
 
-                name = Path(img_path).name
-                self.progress.emit(i + 1, total, f"Procesando {name}…")
+                    name = Path(img_path).name
+                    self.progress.emit(i + 1, total, f"Procesando {name}…")
+                    try:
+                        img = _open_image_for_pdf_page(img_path)
+                        img = preprocess_document_image(img, self.scan_options)
+                    except Exception as exc:
+                        raise RuntimeError(f"No se pudo abrir «{name}»: {exc}") from exc
 
-                try:
-                    img = _open_image_for_pdf_page(img_path)
-                    img = preprocess_document_image(img, self.scan_options)
-                except Exception as exc:
-                    out_doc.close()
-                    self.error.emit(f"No se pudo abrir «{name}»: {exc}")
-                    return
+                    img_w, img_h = img.size
+                    page_w, page_h = self._page_dims(img_w, img_h)
+                    left, top, width, height = _image_placement_rect(
+                        img_w, img_h, page_w, page_h, margin_pt,
+                        self.fit_mode, self.auto_rotate,
+                    )
+                    yield ImagePdfPage(
+                        image=img,
+                        page_width_pt=page_w,
+                        page_height_pt=page_h,
+                        left_pt=left,
+                        top_pt=top,
+                        width_pt=width,
+                        height_pt=height,
+                    )
+                self.progress.emit(total, total, "Guardando…")
 
-                img_w, img_h = img.size
-                page_w, page_h = self._page_dims(img_w, img_h)
-
-                page = out_doc.new_page(width=page_w, height=page_h)
-
-                rect = _pil_to_fitz_rect(
-                    img_w, img_h, page_w, page_h, margin_pt,
-                    self.fit_mode, self.auto_rotate,
-                )
-
-                # Convertir PIL → bytes PNG para insertar con fitz
-                import io
-                buf = io.BytesIO()
-                img.save(buf, format="PNG")
-                buf.seek(0)
-                page.insert_image(rect, stream=buf.read())
-
-            self.progress.emit(total, total, "Guardando…")
-            Path(self.output_path).parent.mkdir(parents=True, exist_ok=True)
-            out_doc.save(self.output_path, garbage=4, deflate=True)
-            total_pages = out_doc.page_count
-            out_doc.close()
+            total_pages = create_image_pdf(page_specs(), self.output_path)
 
             self.finished.emit(ImgsPdfResult(
                 output_path=self.output_path,
@@ -374,8 +363,14 @@ class ImgsToPdfWorker(QObject):
                 total_pages=total_pages,
                 source_count=len(self.image_paths),
             ))
+        except _ImagePdfCancelled:
+            self.error.emit("Operación cancelada.")
         except Exception as exc:
             self.error.emit(str(exc))
+
+
+class _ImagePdfCancelled(Exception):
+    pass
 
 
 def _open_image_for_pdf_page(path: str) -> Image.Image:

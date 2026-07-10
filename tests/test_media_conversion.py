@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import fitz
 from PIL import Image
+from reportlab.pdfgen.canvas import Canvas
 
+from core.pdf_backend import PdfRenderDocument
 from core.media_conversion import (
     images_to_pdf_exact,
     pdfs_to_images_exact,
@@ -18,30 +19,21 @@ def test_images_to_pdf_exact_creates_marginless_image_sized_page(tmp_path):
     output = images_to_pdf_exact([str(image_path)], out_dir=tmp_path)
 
     assert Path(output).exists()
-    doc = fitz.open(output)
-    try:
-        assert doc.page_count == 1
-        page = doc[0]
-        assert round(page.rect.width, 2) == 123
-        assert round(page.rect.height, 2) == 57
-        image_info = page.get_image_info(hashes=False)
-        assert len(image_info) == 1
-        assert tuple(round(value, 2) for value in image_info[0]["bbox"]) == (
-            0,
-            0,
-            123,
-            57,
-        )
-    finally:
-        doc.close()
+    with PdfRenderDocument(output) as document:
+        assert document.page_count == 1
+        info = document.page_info(0)
+        assert round(info.width_pt, 2) == 123
+        assert round(info.height_pt, 2) == 57
+        rendered = document.render_page(0, scale=1).to_pil()
+        assert rendered.size == (123, 57)
+        assert rendered.getpixel((0, 0)) == (20, 140, 210)
 
 
 def test_pdfs_to_images_exact_renders_each_page_without_extra_canvas(tmp_path):
     source = tmp_path / "source.pdf"
-    doc = fitz.open()
-    doc.new_page(width=72, height=36)
-    doc.save(source)
-    doc.close()
+    canvas = Canvas(str(source), pagesize=(72, 36))
+    canvas.showPage()
+    canvas.save()
 
     outputs = pdfs_to_images_exact([str(source)], out_dir=tmp_path, dpi=144)
 

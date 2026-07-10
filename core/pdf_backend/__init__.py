@@ -4,6 +4,7 @@ Application modules should import this package's stable interfaces instead of
 calling PDFium, QPDF, pypdf, or ReportLab directly.
 """
 from .errors import PdfBackendError, PdfCancelledError, PdfClosedError, PdfPasswordError
+from .composition import ImagePdfPage, create_image_pdf
 from .rendering import PageInfo, PdfRenderDocument, RenderedPage, pdf_page_count
 from .structure import (
     AssemblyReport,
@@ -21,6 +22,7 @@ from .structure import (
 __all__ = [
     "PageInfo",
     "AssemblyReport",
+    "ImagePdfPage",
     "MergeReport",
     "MergeSourceReport",
     "NormalizeReport",
@@ -32,6 +34,7 @@ __all__ = [
     "RenderedPage",
     "SourcePage",
     "assemble_pages",
+    "create_image_pdf",
     "extract_pages",
     "merge_documents",
     "normalize_pdf",

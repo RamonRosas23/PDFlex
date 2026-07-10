@@ -10,6 +10,7 @@ from core.pdf_backend import (
     PdfRenderDocument,
     SourcePage,
     assemble_pages,
+    apply_page_overlays,
     extract_pages,
     merge_documents,
     normalize_pdf,
@@ -135,3 +136,27 @@ def test_raster_merge_is_renderable_last_resort(tmp_path: Path):
         assert document.page_count == 3
         assert not document.extract_text(0).strip()
         assert document.render_page(2, scale=0.5).width > 0
+
+
+def test_apply_page_overlays_uses_display_coordinates_on_rotated_page(tmp_path: Path):
+    source = _make_pdf(tmp_path / "source.pdf", ["BASE"])
+    reader = PdfReader(source)
+    writer = PdfWriter(clone_from=reader)
+    writer.pages[0].rotate(90)
+    rotated = tmp_path / "rotated.pdf"
+    writer.write(rotated)
+
+    overlay = tmp_path / "overlay.pdf"
+    canvas = Canvas(str(overlay), pagesize=(200, 300))
+    canvas.drawString(12, 275, "OVERLAY")
+    canvas.showPage()
+    canvas.save()
+    output = tmp_path / "output.pdf"
+
+    report = apply_page_overlays(rotated, overlay, {0: 0}, output)
+
+    assert report.page_count == 1
+    with PdfRenderDocument(output) as document:
+        assert document.page_info(0).rotation == 90
+        assert "BASE" in document.extract_text(0)
+        assert "OVERLAY" in document.extract_text(0)

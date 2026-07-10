@@ -6,6 +6,7 @@ import unittest
 
 import fitz
 from PIL import Image, ImageDraw
+from pypdf import PdfReader, PdfWriter
 
 from core.watermark_engine import (
     WatermarkEngine,
@@ -72,6 +73,36 @@ class WatermarkEngineTests(unittest.TestCase):
             self.assertTrue(output.exists())
             self.assertGreater(output.stat().st_size, 0)
             self.assertIn("Imagen", result.meta_text)
+
+    def test_text_watermark_keeps_rotated_page_and_display_position(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = self._make_pdf(root / "input.pdf", pages=1)
+            writer = PdfWriter(clone_from=PdfReader(source))
+            writer.pages[0].rotate(90)
+            rotated = root / ".rotated.pdf"
+            writer.write(rotated)
+            rotated.replace(source)
+            output = root / "rotated-watermark.pdf"
+
+            result = WatermarkEngine().run_job(
+                WatermarkJob(
+                    str(source),
+                    str(output),
+                    WatermarkOptions(
+                        text="ROTADO",
+                        rotation_deg=0,
+                        position="top-left",
+                        opacity=1,
+                        font_size=20,
+                    ),
+                )
+            )
+
+            self.assertTrue(result.success, result.error)
+            with fitz.open(output) as document:
+                self.assertEqual(document[0].rotation, 90)
+                self.assertIn("ROTADO", document[0].get_text())
 
     def test_page_selection_parser(self) -> None:
         self.assertEqual(parse_page_selection("all", "", 3), [0, 1, 2])

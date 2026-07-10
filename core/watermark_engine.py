@@ -4,10 +4,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable, Iterable, List, Tuple
 
-import fitz
 from PIL import Image
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen.canvas import Canvas
+
+from core.pdf_backend import PdfRenderDocument, apply_page_overlays
 
 
 RGBColor = Tuple[float, float, float]
@@ -164,55 +169,65 @@ class WatermarkEngine:
         if not source.exists():
             return WatermarkResult(job=job, success=False, error="El PDF de origen no existe.")
 
-        doc: fitz.Document | None = None
         try:
             self._validate_options(job.options)
-            doc = fitz.open(str(source))
-            if doc.is_encrypted:
-                raise RuntimeError("El PDF esta protegido o cifrado.")
-            if doc.page_count <= 0:
-                raise RuntimeError("El PDF no tiene paginas.")
-
-            page_indexes = parse_page_selection(
-                job.options.page_scope,
-                job.options.custom_pages,
-                doc.page_count,
-            )
-            stamped = 0
-            prepared_image = None
-            if job.options.mode == "image":
-                prepared_image = _prepare_image(job.options.image_path, job.options.opacity, job.options.rotation_deg)
-
-            for page_index in page_indexes:
-                if should_cancel and should_cancel():
-                    raise _CancelledError()
-                page = doc[page_index]
-                if job.options.mode == "image":
-                    assert prepared_image is not None
-                    self._insert_image_watermark(page, job.options, prepared_image)
-                else:
-                    self._insert_text_watermark(page, job.options)
-                stamped += 1
-
-            doc.save(str(output), garbage=4, clean=True, deflate=True)
+            with PdfRenderDocument(source) as document:
+                if document.page_count <= 0:
+                    raise RuntimeError("El PDF no tiene paginas.")
+                page_indexes = parse_page_selection(
+                    job.options.page_scope,
+                    job.options.custom_pages,
+                    document.page_count,
+                )
+                with TemporaryDirectory(prefix="pdflex-watermark-") as temp_dir:
+                    overlay_path = Path(temp_dir) / "overlay.pdf"
+                    canvas = Canvas(str(overlay_path), pagesize=(1, 1), pageCompression=1)
+                    prepared_image = (
+                        _prepare_image(
+                            job.options.image_path,
+                            job.options.opacity,
+                            job.options.rotation_deg,
+                        )
+                        if job.options.mode == "image"
+                        else None
+                    )
+                    mapping: dict[int, int] = {}
+                    for overlay_index, page_index in enumerate(page_indexes):
+                        if should_cancel and should_cancel():
+                            raise _CancelledError()
+                        info = document.page_info(page_index)
+                        canvas.setPageSize((info.width_pt, info.height_pt))
+                        if prepared_image is not None:
+                            _draw_image_watermark(
+                                canvas, info.width_pt, info.height_pt,
+                                job.options, prepared_image,
+                            )
+                        else:
+                            _draw_text_watermark(
+                                canvas, info.width_pt, info.height_pt, job.options
+                            )
+                        canvas.showPage()
+                        mapping[page_index] = overlay_index
+                    canvas.save()
+                    report = apply_page_overlays(
+                        source,
+                        overlay_path,
+                        mapping,
+                        output,
+                        over=job.options.overlay,
+                    )
             return WatermarkResult(
                 job=job,
                 output_path=str(output),
                 success=True,
-                total_pages=doc.page_count,
-                stamped_pages=stamped,
+                total_pages=report.page_count,
+                stamped_pages=len(page_indexes),
                 mode_label="Imagen" if job.options.mode == "image" else "Texto",
             )
         except _CancelledError:
             return WatermarkResult(job=job, success=False, error="Operacion cancelada.")
         except Exception as exc:
             return WatermarkResult(job=job, success=False, error=str(exc))
-        finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
 
     def _validate_options(self, options: WatermarkOptions) -> None:
         if options.mode not in {"text", "image"}:
@@ -232,65 +247,6 @@ class WatermarkEngine:
             raise ValueError("El tamano de texto debe ser mayor a cero.")
         if not 1.0 <= options.image_width_pct <= 95.0:
             raise ValueError("El ancho de imagen debe estar entre 1% y 95%.")
-
-    def _insert_text_watermark(self, page: fitz.Page, options: WatermarkOptions) -> None:
-        text = options.text.strip()
-        page_rect = page.rect
-        pw = max(1.0, page_rect.width)
-        ph = max(1.0, page_rect.height)
-        cx, cy = _position_center(options.position, pw, ph)
-        fontname = "helv"
-        page_scale = max(0.55, min(2.5, max(pw, ph) / 842.0))
-        fontsize = max(4.0, options.font_size * page_scale)
-        text_width = _text_width(text, fontname, fontsize)
-        max_width = pw * 0.86
-        if text_width > max_width:
-            fontsize = max(4.0, fontsize * max_width / max(1.0, text_width))
-            text_width = _text_width(text, fontname, fontsize)
-
-        anchor_x = cx - text_width / 2.0
-        anchor_y = cy + fontsize * 0.36
-        anchor, center = _display_points_for_page(page, anchor_x, anchor_y, cx, cy)
-        matrix = fitz.Matrix(float(options.rotation_deg))
-        page.insert_text(
-            anchor,
-            text,
-            fontname=fontname,
-            fontsize=fontsize,
-            color=options.color,
-            fill_opacity=options.opacity,
-            stroke_opacity=options.opacity,
-            overlay=options.overlay,
-            morph=(center, matrix) if abs(options.rotation_deg) > 0.001 else None,
-        )
-
-    def _insert_image_watermark(
-        self,
-        page: fitz.Page,
-        options: WatermarkOptions,
-        prepared_image: "_PreparedImage",
-    ) -> None:
-        page_rect = page.rect
-        pw = max(1.0, page_rect.width)
-        ph = max(1.0, page_rect.height)
-        cx, cy = _position_center(options.position, pw, ph)
-        width = pw * max(1.0, min(95.0, options.image_width_pct)) / 100.0
-        ratio = prepared_image.height / max(1.0, prepared_image.width)
-        height = width * ratio
-        max_height = ph * 0.92
-        if height > max_height:
-            height = max_height
-            width = height / max(0.001, ratio)
-
-        rect = fitz.Rect(cx - width / 2.0, cy - height / 2.0, cx + width / 2.0, cy + height / 2.0)
-        rect = _display_rect_for_page(page, rect)
-        page.insert_image(
-            rect,
-            stream=prepared_image.bytes,
-            keep_proportion=True,
-            overlay=options.overlay,
-        )
-
 
 def preset_for(preset_id: str) -> WatermarkPreset:
     return PRESETS.get(preset_id, PRESETS["confidencial"])
@@ -336,12 +292,7 @@ def _add_range(target: set[int], start: int, end: int, page_count: int) -> None:
 
 
 def _text_width(text: str, fontname: str, fontsize: float) -> float:
-    get_text_length = getattr(fitz, "get_text_length", None)
-    if get_text_length is None:
-        get_text_length = getattr(fitz, "get_textlength", None)
-    if get_text_length is not None:
-        return float(get_text_length(text, fontname=fontname, fontsize=fontsize))
-    return float(fitz.Font(fontname).text_length(text, fontsize=fontsize))
+    return float(stringWidth(text, "Helvetica", fontsize))
 
 
 def _position_center(position: str, page_width: float, page_height: float) -> tuple[float, float]:
@@ -363,37 +314,54 @@ def _position_center(position: str, page_width: float, page_height: float) -> tu
     return x_map[horizontal], y_map[vertical]
 
 
-def _display_points_for_page(
-    page: fitz.Page,
-    anchor_x: float,
-    anchor_y: float,
-    center_x: float,
-    center_y: float,
-) -> tuple[fitz.Point, fitz.Point]:
-    anchor = fitz.Point(anchor_x, anchor_y)
-    center = fitz.Point(center_x, center_y)
-    if int(page.rotation) % 360:
-        matrix = page.derotation_matrix
-        anchor = anchor * matrix
-        center = center * matrix
-    return anchor, center
+def _draw_text_watermark(
+    canvas: Canvas,
+    page_width: float,
+    page_height: float,
+    options: WatermarkOptions,
+) -> None:
+    text = options.text.strip()
+    cx, cy = _position_center(options.position, page_width, page_height)
+    page_scale = max(0.55, min(2.5, max(page_width, page_height) / 842.0))
+    fontsize = max(4.0, options.font_size * page_scale)
+    text_width = _text_width(text, "Helvetica", fontsize)
+    max_width = page_width * 0.86
+    if text_width > max_width:
+        fontsize = max(4.0, fontsize * max_width / max(1.0, text_width))
+        text_width = _text_width(text, "Helvetica", fontsize)
+    canvas.saveState()
+    canvas.setFillColorRGB(*options.color)
+    canvas.setFillAlpha(options.opacity)
+    canvas.setFont("Helvetica", fontsize)
+    canvas.translate(cx, page_height - cy)
+    canvas.rotate(-float(options.rotation_deg))
+    canvas.drawString(-text_width / 2.0, -fontsize * 0.36, text)
+    canvas.restoreState()
 
 
-def _display_rect_for_page(page: fitz.Page, rect: fitz.Rect) -> fitz.Rect:
-    if not int(page.rotation) % 360:
-        return rect
-    matrix = page.derotation_matrix
-    corners = [
-        fitz.Point(rect.x0, rect.y0) * matrix,
-        fitz.Point(rect.x1, rect.y0) * matrix,
-        fitz.Point(rect.x0, rect.y1) * matrix,
-        fitz.Point(rect.x1, rect.y1) * matrix,
-    ]
-    return fitz.Rect(
-        min(point.x for point in corners),
-        min(point.y for point in corners),
-        max(point.x for point in corners),
-        max(point.y for point in corners),
+def _draw_image_watermark(
+    canvas: Canvas,
+    page_width: float,
+    page_height: float,
+    options: WatermarkOptions,
+    prepared_image: "_PreparedImage",
+) -> None:
+    cx, cy = _position_center(options.position, page_width, page_height)
+    width = page_width * max(1.0, min(95.0, options.image_width_pct)) / 100.0
+    ratio = prepared_image.height / max(1.0, prepared_image.width)
+    height = width * ratio
+    max_height = page_height * 0.92
+    if height > max_height:
+        height = max_height
+        width = height / max(0.001, ratio)
+    canvas.drawImage(
+        ImageReader(BytesIO(prepared_image.bytes)),
+        cx - width / 2.0,
+        page_height - (cy + height / 2.0),
+        width=width,
+        height=height,
+        preserveAspectRatio=False,
+        mask="auto",
     )
 
 

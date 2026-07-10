@@ -57,6 +57,12 @@ class MergeReport:
     renamed_form_fields: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True, slots=True)
+class OverlayReport:
+    page_count: int
+    overlaid_pages: tuple[int, ...]
+
+
 def assemble_pages(
     pages: list[SourcePage],
     output_path: str | Path,
@@ -412,6 +418,49 @@ def raster_merge_documents(
 
     _verify_page_count(output, page_cursor)
     return MergeReport(page_cursor, blank_pages, tuple(reports))
+
+
+def apply_page_overlays(
+    source_path: str | Path,
+    overlay_path: str | Path,
+    page_mapping: dict[int, int],
+    output_path: str | Path,
+    *,
+    over: bool = True,
+) -> OverlayReport:
+    """Apply display-sized overlay pages while preserving source structure."""
+    source = Path(source_path).resolve()
+    overlay = Path(overlay_path).resolve()
+    output = Path(output_path)
+    if output.resolve() in {source, overlay}:
+        raise ValueError("La salida no puede sobrescribir un PDF de origen.")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with _open_pdf(source) as document, _open_pdf(overlay) as overlays:
+            page_count = len(document.pages)
+            for source_index, overlay_index in sorted(page_mapping.items()):
+                if not 0 <= source_index < page_count:
+                    raise IndexError(f"Página de origen fuera de rango: {source_index}.")
+                if not 0 <= overlay_index < len(overlays.pages):
+                    raise IndexError(f"Página overlay fuera de rango: {overlay_index}.")
+                if over:
+                    document.pages[source_index].add_overlay(overlays.pages[overlay_index])
+                else:
+                    document.pages[source_index].add_underlay(overlays.pages[overlay_index])
+            _save_atomic(
+                document,
+                output,
+                object_stream_mode=pikepdf.ObjectStreamMode.generate,
+            )
+    except (PdfBackendError, ValueError, IndexError):
+        raise
+    except pikepdf.PasswordError as exc:
+        raise PdfPasswordError("El PDF está protegido o cifrado.") from exc
+    except (pikepdf.PdfError, OSError) as exc:
+        raise PdfBackendError(f"No se pudo aplicar el overlay PDF: {exc}") from exc
+
+    _verify_page_count(output, page_count)
+    return OverlayReport(page_count, tuple(sorted(page_mapping)))
 
 
 def _open_pdf(path: str | Path) -> pikepdf.Pdf:

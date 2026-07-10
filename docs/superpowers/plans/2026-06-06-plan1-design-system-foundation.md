@@ -6,7 +6,7 @@
 
 **Architecture:** Evolutionary Premium — cirugía de precisión sobre archivos existentes sin reescribir. `styles.py` recibe el nuevo dict de colores. Se crea `ui/common/animations.py` nuevo. `ui/common/icons.py` recibe 21 nuevos paths SVG + función `make_tool_icon_card`. `shell/tool_registry.py` añade campo `icon_name` a cada descriptor. `shell/launcher.py` usa el nuevo ícono en lugar del círculo de letra. `ui/common/tool_scaffold.py` aplica glow a botones Primary.
 
-**Tech Stack:** PyQt6 (QSvgRenderer ya disponible en icons.py), QPropertyAnimation, QGraphicsDropShadowEffect, QEasingCurve — todo nativo, sin dependencias nuevas.
+**Tech Stack:** PySide6 (QSvgRenderer ya disponible en icons.py), QPropertyAnimation, QGraphicsDropShadowEffect, QEasingCurve — todo nativo, sin dependencias nuevas.
 
 **Spec:** `docs/superpowers/specs/2026-06-06-pdflex-premium-redesign-design.md` Secciones 1, fragmentos de 2 y 4.
 
@@ -277,7 +277,7 @@ def test_animation_helper_imports():
 
 def test_fade_in_creates_animation(qtbot):
     """fade_in retorna una QPropertyAnimation configurada."""
-    from PyQt6.QtWidgets import QWidget
+    from PySide6.QtWidgets import QWidget
     from ui.common.animations import AnimationHelper
     w = QWidget()
     qtbot.addWidget(w)
@@ -288,7 +288,7 @@ def test_fade_in_creates_animation(qtbot):
 
 def test_count_up_smoke(qtbot):
     """count_up no lanza excepciones."""
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     from ui.common.animations import AnimationHelper
     lbl = QLabel("0")
     qtbot.addWidget(lbl)
@@ -320,12 +320,12 @@ from __future__ import annotations
 from typing import Optional
 import re
 
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     QEasingCurve, QPropertyAnimation, QSequentialAnimationGroup,
-    QParallelAnimationGroup, QTimer, Qt, pyqtSignal, QObject,
+    QParallelAnimationGroup, QTimer, Qt, Signal, QObject,
 )
-from PyQt6.QtGui import QColor
-from PyQt6.QtWidgets import QLabel, QWidget, QGraphicsDropShadowEffect
+from PySide6.QtGui import QColor
+from PySide6.QtWidgets import QLabel, QWidget, QGraphicsDropShadowEffect
 
 # Toggle global — Preferencias lo cambia cuando el usuario lo pide
 _reduced_motion: bool = False
@@ -352,7 +352,7 @@ def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
 
 
 class AnimationHelper:
-    """Helpers estáticos para animaciones PyQt6."""
+    """Helpers estáticos para animaciones PySide6."""
 
     # ── Fade ────────────────────────────────────────────────────────────────
 
@@ -484,7 +484,7 @@ class AnimationHelper:
     @staticmethod
     def apply_glow_to_primary_buttons(root: QWidget, accent: str) -> None:
         """Aplica glow a todos los QPushButton[class='Primary'] bajo root."""
-        from PyQt6.QtWidgets import QPushButton
+        from PySide6.QtWidgets import QPushButton
         for btn in root.findChildren(QPushButton):
             if btn.property("class") == "Primary":
                 AnimationHelper.apply_glow(btn, accent, blur=18, alpha=75)
@@ -566,7 +566,7 @@ def test_all_tool_icons_exist():
 def test_make_tool_icon_card_renders(qtbot):
     """make_tool_icon_card produce un QPixmap no nulo."""
     from ui.common.icons import make_tool_icon_card
-    from PyQt6.QtGui import QPixmap
+    from PySide6.QtGui import QPixmap
     pix = make_tool_icon_card("firmador", "#5E6AD2", size=40)
     assert isinstance(pix, QPixmap)
     assert not pix.isNull()
@@ -764,8 +764,8 @@ def make_tool_icon_card(
 
     Reemplaza _make_tool_icon (círculo de letra) del launcher.
     """
-    from PyQt6.QtGui import QBrush, QPen
-    from PyQt6.QtCore import QRectF
+    from PySide6.QtGui import QBrush, QPen
+    from PySide6.QtCore import QRectF
 
     pix = QPixmap(size, size)
     pix.fill(Qt.GlobalColor.transparent)
@@ -1036,7 +1036,7 @@ En `_build_sidebar`, después del bloque `brand_frame` (y antes del divisor), a�
 
 ```python
 # ── Progress bar de pasos ──────────────────────────────────────────────
-from PyQt6.QtWidgets import QProgressBar
+from PySide6.QtWidgets import QProgressBar
 self._step_progress = QProgressBar()
 self._step_progress.setRange(0, 100)
 self._step_progress.setValue(0)
@@ -1083,7 +1083,7 @@ En `PipelineWindow.__init__`, al final (después de `self._apply_tool_accent()`)
 ```python
 # Aplicar glow a todos los botones Primary de la herramienta
 # Se hace con QTimer.singleShot para que los botones ya estén construidos
-from PyQt6.QtCore import QTimer
+from PySide6.QtCore import QTimer
 QTimer.singleShot(0, self._apply_primary_glows)
 ```
 

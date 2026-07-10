@@ -9,7 +9,7 @@
 
 ## Contexto del proyecto
 
-PDFlex es una suite de 21 herramientas PDF desktop (PyQt6 + PyMuPDF + Tesseract) para
+PDFlex es una suite de 21 herramientas PDF desktop (PySide6 + PyMuPDF + Tesseract) para
 GRUPO OCMX. Arquitectura: `PipelineWindow` base con sidebar de pasos + `QStackedWidget`
 de contenido. Tema dark actual inspirado en Linear/Vercel (#0A0A0B). 21 herramientas
 con accent color propio. Componentes shared: `DocumentsCard`, `ProcessStep`,
@@ -171,7 +171,7 @@ btn.setGraphicsEffect(effect)
 - Border: `rgba(255,255,255,0.07)`
 - Efecto blur del fondo: capturar `QPixmap.grabWidget()` de la ventana subyacente,
   aplicar `QGraphicsBlurEffect(radius=14)` sobre ese pixmap y renderizarlo como
-  fondo del overlay. PyQt6 no tiene backdrop-filter nativo; esta es la aproximación
+  fondo del overlay. PySide6 no tiene backdrop-filter nativo; esta es la aproximación
   correcta: blur sobre snapshot, no sobre el widget en vivo.
 
 **Bordes luminosos en sidebar step activo:**
@@ -471,7 +471,7 @@ class HistoryEntry:
 
 class SessionHistory:
     _entries: list[HistoryEntry]
-    changed = pyqtSignal()
+    changed = Signal()
 ```
 
 Drawer deslizable desde la derecha (240px ancho):
@@ -818,7 +818,7 @@ sin reutilización de zonas. (Canvas de dibujo, redacción real PyMuPDF, limpiar
 
 - No se requieren librerías de terceros adicionales para el redesign visual
 - `QGraphicsDropShadowEffect`, `QGraphicsBlurEffect`, `QPropertyAnimation`,
-  `QEasingCurve` — todo nativo PyQt6
+  `QEasingCurve` — todo nativo PySide6
 - Para animaciones de path SVG en el check de success: `QPainterPath` + `QPropertyAnimation`
 - Para glassmorphism: `QGraphicsBlurEffect` + `QFrame` con alpha
 - JSON para presets: módulo `json` estándar

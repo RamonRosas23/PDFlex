@@ -6,7 +6,7 @@
 
 **Architecture:** Feature 1 adds `set_grouped_results()` to `ImageResultsViewer` and `save_grouped_files_as_batch()` to `save_utils`, wiring them in `pdf_to_imgs/window.py`. Feature 2 adds `excluded_pages: frozenset` to `SigPlacement`, a `contextMenuEvent` + `set_exclusion_state()` to `pdf_preview.py`, and full exclusion management + `_PageExclusionDialog` to `firmador/window.py`.
 
-**Tech Stack:** PyQt6, fitz (PyMuPDF), PIL, Python 3.10+
+**Tech Stack:** PySide6, fitz (PyMuPDF), PIL, Python 3.10+
 
 ---
 
@@ -154,9 +154,9 @@ Add to the existing imports (after `from __future__ import annotations`):
 from dataclasses import dataclass
 ```
 
-Add `QSize` to `PyQt6.QtCore` import line:
+Add `QSize` to `PySide6.QtCore` import line:
 ```python
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
+from PySide6.QtCore import Qt, QSize, Signal
 ```
 
 Add `save_grouped_files_as_batch` to save_utils import:
@@ -462,8 +462,8 @@ def _on_open_file(self) -> None:
     if r is not None:
         out = getattr(r, "output_path", "") or ""
         if out and Path(out).exists():
-            from PyQt6.QtCore import QUrl
-            from PyQt6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
             QDesktopServices.openUrl(QUrl.fromLocalFile(out))
 
 def _on_open(self) -> None:
@@ -669,7 +669,7 @@ In the signals block of `PdfPreviewView` (after `pageChanged`), add:
 
 ```python
 # Emitida cuando el usuario hace clic derecho sobre una firma
-sig_context_requested = pyqtSignal(str, int, object)  # uid, page_0based, QPoint
+sig_context_requested = Signal(str, int, object)  # uid, page_0based, QPoint
 ```
 
 - [ ] **Step 5: Add `contextMenuEvent` to `PdfPreviewView`**
@@ -717,12 +717,12 @@ git commit -m "feat(pdf_preview): right-click context signal + signature exclusi
 
 ### Step group A — imports and new fields
 
-- [ ] **Step A1: Add `QMenu, QDialog` to PyQt6 imports**
+- [ ] **Step A1: Add `QMenu, QDialog` to PySide6 imports**
 
-Find the `from PyQt6.QtWidgets import (` block and add `QMenu, QDialog`:
+Find the `from PySide6.QtWidgets import (` block and add `QMenu, QDialog`:
 
 ```python
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
     QListWidget, QListWidgetItem, QFrame,
     QSpinBox, QCheckBox, QProgressBar,
@@ -1145,7 +1145,7 @@ git commit -m "feat(firmador): right-click page exclusion — context menu, dial
 - [x] `_PageExclusionDialog` → Task 6 F1
 
 ### Type consistency
-- `sig_context_requested = pyqtSignal(str, int, object)` → emitted in Task 5 as `(item.uid(), self._page_index, event.globalPos())` → consumed in Task 6 as `(uid: str, page_idx: int, pos)` ✓
+- `sig_context_requested = Signal(str, int, object)` → emitted in Task 5 as `(item.uid(), self._page_index, event.globalPos())` → consumed in Task 6 as `(uid: str, page_idx: int, pos)` ✓
 - `SigPlacement.excluded_pages: frozenset` → built in Task 6 D3 as `frozenset(set)` ✓ → consumed in Task 4 as `if page_idx in sig_conf.excluded_pages` ✓
 - `_sig_page_exclusions: Dict[str, Dict[str, Set[int]]]` → written in Task 6 B3/B4/B5 → read in B1/B2/D2/D3/E1/E2 ✓
 - `set_grouped_results` accepts `List[PdfToImagesJobResult]` → called in Task 3 with `results` from `PdfToImgsWorker.finished` ✓

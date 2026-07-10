@@ -6,7 +6,7 @@
 
 **Architecture:** Arquitectura de widgets apilados: `LaneContainer` (QScrollArea vertical) contiene N `DocLane` (header + QListWidget horizontal). El drag cross-lane usa MIME personalizado. El motor recibe `MultiOrganizerJob` con N sub-jobs. Un `ThumbnailWorker` rellena el caché en background.
 
-**Tech Stack:** PyQt6, PyMuPDF (fitz), Pillow, dataclasses, json, threading via QThread
+**Tech Stack:** PySide6, PyMuPDF (fitz), Pillow, dataclasses, json, threading via QThread
 
 ---
 
@@ -100,9 +100,9 @@ class LaneState:
 
 ### Señales públicas
 ```python
-pages_changed = pyqtSignal(str)          # lane_id
-lane_delete_requested = pyqtSignal(str)  # lane_id
-reorder_requested = pyqtSignal(str, int) # lane_id, direction (+1/-1)
+pages_changed = Signal(str)          # lane_id
+lane_delete_requested = Signal(str)  # lane_id
+reorder_requested = Signal(str, int) # lane_id, direction (+1/-1)
 ```
 
 ### Menú contextual (click derecho en miniatura)
@@ -149,7 +149,7 @@ QScrollArea (vertical)
 
 ### Señales públicas
 ```python
-layout_changed = pyqtSignal()   # any lane added/removed/reordered
+layout_changed = Signal()   # any lane added/removed/reordered
 ```
 
 ### API
@@ -186,7 +186,7 @@ class ThumbnailKey:
 ### Worker background
 ```python
 class ThumbnailWorker(QObject):
-    thumb_ready = pyqtSignal(str, str, object)   # lane_id, page_id, QPixmap
+    thumb_ready = Signal(str, str, object)   # lane_id, page_id, QPixmap
 
     def request(self, lane_id: str, page_id: str, ref: PageRef, width: int) -> None
     def run(self) -> None   # procesa cola de requests

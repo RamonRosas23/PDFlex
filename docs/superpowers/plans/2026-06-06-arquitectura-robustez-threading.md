@@ -6,7 +6,7 @@
 
 **Architecture:** Tres capas de mejora: (1) thumbnails generados en hilo secundario con señal de actualización, (2) apertura de herramientas con diferimiento de 1 frame para feedback visual inmediato, (3) BaseWorker unificado con cleanup robusto y timeout en OCR. Las 20 herramientas heredan el patrón sin cambios de comportamiento visibles al usuario.
 
-**Tech Stack:** PyQt6, QThread, QObject signals/slots, fitz (PyMuPDF), Python threading, concurrent.futures (solo para batch paralelo en engines que lo soporten).
+**Tech Stack:** PySide6, QThread, QObject signals/slots, fitz (PyMuPDF), Python threading, concurrent.futures (solo para batch paralelo en engines que lo soporten).
 
 ---
 
@@ -187,7 +187,7 @@ La clase `BaseWorker` resolverá: guard doble ejecución, cancel robusto, cleanu
 """Tests para BaseWorker — guard de ejecución doble y cancel robusto."""
 import time
 import pytest
-from PyQt6.QtCore import QCoreApplication, QThread
+from PySide6.QtCore import QCoreApplication, QThread
 from ui.common.base_worker import BaseWorker, WorkerThread
 
 
@@ -278,7 +278,7 @@ from __future__ import annotations
 import threading
 from typing import Optional
 
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
+from PySide6.QtCore import QObject, QThread, Signal
 
 
 class BaseWorker(QObject):
@@ -286,9 +286,9 @@ class BaseWorker(QObject):
 
     Subclases deben implementar run() y consultar is_cancelled() en loops.
     """
-    progress = pyqtSignal(int, int, str)   # current, total, message
-    finished = pyqtSignal(list)            # results
-    error    = pyqtSignal(str)             # error message
+    progress = Signal(int, int, str)   # current, total, message
+    finished = Signal(list)            # results
+    error    = Signal(str)             # error message
 
     def __init__(self) -> None:
         super().__init__()
@@ -377,8 +377,8 @@ Este es el freeze más frecuente y visible. Al cargar 5+ PDFs la UI se congela v
 import sys
 import os
 import pytest
-from PyQt6.QtCore import QCoreApplication, QTimer
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtCore import QCoreApplication, QTimer
+from PySide6.QtWidgets import QApplication
 from ui.common.thumb_utils import ThumbnailLoader
 
 
@@ -436,8 +436,8 @@ Leer el archivo actual primero (ya leído en sesión: 29 líneas). Reemplazar co
 from __future__ import annotations
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal
-from PyQt6.QtGui import QPixmap, QImage
+from PySide6.QtCore import QObject, Signal
+from PySide6.QtGui import QPixmap, QImage
 
 
 def make_pdf_thumb(pdf_path: str, width: int = 72) -> Optional[QPixmap]:
@@ -470,7 +470,7 @@ class ThumbnailLoader(QObject):
         ready(path: str, pixmap: QPixmap | None): Emitida cuando el thumbnail
             está listo. pixmap es None si el archivo no pudo abrirse.
     """
-    ready = pyqtSignal(str, object)   # (path, QPixmap | None)
+    ready = Signal(str, object)   # (path, QPixmap | None)
 
     def __init__(self, pdf_path: str, width: int = 72) -> None:
         super().__init__()
@@ -497,7 +497,7 @@ Agregar al final del archivo (después de `ThumbnailLoader`):
 ```python
 def make_placeholder_pixmap(width: int = 72, height: int = 90) -> QPixmap:
     """Crea un QPixmap de placeholder (gris) para mostrar antes del thumbnail real."""
-    from PyQt6.QtGui import QPainter, QColor
+    from PySide6.QtGui import QPainter, QColor
     pix = QPixmap(width, height)
     pix.fill(QColor("#2A2A33"))
     painter = QPainter(pix)
@@ -569,7 +569,7 @@ Nuevo:
 ```python
     def _schedule_thumb(self, pdf_path: str, item: "QListWidgetItem") -> None:
         """Lanza generación de thumbnail en hilo secundario y actualiza el item al terminar."""
-        from PyQt6.QtCore import QThread
+        from PySide6.QtCore import QThread
         loader = ThumbnailLoader(pdf_path, self._thumb_w)
         thread = QThread(self)
         loader.moveToThread(thread)
@@ -639,8 +639,8 @@ Si hay cambios recientes de otra persona, revisar y resolver conflictos ANTES de
 """Tests para transición launcher → herramienta con feedback inmediato."""
 import sys
 import pytest
-from PyQt6.QtWidgets import QApplication, QWidget, QLabel
-from PyQt6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QWidget, QLabel
+from PySide6.QtCore import Qt
 
 
 @pytest.fixture(scope="module")
@@ -651,7 +651,7 @@ def app():
 
 def test_loading_widget_es_visible_inmediatamente(app):
     """El QStackedWidget debe cambiar de widget antes de que se construya la herramienta."""
-    from PyQt6.QtWidgets import QStackedWidget
+    from PySide6.QtWidgets import QStackedWidget
     stack = QStackedWidget()
     launcher = QLabel("launcher")
     loading = QLabel("Cargando...")
@@ -688,7 +688,7 @@ Agregar el método `_build_loading_widget` después de `_build_topbar`:
 
 ```python
     def _build_loading_widget(self) -> QWidget:
-        from PyQt6.QtWidgets import QVBoxLayout
+        from PySide6.QtWidgets import QVBoxLayout
         w = QWidget()
         w.setStyleSheet("background: #0D0D12;")
         layout = QVBoxLayout(w)
@@ -765,7 +765,7 @@ from shell.tool_registry import TOOLS, get_tool, ToolDescriptor
 
 - [ ] **Step 6: Verificar que el import QTimer ya está en shell_window.py**
 
-Buscar en las líneas 1-20 del archivo: `from PyQt6.QtCore import Qt, QPoint, QTimer` — ya está en línea 15. ✓
+Buscar en las líneas 1-20 del archivo: `from PySide6.QtCore import Qt, QPoint, QTimer` — ya está en línea 15. ✓
 
 - [ ] **Step 7: Ejecutar la app y probar apertura de herramientas**
 
@@ -875,7 +875,7 @@ El patrón de doble ejecución ocurre cuando el usuario hace click en "Procesar"
 """Tests para prevención de doble ejecución de workers."""
 import time
 import pytest
-from PyQt6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication
 from ui.common.base_worker import BaseWorker, WorkerThread
 
 
@@ -1139,7 +1139,7 @@ git commit -m "fix(ocr): timeout 30s por página — previene cuelgue indefinido
 """Smoke tests: verificar que todas las herramientas instancian sin errores."""
 import sys
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 from unittest.mock import MagicMock
 
 

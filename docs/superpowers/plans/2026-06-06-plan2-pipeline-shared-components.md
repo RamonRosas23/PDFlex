@@ -6,7 +6,7 @@
 
 **Architecture:** Evolutionary Premium — cirugía sobre `tool_scaffold.py`, `documents_step.py` y `process_step.py`. Nada se reescribe. Las mejoras del Plan 1 (AnimationHelper, COLORS premium) se usan directamente.
 
-**Tech Stack:** PyQt6 (QPropertyAnimation, QTimer, QShortcut, QMenu, QGraphicsDropShadowEffect) + AnimationHelper de Plan 1 — cero dependencias nuevas.
+**Tech Stack:** PySide6 (QPropertyAnimation, QTimer, QShortcut, QMenu, QGraphicsDropShadowEffect) + AnimationHelper de Plan 1 — cero dependencias nuevas.
 
 **Spec:** `docs/superpowers/specs/2026-06-06-pdflex-premium-redesign-design.md` Secciones 3 y 4.
 
@@ -68,7 +68,7 @@ Añadir al final de `tests/test_design_system.py`:
 def test_step_btn_completed_state():
     """_StepBtn puede marcar un paso como completado (muestra checkmark)."""
     import sys
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     from ui.common.tool_scaffold import _StepBtn
     app = QApplication.instance() or QApplication(sys.argv)
     btn = _StepBtn("01", "Documentos")
@@ -223,7 +223,7 @@ Añadir ANTES de `_switch_section`:
 ```python
 def _slide_to_section(self, idx: int) -> None:
     """Transición slide animada entre pasos. Llama a _switch_section internamente."""
-    from PyQt6.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer
+    from PySide6.QtCore import QPropertyAnimation, QRect, QEasingCurve, QTimer
     from ui.common.animations import is_reduced_motion
 
     if is_reduced_motion():
@@ -247,7 +247,7 @@ def _slide_to_section(self, idx: int) -> None:
     h = self.stack.height()
 
     # Overlay con el snapshot — flota sobre el stack
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     overlay = QLabel(self.stack)
     overlay.setPixmap(snapshot)
     overlay.setGeometry(0, 0, w, h)
@@ -347,7 +347,7 @@ root.addWidget(content_area, 1)
 ```python
 def _build_navbar(self) -> "QFrame":
     """Barra de navegación fija al pie: ← paso anterior / paso siguiente →"""
-    from PyQt6.QtWidgets import QPushButton
+    from PySide6.QtWidgets import QPushButton
     from ui.common.icons import icon_pixmap
 
     navbar = QFrame()
@@ -475,8 +475,8 @@ Añadir este bloque al final de `__init__` (antes del `QTimer.singleShot`):
 
 ```python
         # Atajos Alt+1-9 para navegar entre pasos de la herramienta
-        from PyQt6.QtGui import QShortcut
-        from PyQt6.QtCore import QKeyCombination
+        from PySide6.QtGui import QShortcut
+        from PySide6.QtCore import QKeyCombination
         for n in range(1, 10):
             shortcut = QShortcut(self)
             shortcut.setKey(f"Alt+{n}")
@@ -528,7 +528,7 @@ Añadir el método `eventFilter` a `PipelineWindow`:
 
 ```python
 def eventFilter(self, obj, event) -> bool:
-    from PyQt6.QtCore import QEvent
+    from PySide6.QtCore import QEvent
     if obj is getattr(self, "_sidebar_frame", None):
         if event.type() == QEvent.Type.Enter:
             if hasattr(self, "_shortcut_hint"):
@@ -579,7 +579,7 @@ def test_documents_card_count_label_shows_size():
     """_count_lbl muestra conteo y tamaño total."""
     import sys
     from unittest.mock import MagicMock
-    from PyQt6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication(sys.argv)
     ctx = MagicMock()
     ctx.tray.changed = MagicMock()
@@ -623,7 +623,7 @@ Y añadir en su lugar:
 
 ```python
 # Botón menú [≡] — agrupa acciones secundarias
-from PyQt6.QtWidgets import QMenu
+from PySide6.QtWidgets import QMenu
 self._menu_btn = QPushButton()
 self._menu_btn.setProperty("class", "Ghost")
 set_button_icon(self._menu_btn, "more-horizontal")
@@ -638,8 +638,8 @@ Añadir el método `_show_docs_menu`:
 ```python
 def _show_docs_menu(self) -> None:
     """Muestra el menú de acciones secundarias de la DocumentsCard."""
-    from PyQt6.QtWidgets import QMenu
-    from PyQt6.QtGui import QAction
+    from PySide6.QtWidgets import QMenu
+    from PySide6.QtGui import QAction
     menu = QMenu(self)
     menu.setObjectName("DocsMenu")
 
@@ -807,7 +807,7 @@ def _start_icon_bounce(self) -> None:
     """Inicia la animación bounce del icono folder-open."""
     if hasattr(self, "_bounce_timer") and self._bounce_timer.isActive():
         return
-    from PyQt6.QtCore import QTimer
+    from PySide6.QtCore import QTimer
     import math
     self._bounce_step = 0
     self._bounce_timer = QTimer(self)
@@ -866,7 +866,7 @@ Añadir `_flash_drop_success`:
 ```python
 def _flash_drop_success(self) -> None:
     """Flash sutil de accent al recibir un drop exitoso."""
-    from PyQt6.QtCore import QTimer
+    from PySide6.QtCore import QTimer
     r, g, b = self._parse_accent_rgb()
     self._empty_w.setStyleSheet(
         f"QFrame#DropZone {{ background: rgba({r},{g},{b},0.15); border-radius: 10px; }}"
@@ -946,7 +946,7 @@ def animate_stats(self, stats: dict[str, int]) -> None:
     Busca QLabel con objectName en stats.keys() y anima su valor.
     """
     from ui.common.animations import AnimationHelper
-    from PyQt6.QtWidgets import QLabel
+    from PySide6.QtWidgets import QLabel
     for name, value in stats.items():
         for lbl in self.findChildren(QLabel):
             if lbl.objectName() == name:
@@ -960,7 +960,7 @@ def animate_stats(self, stats: dict[str, int]) -> None:
 # Ejecutar este one-liner para ver los atributos de ProcessStep:
 python -c "
 import sys
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 app = QApplication(sys.argv)
 from ui.common.process_step import ProcessStep
 s = ProcessStep(run_label='Test')

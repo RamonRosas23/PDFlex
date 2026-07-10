@@ -86,7 +86,7 @@ El motor (`core/editor/`) queda **100 % libre de Qt** (igual que los engines exi
 ### 5.3 Vista de arquitectura (capas)
 
 ```
-┌─────────────────────────── ui/studio (PyQt6) ───────────────────────────┐
+┌─────────────────────────── ui/studio (PySide6) ───────────────────────────┐
 │ EditorWindow                                                            │
 │ ├─ Toolbar (insertar/zoom/undo/guardar/exportar)                        │
 │ ├─ ThumbnailPanel (páginas)      ├─ CanvasView (QGraphicsView+reglas)   │
@@ -158,7 +158,7 @@ El motor (`core/editor/`) queda **100 % libre de Qt** (igual que los engines exi
 | Librería | Versión | Rol | Justificación |
 |---|---|---|---|
 | **PyMuPDF (fitz)** | ≥ 1.24 *(ya en requirements)* | Render, inserción, OCR, OCG, reparación | Ya es el corazón de la suite; `insert_htmlbox`, `derotation_matrix`, `get_textpage_ocr`, `add_ocg`, `subset_fonts` cubren todas las necesidades |
-| **PyQt6** | ≥ 6.6 *(ya en requirements)* | UI, QGraphicsScene/View, QUndoStack | La suite ya es PyQt6 (el enunciado permitía PySide6 **o** PyQt6; cambiar de binding sería un costo sin beneficio) |
+| **PySide6** | ≥ 6.6 *(ya en requirements)* | UI, QGraphicsScene/View, QUndoStack | La suite fue migrada a PySide6 para conservar una ruta de distribución propietaria compatible con LGPLv3. |
 | **Pillow** | ≥ 10 *(ya)* | Normalización de imágenes, recorte, opacidad→alfa, WebP | Ya presente |
 | **numpy** | ≥ 1.24 *(ya)* | Muestreo de color de fondo (whiteout inteligente), métricas OCR | Ya presente |
 | **fontTools** | ≥ 4.50 *(nueva, pura-Python)* | Inspección de TTF/OTF del sistema: nombre real, flag `fsType` (permiso de embebido), subsetting auxiliar | Necesaria para ofrecer fuentes del sistema con embebido legal y fiable |
@@ -353,7 +353,7 @@ class CoordinateMapper:      # core/editor/geometry.py — pura, sin Qt
 
 class RenderService(QObject):        # frontera core/UI
     request = ...                    # (page, scale_bucket, tile, priority)
-    pixmap_ready = pyqtSignal(int, float, object, QPixmap)
+    pixmap_ready = Signal(int, float, object, QPixmap)
     # Hilo propio con SU fitz.Document. Descarta trabajos obsoletos (generación de zoom).
 
 class Exporter:                      # core/editor/export/exporter.py
@@ -541,7 +541,7 @@ Todo lo del §3-incluido operando sobre el corpus real de OCMX con estos SLO: ar
 
 ## 26. Supuestos y decisiones tomadas (para validar en revisión)
 
-1. **PyQt6, no PySide6** — la suite entera es PyQt6; el enunciado aceptaba ambos.
+1. **PySide6 como binding único** — la suite entera usa PySide6; no se admite mezclar bindings Qt en el mismo proceso.
 2. **Herramienta de la suite, no app separada** — máxima reutilización; el motor queda desacoplado para un futuro standalone.
 3. **Overlay-first con edición puntual de existente** — el reflow completo estilo Acrobat queda explícitamente fuera del alcance (es el único camino realista a un producto estable en Python).
 4. **Sin dependencias PDF nuevas** (no pikepdf/reportlab); solo se añade `fontTools` + fuentes OFL.

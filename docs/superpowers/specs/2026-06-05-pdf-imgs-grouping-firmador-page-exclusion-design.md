@@ -70,7 +70,7 @@ all sigs in the job (from the Intervals step).
   `page_idx in sig_placement.excluded_pages`.
 
 **`ui/pdf_preview.py`** — `PdfPreviewView`
-- New signal: `sig_context_requested = pyqtSignal(str, int, object)` (uid, page_0based, QPoint).
+- New signal: `sig_context_requested = Signal(str, int, object)` (uid, page_0based, QPoint).
 - Override `contextMenuEvent`: hit-test via `scene.itemAt(pos, transform)`, walk up to find
   `SignatureItem`, emit `sig_context_requested` instead of showing menu (window handles menu).
 - `SignatureItem`: new method `set_exclusion_state(excluded: bool)` → `setOpacity(0.28)` when

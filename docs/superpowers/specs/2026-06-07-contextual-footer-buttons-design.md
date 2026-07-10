@@ -128,8 +128,8 @@ self._nav_next_btn.setText(f"Siguiente: {next_name}")
 #### 3a. Señales nuevas
 
 ```python
-run_enabled_changed = pyqtSignal(bool)   # emitida por set_run_enabled
-running_changed     = pyqtSignal(bool)   # emitida por start/stop_processing_ui
+run_enabled_changed = Signal(bool)   # emitida por set_run_enabled
+running_changed     = Signal(bool)   # emitida por start/stop_processing_ui
 ```
 
 #### 3b. Eliminaciones en `_build()`

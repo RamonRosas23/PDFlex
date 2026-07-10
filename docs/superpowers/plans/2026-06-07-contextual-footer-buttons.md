@@ -6,7 +6,7 @@
 
 **Architecture:** `PipelineWindow` gains an `_action_zone` widget in the navbar; the base `_get_step_actions(idx)` reads conventionally named attributes (`_run_btn`, `_cancel_btn`, `_restart_btn`, `_send_btn`) from SECTIONS name matching — no override needed per tool. `ProcessStep` loses its button row and gains `run_enabled_changed` / `running_changed` signals. Each tool window adds `_build_action_buttons()` that creates the four buttons, moves `_send_btn` creation here from the results section, and wires the ProcessStep signals.
 
-**Tech Stack:** PyQt6, QWidget, QHBoxLayout, pyqtSignal
+**Tech Stack:** PySide6, QWidget, QHBoxLayout, Signal
 
 ---
 
@@ -55,7 +55,7 @@ from __future__ import annotations
 import os, sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
-from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QWidget
 
 @pytest.fixture(scope="module")
 def app():
@@ -404,8 +404,8 @@ git commit -m "test(process-step): failing tests for new signals and button remo
 In `ProcessStep` class body, add two signals right after the existing `run_requested` / `cancel_requested`. **Do NOT delete the old signals yet** — tool windows still connect to them and smoke tests will fail if removed now. They will be deleted in Task 18 once all tool windows are updated.
 
 ```python
-run_enabled_changed = pyqtSignal(bool)
-running_changed     = pyqtSignal(bool)
+run_enabled_changed = Signal(bool)
+running_changed     = Signal(bool)
 # run_requested and cancel_requested remain for now — removed in Task 18
 ```
 
@@ -1283,7 +1283,7 @@ FirmadorWindow is the largest file (~1200 lines). The ProcessStep is at `_build_
 import os, sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 from shell.context import ShellContext
 from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
@@ -1344,7 +1344,7 @@ git commit -m "feat(firmador): move action buttons to navbar footer"
 import os, sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import pytest
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 from shell.context import ShellContext
 from shell.tray import PdfTray
 from shell.word_to_pdf import WordToPdfConverter
@@ -1407,8 +1407,8 @@ If in Task 4 Step 9 you added them back temporarily, now remove them:
 
 ```python
 # Delete these two lines from ProcessStep:
-run_requested = pyqtSignal()
-cancel_requested = pyqtSignal()
+run_requested = Signal()
+cancel_requested = Signal()
 ```
 
 Run tests again to confirm nothing references them.

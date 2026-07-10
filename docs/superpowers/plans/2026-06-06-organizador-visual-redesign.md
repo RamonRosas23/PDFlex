@@ -6,7 +6,7 @@
 
 **Architecture:** `LaneContainer` (QScrollArea) contiene N `DocLane` (header colapsable + `_PageStrip` QListWidget horizontal). El drag cross-lane usa MIME personalizado `application/x-pdflex-pageref`. El motor recibe `MultiOrganizerJob` con N sub-jobs. `ThumbnailWorker` (QThread) llena `ThumbnailCache` (LRU) en background.
 
-**Tech Stack:** PyQt6, PyMuPDF (fitz), Pillow, Python dataclasses, json, threading via QThread
+**Tech Stack:** PySide6, PyMuPDF (fitz), Pillow, Python dataclasses, json, threading via QThread
 
 ---
 
@@ -215,7 +215,7 @@ class ThumbnailCacheTests(unittest.TestCase):
         # Initially empty
         self.assertIsNone(cache.get(key))
         # Create a dummy pixmap
-        from PyQt6.QtGui import QPixmap
+        from PySide6.QtGui import QPixmap
         pix = QPixmap(116, 150)
         cache.put(key, pix)
         result = cache.get(key)
@@ -256,8 +256,8 @@ from typing import Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import QObject, QThread, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtGui import QImage, QPixmap
 
 
 @dataclass(frozen=True)
@@ -347,7 +347,7 @@ class _ThumbRequest:
 class ThumbnailWorker(QObject):
     """Background worker that renders thumbnails and emits them via signal."""
 
-    thumb_ready = pyqtSignal(str, str, object)  # lane_id, page_id, QPixmap
+    thumb_ready = Signal(str, str, object)  # lane_id, page_id, QPixmap
 
     def __init__(self, cache: ThumbnailCache, parent=None) -> None:
         super().__init__(parent)
@@ -443,7 +443,7 @@ class PageMimeTests(unittest.TestCase):
         self.assertEqual(decoded_refs[1].rotation_deg, 90)
 
     def test_decode_returns_none_for_foreign_mime(self) -> None:
-        from PyQt6.QtCore import QMimeData
+        from PySide6.QtCore import QMimeData
         mime = QMimeData()
         mime.setText("hello")
         self.assertIsNone(decode_drag(mime))
@@ -465,7 +465,7 @@ from __future__ import annotations
 import json
 from typing import List, Optional, Tuple
 
-from PyQt6.QtCore import QMimeData
+from PySide6.QtCore import QMimeData
 
 from core.page_organizer_engine import PageRef
 
@@ -640,12 +640,12 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 import fitz
-from PyQt6.QtCore import Qt, QEvent, QSize, pyqtSignal
-from PyQt6.QtGui import (
+from PySide6.QtCore import Qt, QEvent, QSize, Signal
+from PySide6.QtGui import (
     QColor, QDrag, QDragEnterEvent, QDropEvent, QIcon,
     QKeyEvent, QPixmap,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QAbstractItemView, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QMenu, QPushButton, QVBoxLayout,
     QWidget,
@@ -683,9 +683,9 @@ def _placeholder_pixmap() -> QPixmap:
 class _PageStrip(QListWidget):
     """Horizontal QListWidget with custom drag/drop for intra- and cross-lane operations."""
 
-    cross_lane_drop_received = pyqtSignal(str, str, list, bool)  # src_id, dst_id, refs, ctrl
-    pdf_file_dropped = pyqtSignal(str)                           # file path
-    internal_reorder_done = pyqtSignal()
+    cross_lane_drop_received = Signal(str, str, list, bool)  # src_id, dst_id, refs, ctrl
+    pdf_file_dropped = Signal(str)                           # file path
+    internal_reorder_done = Signal()
 
     def __init__(self, lane_id: str, parent=None) -> None:
         super().__init__(parent)
@@ -815,10 +815,10 @@ class _PageStrip(QListWidget):
 class DocLane(QFrame):
     """Header + horizontal page strip for one document in the organizer."""
 
-    pages_changed = pyqtSignal(str)                               # lane_id
-    lane_delete_requested = pyqtSignal(str)                       # lane_id
-    reorder_requested = pyqtSignal(str, int)                      # lane_id, direction
-    cross_lane_drop_received = pyqtSignal(str, str, list, bool)   # src_id, dst_id, refs, ctrl
+    pages_changed = Signal(str)                               # lane_id
+    lane_delete_requested = Signal(str)                       # lane_id
+    reorder_requested = Signal(str, int)                      # lane_id, direction
+    cross_lane_drop_received = Signal(str, str, list, bool)   # src_id, dst_id, refs, ctrl
 
     def __init__(
         self,
@@ -1378,8 +1378,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from PyQt6.QtCore import QThread, Qt, pyqtSignal
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QThread, Qt, Signal
+from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QPushButton, QScrollArea, QSizePolicy,
     QVBoxLayout, QWidget,
 )
@@ -1396,7 +1396,7 @@ PDF_FILTER = "PDF (*.pdf)"
 class LaneContainer(QWidget):
     """Vertical scroll area containing N DocLanes."""
 
-    layout_changed = pyqtSignal()   # emitted whenever lanes are added/removed/reordered
+    layout_changed = Signal()   # emitted whenever lanes are added/removed/reordered
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -1715,9 +1715,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QThread, QUrl, pyqtSignal, Qt, QObject
-from PyQt6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
-from PyQt6.QtWidgets import (
+from PySide6.QtCore import QThread, QUrl, Signal, Qt, QObject
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QDesktopServices
+from PySide6.QtWidgets import (
     QCheckBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
@@ -1744,9 +1744,9 @@ from ui.organizador.lane_container import LaneContainer
 
 
 class _MultiWorker(QObject):
-    progress = pyqtSignal(int, int, str)
-    finished = pyqtSignal(object)   # MultiOrganizerResult
-    error = pyqtSignal(str)
+    progress = Signal(int, int, str)
+    finished = Signal(object)   # MultiOrganizerResult
+    error = Signal(str)
 
     def __init__(self, job: MultiOrganizerJob) -> None:
         super().__init__()
@@ -2095,8 +2095,8 @@ class OrganizadorWindow(PipelineWindow):
         self._worker = None
 
     def _open_in_explorer(self, path: str) -> None:
-        from PyQt6.QtCore import QUrl
-        from PyQt6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(Path(path).parent)))
 
     def _reset_session(self) -> None:

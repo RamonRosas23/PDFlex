@@ -6,7 +6,7 @@
 
 **Architecture:** `PdfFullViewDialog` es un `QDialog` frameless independiente en `ui/common/pdf_fullview_dialog.py`. Reutiliza el engine de render `fitz` ya establecido en `GenericPdfViewer`. Se integra en `GenericPdfViewer` y `ResultsViewer` con un botón "Vista completa" en la fila de título.
 
-**Tech Stack:** PyQt6, fitz (PyMuPDF), PIL, Python 3.11+
+**Tech Stack:** PySide6, fitz (PyMuPDF), PIL, Python 3.11+
 
 ---
 
@@ -48,7 +48,7 @@ El dict queda:
 python -c "from ui.common.icons import icon; print(icon('columns', '#5E6AD2', 16))"
 ```
 
-Resultado esperado: `<PyQt6.QtGui.QIcon object at ...>` (sin excepciones).
+Resultado esperado: `<PySide6.QtGui.QIcon object at ...>` (sin excepciones).
 
 - [ ] **Step 1.3: Commit**
 
@@ -91,13 +91,13 @@ from typing import Optional
 
 import fitz
 from PIL import Image
-from PyQt6.QtCore import (
+from PySide6.QtCore import (
     Qt, QSize, QPoint, QPropertyAnimation, QEasingCurve, QTimer,
 )
-from PyQt6.QtGui import (
+from PySide6.QtGui import (
     QIcon, QPixmap, QImage, QKeyEvent, QWheelEvent, QPainter, QColor,
 )
-from PyQt6.QtWidgets import (
+from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QHBoxLayout, QLabel,
     QListWidget, QListWidgetItem, QPushButton, QScrollArea,
     QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
@@ -942,7 +942,7 @@ Resultado esperado: `OK — sin errores de sintaxis`
 python -c "
 import os; os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 import sys
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication(sys.argv)
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog
 print('Import OK')
@@ -1059,7 +1059,7 @@ Añadir el método `_on_fullview` justo después de `_on_open_file`:
 python -c "
 import os; os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 import sys
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication(sys.argv)
 from ui.common.pdf_viewer import GenericPdfViewer
 v = GenericPdfViewer()
@@ -1156,7 +1156,7 @@ Para hacer esto, primero leer las líneas de `_set_actions_enabled` en `results_
 python -c "
 import os; os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 import sys
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 _app = QApplication.instance() or QApplication(sys.argv)
 from ui.results_viewer import ResultsViewer
 v = ResultsViewer()
@@ -1200,7 +1200,7 @@ from types import SimpleNamespace
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import fitz
-from PyQt6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication
 
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog, ZOOM_LEVELS
 

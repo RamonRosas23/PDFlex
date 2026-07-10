@@ -15,6 +15,7 @@ import tempfile
 import fitz
 from PIL import Image, ImageEnhance, ImageFilter
 
+from core.pdf_backend import PdfRenderDocument, Rect
 from .pdf_analyzer import PdfAnalyzer, PageAnalysis
 from .safe_zone import SafeZoneFinder, Placement, fit_placement_inside_page
 from .signature_naturalizer import naturalize_signature
@@ -208,12 +209,14 @@ class SignatureEngine:
         total_pages = len(job.pages) if job.pages is not None else doc.page_count
 
         try:
-            results = self._process_job_pages(
-                doc,
-                job,
-                progress=progress,
-                apply_images=True,
-            )
+            with PdfRenderDocument(job.pdf_path) as analysis_document:
+                results = self._process_job_pages(
+                    doc,
+                    analysis_document,
+                    job,
+                    progress=progress,
+                    apply_images=True,
+                )
 
             os.makedirs(os.path.dirname(os.path.abspath(job.output_path)), exist_ok=True)
             # Elimina objetos sin referencia y compacta xref, pero evita comparar
@@ -256,12 +259,14 @@ class SignatureEngine:
                              error=f"No se pudo abrir PDF: {e}")
 
         try:
-            results = self._process_job_pages(
-                doc,
-                job,
-                progress=progress,
-                apply_images=False,
-            )
+            with PdfRenderDocument(job.pdf_path) as analysis_document:
+                results = self._process_job_pages(
+                    doc,
+                    analysis_document,
+                    job,
+                    progress=progress,
+                    apply_images=False,
+                )
             target_pages = (job.pages if job.pages is not None
                             else list(range(doc.page_count)))
             if progress:
@@ -294,6 +299,7 @@ class SignatureEngine:
     def _process_job_pages(
         self,
         doc: fitz.Document,
+        analysis_document: PdfRenderDocument,
         job: SignJob,
         *,
         progress: Optional[Callable[[int, int, str], None]],
@@ -309,11 +315,11 @@ class SignatureEngine:
             if progress:
                 progress(i, total, f"Página {page_idx + 1}/{doc.page_count}")
 
-            analysis = self.analyzer.analyze_page(doc, page_idx)
+            analysis = self.analyzer.analyze_page(analysis_document, page_idx)
             page = doc[page_idx]
             primary_placement: Optional[Placement] = None
             signature_results: List[SignaturePageResult] = []
-            occupied_rects: List[fitz.Rect] = []
+            occupied_rects: List[Rect] = []
 
             for sig_conf in job.signatures:
                 if page_idx in sig_conf.excluded_pages:
@@ -367,7 +373,7 @@ class SignatureEngine:
         analysis: PageAnalysis,
         doc_id: str,
         page_index: int,
-        occupied_rects: List[fitz.Rect],
+        occupied_rects: List[Rect],
         smart: bool = True,
     ) -> Tuple[Placement, Variation]:
         desired, variation = self._desired_placement(
@@ -464,7 +470,8 @@ class SignatureEngine:
     ) -> Placement:
         # Segunda barrera: fit dentro de los límites de display de la página.
         placement = self._fit_placement_for_page(page, placement)
-        target = placement.rotated_bbox
+        bounds = placement.rotated_bbox
+        target = fitz.Rect(bounds.x0, bounds.y0, bounds.x1, bounds.y1)
 
         rot = int(page.rotation) % 360
 

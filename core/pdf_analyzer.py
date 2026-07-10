@@ -7,8 +7,8 @@ consulta para decidir si una posición candidata de firma es válida.
 from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import List, Tuple
-import io
-import fitz  # PyMuPDF
+
+from core.pdf_backend import PdfRenderDocument, Rect
 
 
 @dataclass
@@ -22,8 +22,8 @@ class TextBlock:
     is_signature_line: bool = False
 
     @property
-    def rect(self) -> fitz.Rect:
-        return fitz.Rect(self.x0, self.y0, self.x1, self.y1)
+    def rect(self) -> Rect:
+        return Rect(self.x0, self.y0, self.x1, self.y1)
 
     @property
     def width(self) -> float:
@@ -47,9 +47,9 @@ class PageAnalysis:
     margin_top: float = 0.0
     margin_bottom: float = 0.0
 
-    def intersects_text(self, rect: fitz.Rect, padding: float = 4.0) -> bool:
+    def intersects_text(self, rect: Rect, padding: float = 4.0) -> bool:
         """¿La caja `rect` (con padding) intersecta algún bloque de texto?"""
-        expanded = fitz.Rect(
+        expanded = Rect(
             rect.x0 - padding, rect.y0 - padding,
             rect.x1 + padding, rect.y1 + padding,
         )
@@ -60,7 +60,7 @@ class PageAnalysis:
                 return True
         return False
 
-    def inside_page(self, rect: fitz.Rect, margin: float = 0.0) -> bool:
+    def inside_page(self, rect: Rect, margin: float = 0.0) -> bool:
         """¿El rect está dentro de los límites de la página y del margen solicitado?"""
         return (
             rect.x0 >= margin
@@ -77,80 +77,62 @@ class PdfAnalyzer:
         self.min_text_length = min_text_length
 
     def analyze_document(self, pdf_path: str) -> List[PageAnalysis]:
-        doc = fitz.open(pdf_path)
-        try:
-            return [self.analyze_page(doc, i) for i in range(doc.page_count)]
-        finally:
-            doc.close()
+        with PdfRenderDocument(pdf_path) as document:
+            return [self.analyze_page(document, i) for i in range(document.page_count)]
 
-    def analyze_page(self, doc: fitz.Document, page_index: int) -> PageAnalysis:
-        page = doc[page_index]
-        rect = page.rect
+    def analyze_page(
+        self,
+        document: PdfRenderDocument,
+        page_index: int,
+    ) -> PageAnalysis:
+        page = document.page_info(page_index)
 
         analysis = PageAnalysis(
             page_index=page_index,
-            width=rect.width,
-            height=rect.height,
+            width=page.width_pt,
+            height=page.height_pt,
         )
 
-        # Extracción de bloques de texto con sus bounding boxes
-        blocks = page.get_text("blocks") or []
-        for b in blocks:
-            if len(b) < 5:
-                continue
-            x0, y0, x1, y1, text = b[0], b[1], b[2], b[3], b[4]
-            if not isinstance(text, str):
-                continue
-            text = text.strip()
+        for block in document.text_blocks(page_index):
+            text = block.text.strip()
             if len(text) < self.min_text_length:
                 continue
-            is_signature_line = self._is_text_signature_line(text, x1 - x0)
+            is_signature_line = self._is_text_signature_line(text, block.right - block.left)
             analysis.text_blocks.append(
                 TextBlock(
-                    x0=x0,
-                    y0=y0,
-                    x1=x1,
-                    y1=y1,
+                    x0=block.left,
+                    y0=block.top,
+                    x1=block.right,
+                    y1=block.bottom,
                     text=text,
                     is_signature_line=is_signature_line,
                 )
             )
 
-        # Detectar líneas de firma (líneas horizontales típicas "__________")
-        analysis.signature_lines = self._detect_signature_lines(page, analysis)
+        analysis.signature_lines = self._detect_signature_lines(
+            document, page_index, analysis
+        )
 
         # Calcular márgenes efectivos del contenido
         if analysis.text_blocks:
             analysis.margin_left = min(b.x0 for b in analysis.text_blocks)
-            analysis.margin_right = rect.width - max(b.x1 for b in analysis.text_blocks)
+            analysis.margin_right = page.width_pt - max(b.x1 for b in analysis.text_blocks)
             analysis.margin_top = min(b.y0 for b in analysis.text_blocks)
-            analysis.margin_bottom = rect.height - max(b.y1 for b in analysis.text_blocks)
+            analysis.margin_bottom = page.height_pt - max(b.y1 for b in analysis.text_blocks)
 
         return analysis
 
     def _detect_signature_lines(
-        self, page: fitz.Page, analysis: PageAnalysis
+        self,
+        document: PdfRenderDocument,
+        page_index: int,
+        analysis: PageAnalysis,
     ) -> List[Tuple[float, float, float, float]]:
         """Detecta líneas horizontales largas y delgadas (típicas líneas de firma)."""
         lines: List[Tuple[float, float, float, float]] = []
-        try:
-            drawings = page.get_drawings()
-        except Exception:
-            return lines
-
-        for d in drawings:
-            for item in d.get("items", []):
-                if not item or item[0] != "l":
-                    continue
-                try:
-                    p1, p2 = item[1], item[2]
-                    x0, x1 = min(p1.x, p2.x), max(p1.x, p2.x)
-                    y0, y1 = min(p1.y, p2.y), max(p1.y, p2.y)
-                except Exception:
-                    continue
-                # Línea horizontal larga (>= 60 pt) y fina
-                if (x1 - x0) >= 60 and (y1 - y0) <= 2:
-                    lines.append((x0, y0, x1, y1))
+        for path in document.object_bounds(page_index, kinds=("path",)):
+            if path.width >= 60 and path.height <= 2:
+                lines.append((path.left, path.top, path.right, path.bottom))
 
         # Buscar también texto que se vea como línea de firma (subrayados largos)
         for block in analysis.text_blocks:

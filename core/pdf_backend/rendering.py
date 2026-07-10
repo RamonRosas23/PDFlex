@@ -81,6 +81,17 @@ class PageObjectBounds:
         return self.bottom - self.top
 
 
+@dataclass(frozen=True, slots=True)
+class PageTextBlock:
+    """One PDFium text rectangle with its visual bounds and text."""
+
+    left: float
+    top: float
+    right: float
+    bottom: float
+    text: str
+
+
 class PdfRenderDocument:
     """A PDFium document limited to deterministic read-only operations."""
 
@@ -290,6 +301,55 @@ class PdfRenderDocument:
                         )
                     )
             finally:
+                page.close()
+        return results
+
+    def text_blocks(self, index: int) -> list[PageTextBlock]:
+        """Return line-like text rectangles in visual top-left coordinates."""
+        document = self._document_or_raise()
+        self._validate_page_index(index)
+        results: list[PageTextBlock] = []
+        with _PDFIUM_LOCK:
+            page = document[index]
+            text_page = None
+            try:
+                display_width, display_height = page.get_size()
+                rotation = page.get_rotation() % 360
+                native_width, native_height = (
+                    (display_height, display_width)
+                    if rotation in (90, 270)
+                    else (display_width, display_height)
+                )
+                text_page = page.get_textpage()
+                rectangle_count = text_page.count_rects()
+                for rectangle_index in range(rectangle_count):
+                    left, bottom, right, top = text_page.get_rect(rectangle_index)
+                    text = text_page.get_text_bounded(left, bottom, right, top).strip()
+                    if not text:
+                        continue
+                    points = [
+                        _native_to_display(x, y, native_width, native_height, rotation)
+                        for x, y in (
+                            (left, bottom),
+                            (left, top),
+                            (right, bottom),
+                            (right, top),
+                        )
+                    ]
+                    xs = [point[0] for point in points]
+                    ys = [point[1] for point in points]
+                    results.append(
+                        PageTextBlock(
+                            float(min(xs)),
+                            float(min(ys)),
+                            float(max(xs)),
+                            float(max(ys)),
+                            text,
+                        )
+                    )
+            finally:
+                if text_page is not None:
+                    text_page.close()
                 page.close()
         return results
 

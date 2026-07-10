@@ -18,8 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Iterable, Optional, Sequence, Tuple
 import math
-import fitz
 
+from core.pdf_backend import Rect
 from .pdf_analyzer import PageAnalysis
 
 
@@ -41,9 +41,9 @@ class Placement:
     overlaps_signature: bool = False
 
     @property
-    def rect(self) -> fitz.Rect:
+    def rect(self) -> Rect:
         """Bounding box axis-aligned (sin rotación)."""
-        return fitz.Rect(
+        return Rect(
             self.x - self.width / 2,
             self.y - self.height / 2,
             self.x + self.width / 2,
@@ -51,7 +51,7 @@ class Placement:
         )
 
     @property
-    def rotated_bbox(self) -> fitz.Rect:
+    def rotated_bbox(self) -> Rect:
         """Bounding box que envuelve la firma rotada."""
         if abs(self.angle) < 0.01:
             return self.rect
@@ -59,7 +59,7 @@ class Placement:
         cos_a, sin_a = abs(math.cos(rad)), abs(math.sin(rad))
         new_w = self.width * cos_a + self.height * sin_a
         new_h = self.width * sin_a + self.height * cos_a
-        return fitz.Rect(
+        return Rect(
             self.x - new_w / 2,
             self.y - new_h / 2,
             self.x + new_w / 2,
@@ -156,7 +156,7 @@ class SafeZoneFinder:
         self,
         analysis: PageAnalysis,
         desired: Placement,
-        occupied_rects: Sequence[fitz.Rect] = (),
+        occupied_rects: Sequence[Rect] = (),
     ) -> Placement:
         """Devuelve una colocación lo más cerca posible de la deseada.
 
@@ -216,7 +216,7 @@ class SafeZoneFinder:
         self,
         analysis: PageAnalysis,
         p: Placement,
-        occupied_rects: Sequence[fitz.Rect] = (),
+        occupied_rects: Sequence[Rect] = (),
     ) -> bool:
         bbox = p.rotated_bbox
         if not analysis.inside_page(bbox, margin=self.margin):
@@ -231,7 +231,7 @@ class SafeZoneFinder:
         self,
         analysis: PageAnalysis,
         desired: Placement,
-        occupied_rects: Sequence[fitz.Rect] = (),
+        occupied_rects: Sequence[Rect] = (),
     ) -> Optional[Placement]:
         """Búsqueda en espiral cuadrada alrededor del punto deseado."""
         step = self.spiral_step
@@ -269,7 +269,7 @@ class SafeZoneFinder:
         self,
         analysis: PageAnalysis,
         desired: Placement,
-        occupied_rects: Sequence[fitz.Rect] = (),
+        occupied_rects: Sequence[Rect] = (),
     ) -> Optional[Placement]:
         """Busca un hueco válido en toda la página, priorizando cercanía."""
         bbox = desired.rotated_bbox
@@ -325,11 +325,11 @@ class SafeZoneFinder:
 
     def _intersects_occupied(
         self,
-        rect: fitz.Rect,
-        occupied_rects: Iterable[fitz.Rect],
+        rect: Rect,
+        occupied_rects: Iterable[Rect],
     ) -> bool:
         padding = self.signature_padding
-        expanded = fitz.Rect(
+        expanded = Rect(
             rect.x0 - padding,
             rect.y0 - padding,
             rect.x1 + padding,
@@ -341,7 +341,7 @@ class SafeZoneFinder:
         self,
         analysis: PageAnalysis,
         p: Placement,
-        occupied_rects: Sequence[fitz.Rect] = (),
+        occupied_rects: Sequence[Rect] = (),
     ) -> Optional[Placement]:
         """Si hay una línea de firma cerca, ajusta la firma sobre ella."""
         if not analysis.signature_lines:

@@ -4,11 +4,13 @@ Application modules should import this package's stable interfaces instead of
 calling PDFium, QPDF, pypdf, or ReportLab directly.
 """
 from .errors import PdfBackendError, PdfCancelledError, PdfClosedError, PdfPasswordError
+from .geometry import Rect
 from .composition import ImagePdfPage, create_image_pdf
 from .rendering import (
     PageInfo,
     PageObjectBounds,
     PageObjectKind,
+    PageTextBlock,
     PdfRenderDocument,
     RenderedPage,
     pdf_page_count,
@@ -30,6 +32,7 @@ __all__ = [
     "PageInfo",
     "PageObjectBounds",
     "PageObjectKind",
+    "PageTextBlock",
     "AssemblyReport",
     "ImagePdfPage",
     "MergeReport",
@@ -40,6 +43,7 @@ __all__ = [
     "PdfClosedError",
     "PdfPasswordError",
     "PdfRenderDocument",
+    "Rect",
     "RenderedPage",
     "SourcePage",
     "assemble_pages",

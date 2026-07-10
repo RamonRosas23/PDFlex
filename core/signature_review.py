@@ -13,6 +13,7 @@ from typing import Callable, Iterable, Optional
 
 import fitz
 
+from core.pdf_backend import PdfRenderDocument, Rect
 from .pdf_analyzer import PdfAnalyzer
 from .safe_zone import Placement, fit_placement_inside_page
 from .signature_engine import (
@@ -338,19 +339,15 @@ def validate_review_document(
         if not page_indices:
             return
 
-    try:
-        doc = _open_pdf_safe(review.source_path)
-    except Exception:
-        return
-
     analyzer = PdfAnalyzer()
     try:
-        for page_index in page_indices:
-            if page_index < 0 or page_index >= doc.page_count:
-                continue
-            _validate_review_page_with_doc(review, doc, page_index, analyzer)
-    finally:
-        doc.close()
+        with PdfRenderDocument(review.source_path) as document:
+            for page_index in page_indices:
+                if page_index < 0 or page_index >= document.page_count:
+                    continue
+                _validate_review_page_with_doc(review, document, page_index, analyzer)
+    except Exception:
+        return
 
 
 def validate_review_page(
@@ -362,29 +359,27 @@ def validate_review_page(
     if not force and review.is_page_validation_current(page_index):
         return
     try:
-        doc = _open_pdf_safe(review.source_path)
+        with PdfRenderDocument(review.source_path) as document:
+            if 0 <= page_index < document.page_count:
+                _validate_review_page_with_doc(
+                    review, document, page_index, PdfAnalyzer()
+                )
     except Exception:
         return
-
-    try:
-        if 0 <= page_index < doc.page_count:
-            _validate_review_page_with_doc(review, doc, page_index, PdfAnalyzer())
-    finally:
-        doc.close()
 
 
 def _validate_review_page_with_doc(
     review: ReviewDocument,
-    doc: fitz.Document,
+    document: PdfRenderDocument,
     page_index: int,
     analyzer: PdfAnalyzer,
 ) -> None:
-    page = doc[page_index]
-    analysis = analyzer.analyze_page(doc, page_index)
-    occupied: list[fitz.Rect] = []
+    page = document.page_info(page_index)
+    analysis = analyzer.analyze_page(document, page_index)
+    occupied: list[Rect] = []
     for inst in review.page_instances(page_index):
         placement = fit_placement_inside_page(
-            inst.to_placement(), page.rect.width, page.rect.height, margin=0.0
+            inst.to_placement(), page.width_pt, page.height_pt, margin=0.0
         )
         bbox = placement.rotated_bbox
         collides = analysis.intersects_text(bbox, padding=4.0)
@@ -458,8 +453,8 @@ def warnings_from_placement(placement: Placement) -> tuple[str, ...]:
     return tuple(warnings)
 
 
-def _intersects_any(rect: fitz.Rect, others: Iterable[fitz.Rect], padding: float) -> bool:
-    expanded = fitz.Rect(
+def _intersects_any(rect: Rect, others: Iterable[Rect], padding: float) -> bool:
+    expanded = Rect(
         rect.x0 - padding,
         rect.y0 - padding,
         rect.x1 + padding,

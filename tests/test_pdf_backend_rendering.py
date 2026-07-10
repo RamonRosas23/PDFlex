@@ -74,6 +74,7 @@ def test_pdfium_object_bounds_are_recursive_and_rotation_aware(backend_pdf: Path
     with PdfRenderDocument(backend_pdf) as document:
         first_text = document.object_bounds(0, kinds=("text",))
         rotated_text = document.object_bounds(1, kinds=("text",))
+        text_blocks = document.text_blocks(0)
 
     assert len(first_text) >= 2
     assert all(item.kind == "text" for item in first_text)
@@ -83,6 +84,7 @@ def test_pdfium_object_bounds_are_recursive_and_rotation_aware(backend_pdf: Path
     # right after clockwise /Rotate=90, while its display Y starts near x=72.
     assert min(item.left for item in rotated_text) > 680
     assert min(item.top for item in rotated_text) == pytest.approx(72, abs=2)
+    assert any("PDFlex PDFium" in block.text for block in text_blocks)
 
 
 def test_pdfium_backend_rejects_invalid_scale_and_page(backend_pdf: Path):

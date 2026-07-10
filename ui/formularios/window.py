@@ -4,7 +4,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-import fitz
 from PySide6.QtCore import QObject, QThread, QUrl, Qt, Signal
 from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
@@ -16,6 +15,10 @@ from PySide6.QtWidgets import (
 from core.output_naming import unique_output_path_for_source
 from core.output_paths import make_run_dir
 from core.pdf_form_engine import (
+    FIELD_TYPE_CHECKBOX,
+    FIELD_TYPE_COMBOBOX,
+    FIELD_TYPE_LISTBOX,
+    FIELD_TYPE_RADIOBUTTON,
     FormField,
     FormFillJob,
     FormFillOptions,
@@ -452,7 +455,7 @@ class FormulariosWindow(PipelineWindow):
         return row
 
     def _control_for_field(self, field: FormField) -> QWidget:
-        if field.field_type == fitz.PDF_WIDGET_TYPE_CHECKBOX:
+        if field.field_type == FIELD_TYPE_CHECKBOX:
             combo = QComboBox()
             combo.addItem("No", "Off")
             on_value = next((choice for choice in field.choices if choice != "Off"), "Yes")
@@ -461,7 +464,7 @@ class FormulariosWindow(PipelineWindow):
             combo.setEnabled(field.supported)
             return combo
 
-        if field.field_type == fitz.PDF_WIDGET_TYPE_RADIOBUTTON:
+        if field.field_type == FIELD_TYPE_RADIOBUTTON:
             combo = QComboBox()
             combo.addItem("Sin seleccionar", "Off")
             for choice in field.choices:
@@ -476,9 +479,9 @@ class FormulariosWindow(PipelineWindow):
             combo.setEnabled(field.supported)
             return combo
 
-        if field.field_type in (fitz.PDF_WIDGET_TYPE_COMBOBOX, fitz.PDF_WIDGET_TYPE_LISTBOX):
+        if field.field_type in (FIELD_TYPE_COMBOBOX, FIELD_TYPE_LISTBOX):
             combo = QComboBox()
-            combo.setEditable(field.field_type == fitz.PDF_WIDGET_TYPE_COMBOBOX)
+            combo.setEditable(field.field_type == FIELD_TYPE_COMBOBOX)
             if not field.choices:
                 combo.setEditable(True)
             for choice in field.choices:
@@ -514,7 +517,7 @@ class FormulariosWindow(PipelineWindow):
         for field in self._fields:
             control = self._field_controls.get(field.name)
             if isinstance(control, QComboBox):
-                if field.field_type in (fitz.PDF_WIDGET_TYPE_COMBOBOX, fitz.PDF_WIDGET_TYPE_LISTBOX):
+                if field.field_type in (FIELD_TYPE_COMBOBOX, FIELD_TYPE_LISTBOX):
                     values[field.name] = control.currentText()
                 else:
                     data = control.currentData()

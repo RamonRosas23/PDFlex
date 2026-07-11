@@ -210,7 +210,7 @@ class ThumbnailCacheTests(unittest.TestCase):
             worker = ThumbnailWorker(cache)
 
             received: list = []
-            worker.thumb_ready.connect(lambda lid, pid, pix: received.append(pid))
+            worker.thumb_ready.connect(lambda lid, pid, rotation, pix: received.append(pid))
 
             thread = QThread()
             worker.moveToThread(thread)
@@ -239,6 +239,15 @@ class ThumbnailCacheTests(unittest.TestCase):
             from ui.organizador.thumb_cache import ThumbnailKey
             key = ThumbnailKey(str(pdf), 0, 0, 116)
             self.assertIsNotNone(cache.get(key))
+
+    def test_worker_coalesces_repeated_rotation_requests_per_page(self) -> None:
+        cache = ThumbnailCache(max_size=10)
+        worker = ThumbnailWorker(cache)
+
+        for rotation in [0, 90, 180, 270, 0, 90, 270]:
+            worker.request("lane-1", "page-1", "/tmp/missing.pdf", 0, rotation, 116)
+
+        self.assertEqual(worker.pending_count(), 1)
 
 
 class PageMimeTests(unittest.TestCase):
@@ -366,6 +375,34 @@ class DocLaneTests(unittest.TestCase):
             lane.rotate_selected(90)
 
             self.assertEqual(lane.page_refs()[0].rotation_deg, 90)
+
+    def test_rotate_selected_many_pages_back_and_forth_is_stable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "many.pdf"
+            doc = fitz.open()
+            for _ in range(8):
+                doc.new_page()
+            doc.save(pdf)
+            doc.close()
+
+            cache = ThumbnailCache(max_size=10)
+            worker = ThumbnailWorker(cache)
+            lane = DocLane("lane-many", "Many", LANE_COLORS[0], cache, worker)
+            try:
+                lane.add_pages_from_pdf(str(pdf))
+                worker.discard_lane(lane.lane_id)
+                lane._list.selectAll()
+
+                for i in range(40):
+                    lane.rotate_selected(90 if i % 2 == 0 else -90)
+
+                self.assertEqual(lane.count(), 8)
+                self.assertTrue(all(ref.rotation_deg == 0 for ref in lane.page_refs()))
+                self.assertLessEqual(worker.pending_count(), 8)
+            finally:
+                lane.teardown()
+                lane.deleteLater()
+                self.app.processEvents()
 
     def test_duplicate_selected_inserts_copy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

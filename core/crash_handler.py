@@ -16,6 +16,8 @@ Integración en main.py:
 """
 from __future__ import annotations
 
+import json
+import os
 import hashlib
 import sys
 import tempfile
@@ -26,11 +28,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Type
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, qInstallMessageHandler
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGraphicsDropShadowEffect,
-    QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from core.update_config import APP_VERSION
@@ -51,6 +53,12 @@ SUPPORT_EMAIL = "sistemas@grupocmx.mx"
 # ─────────────────────────────────────────────────────────────────────────────
 
 _CRASH_IN_PROGRESS: bool = False
+_QT_MESSAGE_HANDLER_INSTALLED: bool = False
+_QT_MESSAGE_LOCK = threading.Lock()
+_QT_MESSAGE_FILE: Path | None = None
+_FAULT_LOG_HANDLE = None
+_SESSION_STARTED: bool = False
+_SESSION_FILE: Path | None = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -100,12 +108,51 @@ def format_report(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Rutas persistentes de diagnóstico
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _app_state_dir() -> Path:
+    override = os.environ.get("PDFLEX_CRASH_STATE_DIR")
+    if override:
+        return Path(override)
+    base = Path(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir())
+    return base / "PDFlex"
+
+
+def crash_log_dir() -> Path:
+    override = os.environ.get("PDFLEX_CRASH_LOG_DIR")
+    if override:
+        return Path(override)
+    return _app_state_dir() / "crash_logs"
+
+
+def _session_state_file() -> Path:
+    return _app_state_dir() / "session_state.json"
+
+
+def _write_json_atomic(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Guardado del log en disco (siempre, independiente de Qt)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _save_log(report: str) -> Path | None:
     try:
-        log_dir = Path(tempfile.gettempdir()) / "PDFlex" / "crash_logs"
+        log_dir = crash_log_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         h = hashlib.md5(report.encode(), usedforsecurity=False).hexdigest()[:6]
@@ -131,6 +178,119 @@ def _native_fallback(report: str) -> None:
             f"PDFlex v{APP_VERSION} — Error",
             0x10,
         )
+    except Exception:
+        pass
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sentinel de sesión y diagnóstico nativo
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _load_previous_unclean_session() -> dict | None:
+    data = _read_json(_session_state_file())
+    if not data:
+        return None
+    if data.get("status") in {"running", "crashed"}:
+        return data
+    return None
+
+
+def _mark_session_running(*, native_fault_log: Path | None = None) -> None:
+    global _SESSION_STARTED, _SESSION_FILE
+    _SESSION_STARTED = True
+    _SESSION_FILE = _session_state_file()
+    data = {
+        "status": "running",
+        "pid": os.getpid(),
+        "started_at": datetime.now().isoformat(timespec="seconds"),
+        "version": APP_VERSION,
+        "crash_log_dir": str(crash_log_dir()),
+    }
+    if native_fault_log:
+        data["native_fault_log"] = str(native_fault_log)
+    try:
+        _write_json_atomic(_SESSION_FILE, data)
+    except Exception:
+        pass
+
+
+def _mark_session_clean() -> None:
+    if _CRASH_IN_PROGRESS:
+        return
+    try:
+        path = _SESSION_FILE or _session_state_file()
+        path.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+
+def _mark_session_crashed(log_path: Path | None = None) -> None:
+    if not _SESSION_STARTED:
+        return
+    data = {
+        "status": "crashed",
+        "pid": os.getpid(),
+        "crashed_at": datetime.now().isoformat(timespec="seconds"),
+        "version": APP_VERSION,
+        "crash_log_dir": str(crash_log_dir()),
+    }
+    if log_path:
+        data["last_log"] = str(log_path)
+    try:
+        _write_json_atomic(_SESSION_FILE or _session_state_file(), data)
+    except Exception:
+        pass
+
+
+def _install_faulthandler() -> Path | None:
+    global _FAULT_LOG_HANDLE
+    try:
+        import faulthandler
+
+        log_dir = crash_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = log_dir / f"native_fault_{ts}_{os.getpid()}.log"
+        _FAULT_LOG_HANDLE = path.open("w", encoding="utf-8")
+        faulthandler.enable(file=_FAULT_LOG_HANDLE, all_threads=True)
+        return path
+    except Exception:
+        return None
+
+
+def _install_qt_message_handler() -> None:
+    global _QT_MESSAGE_HANDLER_INSTALLED, _QT_MESSAGE_FILE
+    if _QT_MESSAGE_HANDLER_INSTALLED:
+        return
+    try:
+        log_dir = crash_log_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
+        _QT_MESSAGE_FILE = log_dir / f"qt_messages_{datetime.now():%Y%m%d}.log"
+
+        def _handler(mode, context, message) -> None:
+            try:
+                kind = getattr(mode, "name", str(mode))
+                file = getattr(context, "file", "") or ""
+                line = getattr(context, "line", 0) or 0
+                function = getattr(context, "function", "") or ""
+                stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                row = f"[{stamp}] {kind}: {message}"
+                if file or function:
+                    row += f" ({file}:{line} {function})"
+                row += "\n"
+                with _QT_MESSAGE_LOCK:
+                    if _QT_MESSAGE_FILE:
+                        with _QT_MESSAGE_FILE.open("a", encoding="utf-8") as fh:
+                            fh.write(row)
+                try:
+                    sys.__stderr__.write(row)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        qInstallMessageHandler(_handler)
+        _QT_MESSAGE_HANDLER_INSTALLED = True
     except Exception:
         pass
 
@@ -474,6 +634,65 @@ def _show_dialog(
         pass  # Si el diálogo mismo falla, salir igualmente
 
 
+def _show_previous_crash_notice(previous: dict) -> None:
+    """Aviso no fatal al arrancar tras una salida no limpia."""
+    if _CRASH_IN_PROGRESS:
+        return
+    app = QApplication.instance()
+    if app is None:
+        return
+    try:
+        status = str(previous.get("status") or "running")
+        title = "PDFlex detectó un cierre inesperado"
+        text = (
+            "La sesión anterior de PDFlex no cerró correctamente.\n\n"
+            "Si estabas girando, organizando o procesando páginas, revisa el "
+            "resultado antes de continuar."
+        )
+        details = json.dumps(previous, ensure_ascii=False, indent=2)
+        log_hint = previous.get("last_log") or previous.get("native_fault_log") or previous.get("crash_log_dir")
+        if log_hint:
+            text += f"\n\nLogs técnicos:\n{log_hint}"
+
+        box = QMessageBox(app.activeWindow())
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(title)
+        box.setText(title)
+        box.setInformativeText(text)
+        box.setDetailedText(f"Estado previo: {status}\n\n{details}")
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        box.exec()
+    except Exception:
+        pass
+
+
+def install_runtime_crash_observers(app: QApplication) -> None:
+    """Instala diagnóstico persistente que requiere QApplication existente.
+
+    - faulthandler para fallas nativas/segfaults.
+    - Qt message handler para warnings/criticals de Qt.
+    - sentinel de sesión para detectar cierres abruptos al siguiente arranque.
+    """
+    previous = _load_previous_unclean_session()
+    native_fault_log = _install_faulthandler()
+    _install_qt_message_handler()
+    _mark_session_running(native_fault_log=native_fault_log)
+    try:
+        app.aboutToQuit.connect(_mark_session_clean)
+    except Exception:
+        pass
+    if previous:
+        try:
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(
+                1200,
+                lambda previous=previous: _show_previous_crash_notice(previous),
+            )
+        except Exception:
+            pass
+
+
 def handle_crash(
     exc_type: Type[BaseException],
     exc_value: BaseException,
@@ -512,6 +731,8 @@ def handle_crash(
         # aquí solo nos aseguramos de guardar el log.
         _CRASH_IN_PROGRESS = False
         return
+
+    _mark_session_crashed(log_path)
 
     # 3. Mostrar diálogo (solo hilo principal)
     app = QApplication.instance()

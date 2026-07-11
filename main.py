@@ -48,9 +48,11 @@ def _run_internal_worker_if_requested() -> int | None:
 
 
 def main() -> int:
-    from shell.shell_window import ShellWindow
-    from ui.styles import DARK_THEME
-    from core.crash_handler import CrashHandlerApp, install_crash_handlers
+    from core.crash_handler import (
+        CrashHandlerApp,
+        install_crash_handlers,
+        install_runtime_crash_observers,
+    )
 
     # Windows: AppUserModelID para ícono correcto en barra de tareas
     try:
@@ -66,10 +68,13 @@ def main() -> int:
     app.setApplicationName("PDFlex")
     app.setOrganizationName("GRUPO OCMX")
     app.setStyle("Fusion")
-    app.setStyleSheet(DARK_THEME)
 
-    # Instalar todos los hooks globales de excepción
+    # Instalar hooks globales y observadores persistentes antes de cargar la UI
     install_crash_handlers()
+    install_runtime_crash_observers(app)
+
+    from ui.styles import DARK_THEME
+    app.setStyleSheet(DARK_THEME)
 
     from ui.common.icons import app_qicon
     app.setWindowIcon(app_qicon())
@@ -79,6 +84,7 @@ def main() -> int:
     app.setFont(font)
 
     from PySide6.QtCore import QTimer
+    from shell.shell_window import ShellWindow
     from shell.splash import SplashScreen
     splash = SplashScreen()
     splash.start()
@@ -101,6 +107,11 @@ if __name__ == "__main__":
 
     # Para el proceso principal instalamos el hook ANTES de crear Qt,
     # así capturamos también errores en la fase de importación/inicialización.
+    try:
+        from core.crash_handler import install_crash_handlers
+        install_crash_handlers()
+    except Exception:
+        pass
     try:
         sys.exit(main())
     except SystemExit:

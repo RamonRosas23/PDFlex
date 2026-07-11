@@ -399,6 +399,10 @@ class DocLane(QFrame):
             self._worker.thumb_ready.disconnect(self._on_thumb_ready)
         except (RuntimeError, TypeError):
             pass  # ya desconectado o nunca conectado
+        try:
+            self._worker.discard_lane(self._lane_id)
+        except Exception:
+            pass
 
     def _record_before_mutation(self) -> None:
         if self._before_mutation_cb:
@@ -688,28 +692,45 @@ class DocLane(QFrame):
         self.pages_changed.emit(self._lane_id)
 
     def rotate_selected(self, delta: int) -> None:
+        selected_items = list(self._list.selectedItems())
+        if not selected_items:
+            return
+        delta = int(round(delta / 90.0)) * 90
+        if delta % 360 == 0:
+            return
         self._record_before_mutation()
-        for item in self._list.selectedItems():
-            ref = item.data(Qt.ItemDataRole.UserRole)
-            updated = replace(ref, rotation_deg=(ref.rotation_deg + delta) % 360)
-            item.setData(Qt.ItemDataRole.UserRole, updated)
-            item.setText(self._label_for(updated))
-            item.setToolTip(
-                f"{Path(updated.source_path).name}\nPágina {updated.page_index + 1}"
-                + (f"\nRot {updated.rotation_deg}°" if updated.rotation_deg else "")
-            )
-            key = ThumbnailKey(
-                updated.source_path, updated.page_index, updated.rotation_deg, THUMB_W
-            )
-            cached = self._cache.get(key)
-            if cached:
-                item.setIcon(QIcon(cached))
-            else:
-                item.setIcon(QIcon(_placeholder_pixmap()))
-                self._worker.request(
-                    self._lane_id, updated.page_id,
-                    updated.source_path, updated.page_index, updated.rotation_deg, THUMB_W,
+        self._list.setUpdatesEnabled(False)
+        try:
+            for item in selected_items:
+                if item.listWidget() is not self._list:
+                    continue
+                ref = item.data(Qt.ItemDataRole.UserRole)
+                updated = replace(ref, rotation_deg=(ref.rotation_deg + delta) % 360)
+                item.setData(Qt.ItemDataRole.UserRole, updated)
+                item.setText(self._label_for(updated))
+                item.setToolTip(
+                    f"{Path(updated.source_path).name}\nPágina {updated.page_index + 1}"
+                    + (f"\nRot {updated.rotation_deg}°" if updated.rotation_deg else "")
                 )
+                key = ThumbnailKey(
+                    updated.source_path, updated.page_index, updated.rotation_deg, THUMB_W
+                )
+                cached = self._cache.get(key)
+                if cached:
+                    item.setIcon(QIcon(cached))
+                else:
+                    item.setIcon(QIcon(_placeholder_pixmap()))
+                    self._worker.request(
+                        self._lane_id,
+                        updated.page_id,
+                        updated.source_path,
+                        updated.page_index,
+                        updated.rotation_deg,
+                        THUMB_W,
+                    )
+        finally:
+            self._list.setUpdatesEnabled(True)
+            self._list.viewport().update()
         self.pages_changed.emit(self._lane_id)
 
     def duplicate_selected(self) -> None:
@@ -1021,7 +1042,7 @@ class DocLane(QFrame):
         rot = f" ↺{ref.rotation_deg}°" if ref.rotation_deg % 360 else ""
         return f"Pág {ref.page_index + 1}{rot}"
 
-    def _on_thumb_ready(self, lane_id: str, page_id: str, qimage: object) -> None:
+    def _on_thumb_ready(self, lane_id: str, page_id: str, rotation_deg: int, qimage: object) -> None:
         if lane_id != self._lane_id:
             return
         # Convert QImage → QPixmap in GUI thread (QPixmap cannot be created in worker threads)
@@ -1029,7 +1050,13 @@ class DocLane(QFrame):
             pix = QPixmap.fromImage(qimage)
             for i in range(self._list.count()):
                 item = self._list.item(i)
-                if item and item.data(Qt.ItemDataRole.UserRole).page_id == page_id:
+                if not item:
+                    continue
+                ref = item.data(Qt.ItemDataRole.UserRole)
+                if (
+                    ref.page_id == page_id
+                    and int(ref.rotation_deg) % 360 == int(rotation_deg) % 360
+                ):
                     item.setIcon(QIcon(pix))
                     break
         except RuntimeError:

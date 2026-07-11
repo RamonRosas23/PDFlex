@@ -76,7 +76,15 @@ def render_page_thumb(
 
 
 class _ThumbRequest:
-    __slots__ = ("lane_id", "page_id", "source_path", "page_index", "rotation_deg", "width")
+    __slots__ = (
+        "lane_id",
+        "page_id",
+        "source_path",
+        "page_index",
+        "rotation_deg",
+        "width",
+        "generation",
+    )
 
     def __init__(
         self,
@@ -86,6 +94,7 @@ class _ThumbRequest:
         page_index: int,
         rotation_deg: int,
         width: int,
+        generation: int,
     ) -> None:
         self.lane_id = lane_id
         self.page_id = page_id
@@ -93,12 +102,13 @@ class _ThumbRequest:
         self.page_index = page_index
         self.rotation_deg = rotation_deg
         self.width = width
+        self.generation = generation
 
 
 class ThumbnailWorker(QObject):
     """Background worker that renders thumbnails and emits them via signal."""
 
-    thumb_ready = Signal(str, str, object)  # lane_id, page_id, QImage (convert to QPixmap in GUI thread)
+    thumb_ready = Signal(str, str, int, object)  # lane_id, page_id, rotation_deg, QImage
 
     def __init__(self, cache: ThumbnailCache, parent=None) -> None:
         super().__init__(parent)
@@ -106,6 +116,8 @@ class ThumbnailWorker(QObject):
         self._queue: deque[_ThumbRequest] = deque()
         self._lock = threading.Lock()
         self._running = True
+        self._generation = 0
+        self._latest_generation: dict[tuple[str, str], int] = {}
 
     def request(
         self,
@@ -117,23 +129,57 @@ class ThumbnailWorker(QObject):
         width: int = 116,
     ) -> None:
         """Enqueue a thumbnail request; emits immediately if already cached."""
+        rotation_deg = int(rotation_deg) % 360
         key = ThumbnailKey(source_path, page_index, rotation_deg, width)
         cached = self._cache.get(key)
         if cached is not None:
-            self.thumb_ready.emit(lane_id, page_id, cached)
+            self.thumb_ready.emit(lane_id, page_id, rotation_deg, cached)
             return
         with self._lock:
             # Re-check after acquiring queue lock — background run() may have filled cache
             cached = self._cache.get(key)
             if cached is not None:
-                self.thumb_ready.emit(lane_id, page_id, cached)
+                self.thumb_ready.emit(lane_id, page_id, rotation_deg, cached)
                 return
+            identity = (lane_id, page_id)
+            self._generation += 1
+            generation = self._generation
+            self._latest_generation[identity] = generation
+            self._queue = deque(
+                req
+                for req in self._queue
+                if (req.lane_id, req.page_id) != identity
+            )
             self._queue.append(
-                _ThumbRequest(lane_id, page_id, source_path, page_index, rotation_deg, width)
+                _ThumbRequest(
+                    lane_id,
+                    page_id,
+                    source_path,
+                    page_index,
+                    rotation_deg,
+                    width,
+                    generation,
+                )
             )
 
     def stop(self) -> None:
         self._running = False
+        with self._lock:
+            self._queue.clear()
+            self._latest_generation.clear()
+
+    def discard_lane(self, lane_id: str) -> None:
+        """Drop queued/stale thumbnail work for a lane that is being destroyed."""
+        with self._lock:
+            self._queue = deque(req for req in self._queue if req.lane_id != lane_id)
+            stale = [key for key in self._latest_generation if key[0] == lane_id]
+            for key in stale:
+                del self._latest_generation[key]
+
+    def pending_count(self) -> int:
+        """Return queued thumbnail requests. Intended for diagnostics/tests."""
+        with self._lock:
+            return len(self._queue)
 
     def run(self) -> None:
         """Main loop — runs in a QThread. Processes one request every 20 ms."""
@@ -146,7 +192,13 @@ class ThumbnailWorker(QObject):
                 QThread.msleep(20)
                 continue
             key = ThumbnailKey(req.source_path, req.page_index, req.rotation_deg, req.width)
+            with self._lock:
+                if self._latest_generation.get((req.lane_id, req.page_id)) != req.generation:
+                    continue
             qimage = render_page_thumb(req.source_path, req.page_index, req.rotation_deg, req.width)
             if qimage is not None:
                 self._cache.put(key, qimage)
-                self.thumb_ready.emit(req.lane_id, req.page_id, qimage)
+                with self._lock:
+                    if self._latest_generation.get((req.lane_id, req.page_id)) != req.generation:
+                        continue
+                self.thumb_ready.emit(req.lane_id, req.page_id, req.rotation_deg, qimage)

@@ -11,9 +11,7 @@ import os
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-import fitz
-
-from core.pdf_backend import PdfRenderDocument, Rect
+from core.pdf_backend import PdfRenderDocument, Rect, pdf_page_count
 from .pdf_analyzer import PdfAnalyzer
 from .safe_zone import Placement, fit_placement_inside_page
 from .signature_engine import (
@@ -21,7 +19,6 @@ from .signature_engine import (
     PageResult,
     SignatureEngine,
     SignaturePageResult,
-    _open_pdf_safe,
 )
 from .variation import VariationConfig
 
@@ -274,36 +271,33 @@ def export_review_documents(
         out_path = Path(review.final_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = out_path.with_name(f"{out_path.stem}.review.tmp.pdf")
-        doc: Optional[fitz.Document] = None
 
         try:
-            doc = _open_pdf_safe(review.source_path)
-            image_xrefs: dict[tuple, int] = {}
             instances_by_page = _instances_by_page(review)
-            for page_index in range(doc.page_count):
-                if should_cancel and should_cancel():
-                    raise RuntimeError("Exportacion cancelada por el usuario")
+            placements_by_page = {
+                page_index: [
+                    (inst.signature_path, inst.to_placement())
+                    for inst in instances
+                ]
+                for page_index, instances in instances_by_page.items()
+            }
+
+            def _progress(current: int, _total: int, message: str) -> None:
                 if progress:
                     progress(
-                        done_pages,
+                        done_pages + current,
                         max(1, total_pages),
-                        f"Generando pagina {page_index + 1}/{doc.page_count}",
+                        message,
                     )
-                page = doc[page_index]
-                for inst in instances_by_page.get(page_index, ()):
-                    engine.apply_signature_instance(
-                        page,
-                        inst.signature_path,
-                        inst.to_placement(),
-                        review.source_path,
-                        page_index,
-                        image_xrefs,
-                    )
-                done_pages += 1
 
-            doc.save(str(tmp_path), garbage=2, deflate=True)
-            doc.close()
-            doc = None
+            page_count = engine.export_review_instances(
+                review.source_path,
+                str(tmp_path),
+                placements_by_page,
+                progress=_progress,
+                should_cancel=should_cancel,
+            )
+            done_pages += page_count
             os.replace(tmp_path, out_path)
             if progress:
                 progress(done_pages, max(1, total_pages), f"Finalizado: {out_path.name}")
@@ -311,11 +305,6 @@ def export_review_documents(
         except Exception as exc:  # noqa: BLE001 - error surfaced to the UI
             results.append(_failed_result(review, str(exc)))
         finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
             if tmp_path.exists():
                 try:
                     tmp_path.unlink()
@@ -480,8 +469,7 @@ def _total_source_pages(review_documents: list[ReviewDocument]) -> int:
     total = 0
     for review in review_documents:
         try:
-            with fitz.open(review.source_path) as doc:
-                total += doc.page_count
+            total += pdf_page_count(review.source_path)
         except Exception:
             total += 1
     return max(1, total)

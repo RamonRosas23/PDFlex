@@ -3,8 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import fitz
+import numpy as np
 from PIL import Image, ImageDraw
+from pypdf import PdfReader, PdfWriter
 
+from core.pdf_backend import PdfRenderDocument
 from core.safe_zone import Placement
 from core.signature_engine import (
     SigPlacement,
@@ -81,6 +84,53 @@ def test_signature_processing_size_downscales_only_when_oversized() -> None:
 
     assert _process_image_size((300, 100), placement) == (300, 100)
     assert _process_image_size((2400, 800), placement) == (720, 240)
+
+
+def test_signature_on_rotated_page_uses_display_coordinates(tmp_path: Path) -> None:
+    pdf_path = _make_pdf(tmp_path / "source.pdf", pages=1)
+    writer = PdfWriter(clone_from=PdfReader(pdf_path))
+    writer.pages[0].rotate(90)
+    with pdf_path.open("wb") as handle:
+        writer.write(handle)
+
+    sig_path = _make_signature(tmp_path / "firma.png")
+    out_path = tmp_path / "source_firmado.pdf"
+
+    result = SignatureEngine(_exact_variation()).run_job(
+        SignJob(
+            pdf_path=str(pdf_path),
+            output_path=str(out_path),
+            signatures=[
+                SigPlacement(
+                    signature_path=str(sig_path),
+                    base_x_norm=0.72,
+                    base_y_norm=0.60,
+                    base_width_pt=90,
+                    base_height_pt=32,
+                )
+            ],
+            smart_placement=False,
+        )
+    )
+
+    assert result.success, result.error
+    with PdfRenderDocument(out_path) as document:
+        info = document.page_info(0)
+        assert info.rotation == 90
+        rendered = document.render_page(0, scale=2.0)
+
+    arr = np.frombuffer(rendered.data, dtype=np.uint8).reshape(
+        rendered.height, rendered.width, 3
+    )
+    blue_mask = (
+        (arr[..., 2] > 120)
+        & (arr[..., 0] < 120)
+        & (arr[..., 1] < 120)
+    )
+    ys, xs = np.where(blue_mask)
+    assert len(xs) > 80
+    assert abs((xs.mean() / 2.0) - (info.width_pt * 0.72)) < 35
+    assert abs((ys.mean() / 2.0) - (info.height_pt * 0.60)) < 35
 
 
 def _exact_variation() -> VariationConfig:

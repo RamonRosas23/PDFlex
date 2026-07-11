@@ -7,15 +7,21 @@ sin archivos temporales intermedios.
 from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable, Dict, List, Optional, Tuple
 import io
-import os
-import tempfile
 
-import fitz
 from PIL import Image, ImageEnhance, ImageFilter
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen.canvas import Canvas
 
-from core.pdf_backend import PdfRenderDocument, Rect
+from core.pdf_backend import (
+    PdfRenderDocument,
+    Rect,
+    apply_page_overlays,
+    normalize_pdf,
+)
 from .pdf_analyzer import PdfAnalyzer, PageAnalysis
 from .safe_zone import SafeZoneFinder, Placement, fit_placement_inside_page
 from .signature_naturalizer import naturalize_signature
@@ -23,24 +29,6 @@ from .variation import Variation, VariationGenerator, VariationConfig
 
 
 _SIGNATURE_PROCESS_DPI = 360.0
-
-
-def _open_pdf_safe(path: str) -> fitz.Document:
-    """Abre un PDF y repara su xref si es necesario.
-
-    Algunos PDFs tienen tablas xref corruptas que MuPDF puede recuperar
-    automáticamente. Si se detecta reparación, se guarda una copia limpia
-    en un buffer temporal para que el save final sea estable.
-    """
-    doc = fitz.open(path)
-    # is_repaired indica que MuPDF tuvo que reconstruir el xref
-    if getattr(doc, "is_repaired", False):
-        buf = io.BytesIO()
-        doc.save(buf, garbage=4, deflate=True, clean=True)
-        doc.close()
-        buf.seek(0)
-        doc = fitz.open(stream=buf, filetype="pdf")
-    return doc
 
 
 def _process_image_size(
@@ -132,6 +120,16 @@ class BoundsPreflight:
     skipped_documents: int = 0
 
 
+@dataclass(frozen=True)
+class _SignatureOverlay:
+    page_index: int
+    image_bytes: bytes
+    left: float
+    top: float
+    width: float
+    height: float
+
+
 class SignatureEngine:
     """Aplica múltiples firmas con variación natural y validación anti-texto."""
 
@@ -160,29 +158,29 @@ class SignatureEngine:
         summary = BoundsPreflight()
         for job in jobs:
             try:
-                doc = _open_pdf_safe(job.pdf_path)
+                document = PdfRenderDocument(job.pdf_path)
             except Exception:
                 summary.skipped_documents += 1
                 continue
             try:
                 target_pages = (
                     job.pages if job.pages is not None
-                    else list(range(doc.page_count))
+                    else list(range(document.page_count))
                 )
                 for page_idx in target_pages:
-                    page = doc[page_idx]
+                    info = document.page_info(page_idx)
                     for sig_conf in job.signatures:
                         if page_idx in sig_conf.excluded_pages:
                             continue
                         desired = self._desired_placement(
                             sig_conf,
-                            page.rect.width,
-                            page.rect.height,
+                            info.width_pt,
+                            info.height_pt,
                             job.pdf_path,
                             page_idx,
                         )[0]
                         bounded = fit_placement_inside_page(
-                            desired, page.rect.width, page.rect.height, margin=0.0
+                            desired, info.width_pt, info.height_pt, margin=0.0
                         )
                         summary.signatures_checked += 1
                         if bounded.adjusted_to_page:
@@ -190,7 +188,7 @@ class SignatureEngine:
                         if bounded.scaled_to_fit:
                             summary.scaled_to_fit += 1
             finally:
-                doc.close()
+                document.close()
         return summary
 
     def run_job(
@@ -200,39 +198,30 @@ class SignatureEngine:
     ) -> JobResult:
         """Procesa un documento aplicando todas las firmas en una sola pasada."""
         try:
-            doc = _open_pdf_safe(job.pdf_path)
+            analysis_document = PdfRenderDocument(job.pdf_path)
         except Exception as e:
             return JobResult(job=job, output_path="", success=False,
                              error=f"No se pudo abrir PDF: {e}")
 
-        results: List[PageResult] = []
-        total_pages = len(job.pages) if job.pages is not None else doc.page_count
+        total_pages = (
+            len(job.pages) if job.pages is not None else analysis_document.page_count
+        )
 
         try:
-            with PdfRenderDocument(job.pdf_path) as analysis_document:
-                results = self._process_job_pages(
-                    doc,
-                    analysis_document,
-                    job,
-                    progress=progress,
-                    apply_images=True,
-                )
-
-            os.makedirs(os.path.dirname(os.path.abspath(job.output_path)), exist_ok=True)
-            # Elimina objetos sin referencia y compacta xref, pero evita comparar
-            # todos los streams: garbage=4 domina el tiempo en PDFs con mucho texto.
-            doc.save(job.output_path, garbage=2, deflate=True)
+            results, overlays = self._process_job_pages(
+                analysis_document,
+                job,
+                progress=progress,
+                apply_images=True,
+            )
+            self._write_signature_overlays(job.pdf_path, job.output_path, overlays)
             if progress:
                 progress(total_pages, total_pages, "Guardado")
 
         except Exception as e:
-            doc.close()
             return JobResult(job=job, output_path="", success=False, error=str(e))
         finally:
-            try:
-                doc.close()
-            except Exception:
-                pass
+            analysis_document.close()
 
         return JobResult(
             job=job,
@@ -253,32 +242,26 @@ class SignatureEngine:
         ahorra la rasterizacion de firmas y una escritura completa del PDF.
         """
         try:
-            doc = _open_pdf_safe(job.pdf_path)
+            analysis_document = PdfRenderDocument(job.pdf_path)
         except Exception as e:
             return JobResult(job=job, output_path="", success=False,
                              error=f"No se pudo abrir PDF: {e}")
 
         try:
-            with PdfRenderDocument(job.pdf_path) as analysis_document:
-                results = self._process_job_pages(
-                    doc,
-                    analysis_document,
-                    job,
-                    progress=progress,
-                    apply_images=False,
-                )
+            results, _ = self._process_job_pages(
+                analysis_document,
+                job,
+                progress=progress,
+                apply_images=False,
+            )
             target_pages = (job.pages if job.pages is not None
-                            else list(range(doc.page_count)))
+                            else list(range(analysis_document.page_count)))
             if progress:
                 progress(len(target_pages), len(target_pages), "Plan listo")
         except Exception as e:
-            doc.close()
             return JobResult(job=job, output_path="", success=False, error=str(e))
         finally:
-            try:
-                doc.close()
-            except Exception:
-                pass
+            analysis_document.close()
 
         return JobResult(
             job=job,
@@ -298,25 +281,24 @@ class SignatureEngine:
 
     def _process_job_pages(
         self,
-        doc: fitz.Document,
         analysis_document: PdfRenderDocument,
         job: SignJob,
         *,
         progress: Optional[Callable[[int, int, str], None]],
         apply_images: bool,
-    ) -> List[PageResult]:
+    ) -> tuple[List[PageResult], list[_SignatureOverlay]]:
         results: List[PageResult] = []
         target_pages = (job.pages if job.pages is not None
-                        else list(range(doc.page_count)))
+                        else list(range(analysis_document.page_count)))
         total = len(target_pages)
-        image_xrefs: Dict[Tuple, int] = {}
+        overlays: list[_SignatureOverlay] = []
 
         for i, page_idx in enumerate(target_pages):
             if progress:
-                progress(i, total, f"Página {page_idx + 1}/{doc.page_count}")
+                progress(i, total, f"Página {page_idx + 1}/{analysis_document.page_count}")
 
             analysis = self.analyzer.analyze_page(analysis_document, page_idx)
-            page = doc[page_idx]
+            info = analysis_document.page_info(page_idx)
             primary_placement: Optional[Placement] = None
             signature_results: List[SignaturePageResult] = []
             occupied_rects: List[Rect] = []
@@ -330,16 +312,26 @@ class SignatureEngine:
                 )
                 if apply_images:
                     base_img = self._get_image(sig_conf.signature_path)
-                    placement = self._apply_signature(
-                        page,
+                    placement = self._fit_placement_for_page_size(
+                        info.width_pt,
+                        info.height_pt,
                         placement,
-                        base_img,
-                        sig_conf.signature_path,
-                        variation,
-                        image_xrefs,
+                    )
+                    overlays.append(
+                        self._signature_overlay(
+                            page_idx,
+                            sig_conf.signature_path,
+                            placement,
+                            base_img,
+                            variation,
+                        )
                     )
                 else:
-                    placement = self._fit_placement_for_page(page, placement)
+                    placement = self._fit_placement_for_page_size(
+                        info.width_pt,
+                        info.height_pt,
+                        placement,
+                    )
                 occupied_rects.append(placement.rotated_bbox)
                 signature_results.append(SignaturePageResult(
                     signature_path=sig_conf.signature_path,
@@ -365,7 +357,7 @@ class SignatureEngine:
                     signature_results=signature_results,
                 ))
 
-        return results
+        return results, overlays
 
     def _compute_placement(
         self,
@@ -443,101 +435,136 @@ class SignatureEngine:
             base_img, placement, variation, apply_rotation=False
         )
 
-    def apply_signature_instance(
+    def export_review_instances(
         self,
-        page: fitz.Page,
-        signature_path: str,
-        placement: Placement,
-        doc_id: str,
-        page_index: int,
-        image_xrefs: Dict[Tuple, int],
-    ) -> Placement:
-        """Inserta una instancia revisada sin recalcular zona segura."""
-        base_img = self._get_image(signature_path)
-        variation = self.variation_for_signature(doc_id, signature_path, page_index)
-        return self._apply_signature(
-            page, placement, base_img, signature_path, variation, image_xrefs
-        )
+        source_path: str,
+        output_path: str,
+        placements_by_page: dict[int, list[tuple[str, Placement]]],
+        *,
+        progress: Optional[Callable[[int, int, str], None]] = None,
+        should_cancel: Optional[Callable[[], bool]] = None,
+    ) -> int:
+        """Exporta instancias revisadas sin recalcular zona segura."""
+        overlays: list[_SignatureOverlay] = []
+        with PdfRenderDocument(source_path) as document:
+            total = document.page_count
+            for page_index in range(total):
+                if should_cancel and should_cancel():
+                    raise RuntimeError("Exportacion cancelada por el usuario")
+                if progress:
+                    progress(
+                        page_index,
+                        max(1, total),
+                        f"Generando pagina {page_index + 1}/{total}",
+                    )
+                info = document.page_info(page_index)
+                for signature_path, placement in placements_by_page.get(page_index, ()):
+                    base_img = self._get_image(signature_path)
+                    variation = self.variation_for_signature(
+                        source_path, signature_path, page_index
+                    )
+                    fitted = self._fit_placement_for_page_size(
+                        info.width_pt,
+                        info.height_pt,
+                        placement,
+                    )
+                    overlays.append(
+                        self._signature_overlay(
+                            page_index,
+                            signature_path,
+                            fitted,
+                            base_img,
+                            variation,
+                        )
+                    )
+        self._write_signature_overlays(source_path, output_path, overlays)
+        return total
 
-    def _apply_signature(
+    def _signature_overlay(
         self,
-        page: fitz.Page,
+        page_index: int,
+        sig_path: str,
         placement: Placement,
         base_img: Image.Image,
-        sig_path: str,
         variation: Variation,
-        image_xrefs: Dict[Tuple, int],
-    ) -> Placement:
-        # Segunda barrera: fit dentro de los límites de display de la página.
-        placement = self._fit_placement_for_page(page, placement)
+    ) -> _SignatureOverlay:
         bounds = placement.rotated_bbox
-        target = fitz.Rect(bounds.x0, bounds.y0, bounds.x1, bounds.y1)
-
-        rot = int(page.rotation) % 360
-
-        if rot != 0:
-            # insert_image() usa coordenadas NATIVAS del PDF (igual que insert_text).
-            # Para páginas rotadas grandes, el rect en display space puede exceder
-            # las dimensiones nativas → la imagen se descarta silenciosamente.
-            # Solución: transformar los 4 vértices del rect display → nativo y
-            # tomar el bounding box resultante (que sigue siendo un rectángulo
-            # válido para rotaciones de 90° / 180° / 270°).
-            derot = page.derotation_matrix
-            corners = [
-                fitz.Point(target.x0, target.y0) * derot,
-                fitz.Point(target.x1, target.y0) * derot,
-                fitz.Point(target.x0, target.y1) * derot,
-                fitz.Point(target.x1, target.y1) * derot,
-            ]
-            xs = [p.x for p in corners]
-            ys = [p.y for p in corners]
-            target = fitz.Rect(min(xs), min(ys), max(xs), max(ys))
-
-        # La clave de caché incluye rot para que imágenes pre-rotadas no se
-        # reutilicen en páginas con orientación diferente.
         base_key = self._transformed_image_key(
             sig_path, placement, variation, base_img.size
         )
-        cache_key = (*base_key, rot)
-        xref = image_xrefs.get(cache_key, 0)
+        return _SignatureOverlay(
+            page_index=page_index,
+            image_bytes=self._transformed_png_bytes(
+                base_key, base_img, placement, variation
+            ),
+            left=bounds.x0,
+            top=bounds.y0,
+            width=bounds.width,
+            height=bounds.height,
+        )
 
-        try:
-            if xref:
-                page.insert_image(
-                    target, xref=xref, keep_proportion=False, overlay=True
-                )
-            else:
-                img_bytes = self._transformed_png_bytes(
-                    base_key, base_img, placement, variation, page_rot=rot
-                )
-                xref = page.insert_image(
-                    target,
-                    stream=img_bytes,
-                    keep_proportion=False,
-                    overlay=True,
-                )
-        except TypeError:
-            if xref:
-                page.insert_image(target, xref=xref, overlay=True)
-            else:
-                img_bytes = self._transformed_png_bytes(
-                    base_key, base_img, placement, variation, page_rot=rot
-                )
-                xref = page.insert_image(target, stream=img_bytes, overlay=True)
-
-        image_xrefs[cache_key] = xref
-        return placement
-
-    def _fit_placement_for_page(
+    def _write_signature_overlays(
         self,
-        page: fitz.Page,
+        source_path: str,
+        output_path: str,
+        overlays: list[_SignatureOverlay],
+    ) -> None:
+        source = Path(source_path).resolve()
+        output = Path(output_path)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if output.resolve() == source:
+            raise ValueError("La salida no puede sobrescribir el PDF de origen.")
+        if not overlays:
+            normalize_pdf(source, output)
+            return
+
+        grouped: dict[int, list[_SignatureOverlay]] = {}
+        for overlay in overlays:
+            grouped.setdefault(overlay.page_index, []).append(overlay)
+
+        with PdfRenderDocument(source) as document:
+            with TemporaryDirectory(prefix="pdflex-signature-") as temp_dir:
+                overlay_path = Path(temp_dir) / "overlay.pdf"
+                canvas = Canvas(
+                    str(overlay_path),
+                    pagesize=(1, 1),
+                    pageCompression=1,
+                )
+                mapping: dict[int, int] = {}
+                reader_cache: dict[bytes, ImageReader] = {}
+                for overlay_index, page_index in enumerate(sorted(grouped)):
+                    info = document.page_info(page_index)
+                    canvas.setPageSize((info.width_pt, info.height_pt))
+                    for overlay in grouped[page_index]:
+                        reader = reader_cache.get(overlay.image_bytes)
+                        if reader is None:
+                            reader = ImageReader(io.BytesIO(overlay.image_bytes))
+                            reader_cache[overlay.image_bytes] = reader
+                        canvas.drawImage(
+                            reader,
+                            overlay.left,
+                            info.height_pt - overlay.top - overlay.height,
+                            width=overlay.width,
+                            height=overlay.height,
+                            preserveAspectRatio=False,
+                            mask="auto",
+                        )
+                    canvas.showPage()
+                    mapping[page_index] = overlay_index
+                canvas.save()
+                apply_page_overlays(source, overlay_path, mapping, output, over=True)
+
+    def _fit_placement_for_page_size(
+        self,
+        page_width: float,
+        page_height: float,
         placement: Placement,
     ) -> Placement:
         placement = fit_placement_inside_page(
-            placement, page.rect.width, page.rect.height, margin=0.0
+            placement, page_width, page_height, margin=0.0
         )
         target = placement.rotated_bbox
-        if not self._inside_physical_page(target, page.rect.width, page.rect.height):
+        if not self._inside_physical_page(target, page_width, page_height):
             raise ValueError("No fue posible encajar la firma dentro de la página.")
         return placement
 
@@ -577,28 +604,14 @@ class SignatureEngine:
         base_img: Image.Image,
         placement: Placement,
         variation: Variation,
-        page_rot: int = 0,
     ) -> bytes:
-        # La clave de caché incluye page_rot para separar variantes por orientación
-        cache_key = (*image_key, page_rot)
+        cache_key = image_key
         cached = self._transformed_png_cache.get(cache_key)
         if cached is not None:
             self._transformed_png_cache.move_to_end(cache_key)
             return cached
 
         img = self._transform_image(base_img, placement, variation)
-
-        if page_rot != 0:
-            # Pre-rotar la imagen CCW para compensar la rotación del visor.
-            # El visor aplica Rotate grados CW; pre-rotar Rotate grados CCW
-            # → la firma aparece correctamente orientada en pantalla.
-            # Mismo razonamiento que fitz.Matrix(rot) en el foleador.
-            img = img.rotate(
-                page_rot,
-                expand=True,
-                resample=Image.BICUBIC,
-                fillcolor=(0, 0, 0, 0),
-            )
 
         buf = io.BytesIO()
         img.save(buf, format="PNG")
@@ -611,7 +624,7 @@ class SignatureEngine:
 
     @staticmethod
     def _inside_physical_page(
-        rect: fitz.Rect,
+        rect: Rect,
         page_width: float,
         page_height: float,
         tolerance: float = 1e-6,

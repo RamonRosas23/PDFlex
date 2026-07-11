@@ -256,6 +256,15 @@ class MembreteEngineScopeTests(unittest.TestCase):
                 continue
             if color[0] > 0.8 and color[1] < 0.2 and color[2] < 0.2:
                 return True
+        pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        samples = pix.samples
+        red_pixels = 0
+        for index in range(0, len(samples), pix.n):
+            r, g, b = samples[index], samples[index + 1], samples[index + 2]
+            if r > 180 and g < 90 and b < 90:
+                red_pixels += 1
+                if red_pixels > 20:
+                    return True
         return False
 
 

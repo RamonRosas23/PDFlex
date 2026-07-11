@@ -1,40 +1,30 @@
-"""Motor de membretado masivo de PDFs.
-
-Para cada documento de entrada, crea un nuevo PDF donde cada página es:
-  1. Una copia de la hoja membretada (siempre la primera página del membrete).
-  2. El contenido de la página original superpuesto dentro de la zona segura,
-     escalado con relación de aspecto conservada y centrado.
-
-La superposición utiliza _place_page():
-  - rotation=0: fitz.Page.show_pdf_page() — copia vectorial, calidad perfecta.
-  - Páginas con anotaciones: primero se aplanan en una copia en memoria, porque
-    show_pdf_page() copia el contenido de la página pero no su capa de anotaciones
-    (subrayados, resaltados, comentarios visuales, etc.).
-  - rotation≠0: get_pixmap() + insert_image() a _RENDER_DPI — necesario porque
-    show_pdf_page() en PyMuPDF ≥1.24 ignora /Rotate al calcular la posición del
-    contenido, produciendo overflow y transposición de dimensiones en páginas con
-    /Rotate=90/180/270 (p.ej. PDFs escaneados con orientación landscape+rotación).
-"""
+"""Motor de membretado masivo de PDFs basado en PDFium, QPDF y ReportLab."""
 from __future__ import annotations
+
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable, List, Optional
+import os
+import uuid
 
-import fitz
+import pikepdf
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen.canvas import Canvas
+
+from core.pdf_backend import PdfRenderDocument, Rect
 
 from .margin_detector import MembreteMargins
 
 
-# ====================================================================== #
-#  Tipos de datos
-# ====================================================================== #
-
 @dataclass
 class MembreteJob:
     """Un documento a membretar."""
+
     pdf_path: str
     output_path: str
-    pages_to_letterhead: Optional[List[int]] = None  # 0-based; None = todas
+    pages_to_letterhead: Optional[List[int]] = None
     preserve_unselected: bool = True
     preserve_source_background: bool = True
 
@@ -42,6 +32,7 @@ class MembreteJob:
 @dataclass
 class MembreteJobResult:
     """Resultado de un MembreteJob. Compatible con GenericPdfViewer."""
+
     job: MembreteJob
     output_path: str = ""
     success: bool = True
@@ -53,19 +44,8 @@ class MembreteJobResult:
     meta_text: str = ""
 
 
-# ====================================================================== #
-#  Constantes
-# ====================================================================== #
-
-# DPI para rasterizar páginas con /Rotate≠0 vía get_pixmap().
-# 150 DPI produce ~1275×2008 px para A4 portrait — adecuado para impresión
-# de oficina y documentos legales, manteniendo tamaños de archivo razonables.
 _RENDER_DPI: float = 150.0
 
-
-# ====================================================================== #
-#  Motor
-# ====================================================================== #
 
 class MembreteEngine:
     """Aplica un membrete a cada página de los documentos indicados."""
@@ -79,125 +59,141 @@ class MembreteEngine:
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> List[MembreteJobResult]:
         try:
-            lh_doc = fitz.open(letterhead_path)
+            with PdfRenderDocument(letterhead_path) as letterhead:
+                if letterhead.page_count <= 0:
+                    raise RuntimeError("El membrete no tiene páginas.")
+                lh_info = letterhead.page_info(0)
         except Exception as e:
-            raise RuntimeError(f"No se pudo abrir el membrete: {e}")
+            raise RuntimeError(f"No se pudo abrir el membrete: {e}") from e
 
-        lh_page = lh_doc[0]
-        lh_w = lh_page.rect.width   # dimensiones de DISPLAY (rotation-aware)
-        lh_h = lh_page.rect.height
-
-        # Zona segura (donde va el contenido del documento)
-        safe = fitz.Rect(
+        safe = Rect(
             margins.left_pt,
             margins.top_pt,
-            lh_w - margins.right_pt,
-            lh_h - margins.bottom_pt,
+            lh_info.width_pt - margins.right_pt,
+            lh_info.height_pt - margins.bottom_pt,
         )
 
         results: List[MembreteJobResult] = []
         total = len(jobs)
-
-        try:
-            for i, job in enumerate(jobs):
-                if should_cancel and should_cancel():
-                    break
-                if progress:
-                    progress(i, total, f"Membretando: {Path(job.pdf_path).name}")
-                result = self._process_job(
+        for i, job in enumerate(jobs):
+            if should_cancel and should_cancel():
+                break
+            if progress:
+                progress(i, total, f"Membretando: {Path(job.pdf_path).name}")
+            results.append(
+                self._process_job(
                     job,
-                    lh_doc,
-                    lh_w,
-                    lh_h,
+                    letterhead_path,
+                    lh_info.width_pt,
+                    lh_info.height_pt,
+                    lh_info.rotation,
                     safe,
                     should_cancel=should_cancel,
                 )
-                results.append(result)
-        finally:
-            lh_doc.close()
+            )
 
         if progress and not (should_cancel and should_cancel()):
             progress(total, total, "Membretado completado")
-
         return results
-
-    # ------------------------------------------------------------------ #
 
     def _process_job(
         self,
         job: MembreteJob,
-        lh_doc: fitz.Document,
+        letterhead_path: str,
         lh_w: float,
         lh_h: float,
-        safe: fitz.Rect,
+        lh_rotation: int,
+        safe: Rect,
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> MembreteJobResult:
+        source = Path(job.pdf_path).resolve()
+        letterhead = Path(letterhead_path).resolve()
+        output = Path(job.output_path)
         try:
-            src = fitz.open(job.pdf_path)
-        except Exception as e:
-            return MembreteJobResult(job=job, output_path="", success=False, error=str(e))
+            if output.resolve() in {source, letterhead}:
+                raise ValueError("La salida no puede sobrescribir un PDF de origen.")
 
-        selected = _normalized_page_selection(job.pages_to_letterhead, src.page_count)
-        annotated_pages = _annotated_selected_pages(src, selected)
-        placement_src = src
-        rasterize_annotation_pages: set[int] = set()
-        if annotated_pages:
-            try:
-                placement_src = _copy_with_baked_annotations(src)
-            except Exception:
-                placement_src = src
-                rasterize_annotation_pages = annotated_pages
+            with PdfRenderDocument(source) as render_doc:
+                page_count = render_doc.page_count
+                if page_count <= 0:
+                    raise RuntimeError("El PDF no tiene páginas.")
+                page_infos = [render_doc.page_info(index) for index in range(page_count)]
+                selected = _normalized_page_selection(job.pages_to_letterhead, page_count)
 
-        out = fitz.open()
-        letterheaded = 0
-        preserved = 0
-        omitted = 0
+                with ExitStack() as stack:
+                    src_pdf = stack.enter_context(_open_pdf(source))
+                    lh_pdf = stack.enter_context(_open_pdf(letterhead))
+                    out_pdf = stack.enter_context(pikepdf.Pdf.new())
+                    temp_dir = Path(stack.enter_context(TemporaryDirectory(
+                        prefix="pdflex-membrete-"
+                    )))
 
-        try:
-            for page_idx in range(src.page_count):
-                if should_cancel and should_cancel():
-                    raise _CancelledError()
+                    letterheaded = 0
+                    preserved = 0
+                    omitted = 0
 
-                should_letterhead = selected is None or page_idx in selected
-                if not should_letterhead:
-                    if job.preserve_unselected:
-                        out.insert_pdf(src, from_page=page_idx, to_page=page_idx)
-                        preserved += 1
-                    else:
-                        omitted += 1
-                    continue
+                    for page_idx, info in enumerate(page_infos):
+                        if should_cancel and should_cancel():
+                            raise _CancelledError()
 
-                new_page = out.new_page(width=lh_w, height=lh_h)
+                        should_letterhead = selected is None or page_idx in selected
+                        if not should_letterhead:
+                            if job.preserve_unselected:
+                                out_pdf.add_pages_from(
+                                    src_pdf,
+                                    pages=[page_idx],
+                                    forms="preserve",
+                                )
+                                preserved += 1
+                            else:
+                                omitted += 1
+                            continue
 
-                # 1. Fondo: copiar membrete completo
-                _place_page(new_page, lh_doc, 0, new_page.rect)
+                        out_pdf.add_blank_page(page_size=(lh_w, lh_h))
+                        dest_page = out_pdf.pages[-1]
+                        full_rect = Rect(0.0, 0.0, lh_w, lh_h)
+                        _place_letterhead(
+                            dest_page,
+                            lh_pdf,
+                            render_doc_path=letterhead,
+                            page_width=lh_w,
+                            page_height=lh_h,
+                            rotation=lh_rotation,
+                            temp_dir=temp_dir,
+                        )
 
-                # 2. Superponer página del documento en la zona segura
-                src_page = src[page_idx]
-                target = _fit_rect(safe, src_page.rect.width, src_page.rect.height)
-                if job.preserve_source_background:
-                    _paint_implicit_page_background(new_page, target)
-                _place_page(
-                    new_page,
-                    placement_src,
-                    page_idx,
-                    target,
-                    force_raster=page_idx in rasterize_annotation_pages,
-                    preserve_raster_background=job.preserve_source_background,
-                )
-                letterheaded += 1
+                        target = _fit_rect(safe, info.width_pt, info.height_pt)
+                        if job.preserve_source_background:
+                            _paint_white_rect(dest_page, _to_pdf_rect(target, lh_h))
 
-            if out.page_count <= 0:
-                raise RuntimeError("La selección de páginas no produjo salida.")
+                        if info.rotation == 0 and not _page_has_annotations(src_pdf.pages[page_idx]):
+                            dest_page.add_overlay(
+                                src_pdf.pages[page_idx],
+                                _to_pdf_rect(target, lh_h),
+                            )
+                        else:
+                            overlay_path = temp_dir / f"source-{page_idx}.pdf"
+                            _write_raster_overlay_pdf(
+                                render_doc,
+                                page_idx,
+                                overlay_path,
+                                page_width=lh_w,
+                                page_height=lh_h,
+                                target=target,
+                                preserve_background=job.preserve_source_background,
+                            )
+                            with _open_pdf(overlay_path) as overlay_pdf:
+                                dest_page.add_overlay(overlay_pdf.pages[0])
+                        letterheaded += 1
 
-            out_path = Path(job.output_path)
-            out_path.parent.mkdir(parents=True, exist_ok=True)
-            out.save(str(out_path), garbage=4, deflate=True)
-            n_pages = out.page_count
+                    if len(out_pdf.pages) <= 0:
+                        raise RuntimeError("La selección de páginas no produjo salida.")
+
+                    output.parent.mkdir(parents=True, exist_ok=True)
+                    _save_atomic(out_pdf, output)
+                    n_pages = len(out_pdf.pages)
 
         except _CancelledError:
-            src.close()
-            out.close()
             return MembreteJobResult(
                 job=job,
                 output_path="",
@@ -205,17 +201,19 @@ class MembreteEngine:
                 error="Operación cancelada.",
             )
         except Exception as e:
-            src.close()
-            out.close()
             return MembreteJobResult(job=job, output_path="", success=False, error=str(e))
-        finally:
-            try:
-                if placement_src is not src:
-                    placement_src.close()
-                src.close()
-                out.close()
-            except Exception:
-                pass
+
+        with PdfRenderDocument(output) as verify:
+            if verify.page_count != n_pages:
+                return MembreteJobResult(
+                    job=job,
+                    output_path="",
+                    success=False,
+                    error=(
+                        f"El resultado tiene {verify.page_count} páginas; "
+                        f"se esperaban {n_pages}."
+                    ),
+                )
 
         return MembreteJobResult(
             job=job,
@@ -229,23 +227,142 @@ class MembreteEngine:
         )
 
 
-# ====================================================================== #
-#  Utilidades geométricas y de renderizado
-# ====================================================================== #
-
-def _fit_rect(container: fitz.Rect, src_w: float, src_h: float) -> fitz.Rect:
-    """Devuelve el rect que encaja src_w × src_h dentro de container
-    conservando la relación de aspecto y centrando el resultado."""
+def _fit_rect(container: Rect, src_w: float, src_h: float) -> Rect:
+    """Encaja src_w x src_h dentro de container conservando aspecto."""
     if src_w <= 0 or src_h <= 0:
         return container
-    cw = container.width
-    ch = container.height
-    scale = min(cw / src_w, ch / src_h)
+    scale = min(container.width / src_w, container.height / src_h)
     fw = src_w * scale
     fh = src_h * scale
-    x0 = container.x0 + (cw - fw) / 2
-    y0 = container.y0 + (ch - fh) / 2
-    return fitz.Rect(x0, y0, x0 + fw, y0 + fh)
+    x0 = container.x0 + (container.width - fw) / 2.0
+    y0 = container.y0 + (container.height - fh) / 2.0
+    return Rect(x0, y0, x0 + fw, y0 + fh)
+
+
+def _place_letterhead(
+    dest_page: pikepdf.Page,
+    lh_pdf: pikepdf.Pdf,
+    *,
+    render_doc_path: Path,
+    page_width: float,
+    page_height: float,
+    rotation: int,
+    temp_dir: Path,
+) -> None:
+    if rotation == 0:
+        dest_page.add_overlay(
+            lh_pdf.pages[0],
+            _to_pdf_rect(Rect(0.0, 0.0, page_width, page_height), page_height),
+        )
+        return
+
+    overlay_path = temp_dir / "letterhead-raster.pdf"
+    with PdfRenderDocument(render_doc_path) as document:
+        rendered = document.render_page(
+            0,
+            scale=_RENDER_DPI / 72.0,
+            include_annotations=True,
+        )
+    _write_image_pdf(
+        rendered.to_pil(),
+        overlay_path,
+        page_width=page_width,
+        page_height=page_height,
+        target=Rect(0.0, 0.0, page_width, page_height),
+    )
+    with _open_pdf(overlay_path) as overlay_pdf:
+        dest_page.add_overlay(overlay_pdf.pages[0])
+
+
+def _write_raster_overlay_pdf(
+    document: PdfRenderDocument,
+    page_index: int,
+    output_path: Path,
+    *,
+    page_width: float,
+    page_height: float,
+    target: Rect,
+    preserve_background: bool,
+) -> None:
+    rendered = document.render_page(
+        page_index,
+        scale=_RENDER_DPI / 72.0,
+        include_annotations=True,
+        transparent_background=not preserve_background,
+    )
+    _write_image_pdf(
+        rendered.to_pil(),
+        output_path,
+        page_width=page_width,
+        page_height=page_height,
+        target=target,
+    )
+
+
+def _write_image_pdf(
+    image,
+    output_path: Path,
+    *,
+    page_width: float,
+    page_height: float,
+    target: Rect,
+) -> None:
+    canvas = Canvas(str(output_path), pagesize=(page_width, page_height), pageCompression=1)
+    canvas.drawImage(
+        ImageReader(image),
+        target.x0,
+        page_height - target.y1,
+        width=target.width,
+        height=target.height,
+        preserveAspectRatio=False,
+        mask="auto",
+    )
+    canvas.showPage()
+    canvas.save()
+
+
+def _paint_white_rect(page: pikepdf.Page, rect: pikepdf.Rectangle) -> None:
+    width = float(rect.urx) - float(rect.llx)
+    height = float(rect.ury) - float(rect.lly)
+    content = (
+        "q 1 1 1 rg "
+        f"{float(rect.llx):.6f} {float(rect.lly):.6f} "
+        f"{width:.6f} {height:.6f} re f Q\n"
+    ).encode("ascii")
+    page.contents_add(content)
+
+
+def _to_pdf_rect(rect: Rect, page_height: float) -> pikepdf.Rectangle:
+    return pikepdf.Rectangle(rect.x0, page_height - rect.y1, rect.x1, page_height - rect.y0)
+
+
+def _page_has_annotations(page: pikepdf.Page) -> bool:
+    try:
+        annots = page.obj.get("/Annots", [])
+        return bool(annots)
+    except Exception:
+        return False
+
+
+def _open_pdf(path: str | Path) -> pikepdf.Pdf:
+    return pikepdf.Pdf.open(path, suppress_warnings=True, attempt_recovery=True)
+
+
+def _save_atomic(document: pikepdf.Pdf, output: Path) -> None:
+    temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        document.save(
+            temporary,
+            compress_streams=True,
+            recompress_flate=True,
+            object_stream_mode=pikepdf.ObjectStreamMode.generate,
+        )
+        os.replace(temporary, output)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _normalized_page_selection(
@@ -259,38 +376,6 @@ def _normalized_page_selection(
         for index in page_indexes
         if 0 <= int(index) < page_count
     }
-
-
-def _annotated_selected_pages(
-    doc: fitz.Document,
-    selected: Optional[set[int]],
-) -> set[int]:
-    indexes = range(doc.page_count) if selected is None else selected
-    return {
-        page_idx
-        for page_idx in indexes
-        if 0 <= page_idx < doc.page_count and _page_has_annotations(doc[page_idx])
-    }
-
-
-def _page_has_annotations(page: fitz.Page) -> bool:
-    try:
-        annots = page.annots()
-        if annots is None:
-            return False
-        return any(True for _ in annots)
-    except Exception:
-        return False
-
-
-def _copy_with_baked_annotations(doc: fitz.Document) -> fitz.Document:
-    baked = fitz.open("pdf", doc.tobytes())
-    try:
-        baked.bake(annots=True, widgets=False)
-    except Exception:
-        baked.close()
-        raise
-    return baked
 
 
 def _result_meta_text(letterheaded: int, preserved: int, omitted: int) -> str:
@@ -403,62 +488,6 @@ def _parse_page_token(
     if value < 1 or value > page_count:
         raise ValueError(f"Página fuera de rango: {token}")
     return value
-
-
-def _paint_implicit_page_background(dest_page: fitz.Page, target: fitz.Rect) -> None:
-    """Pinta el papel blanco que muchos PDFs dejan implícito en el visor."""
-    dest_page.draw_rect(
-        target,
-        color=None,
-        fill=(1, 1, 1),
-        width=0,
-        overlay=True,
-    )
-
-
-def _place_page(
-    dest_page: fitz.Page,
-    src_doc: fitz.Document,
-    page_idx: int,
-    target: fitz.Rect,
-    render_dpi: float = _RENDER_DPI,
-    force_raster: bool = False,
-    preserve_raster_background: bool = True,
-) -> None:
-    """Coloca src_doc[page_idx] en dest_page dentro de target.
-
-    Para páginas con /Rotate=0 usa show_pdf_page (vectorial, calidad máxima)
-    salvo que force_raster=True.
-    Para páginas con /Rotate≠0 renderiza a pixmap vía get_pixmap() — que sí
-    aplica /Rotate correctamente — e inserta la imagen con insert_image().
-
-    Razón del desvío para rotation≠0:
-      show_pdf_page() en PyMuPDF calcula el scale usando page.rect
-      (rotation-aware) pero aplica ese scale sobre las coordenadas del
-      MediaBox (pre-rotación). Para /Rotate=90/270 esto produce dimensiones
-      transpuestas con overflow; para /Rotate=180 el contenido queda al revés.
-      get_pixmap() aplica /Rotate correctamente: el pixmap resultante siempre
-      tiene las dimensiones de page.rect (display), independientemente del
-      MediaBox subyacente.
-    """
-    src_page = src_doc[page_idx]
-    if src_page.rotation == 0 and not force_raster:
-        dest_page.show_pdf_page(target, src_doc, page_idx)
-        return
-
-    # Páginas rotadas: renderizar con orientación correcta.
-    # El pixmap tiene dimensiones page.rect (display), no del MediaBox.
-    scale = render_dpi / 72.0
-    mat = fitz.Matrix(scale, scale)
-    pm = src_page.get_pixmap(
-        matrix=mat,
-        alpha=not preserve_raster_background,
-        annots=True,
-    )
-    try:
-        dest_page.insert_image(target, pixmap=pm)
-    finally:
-        del pm  # liberar memoria inmediatamente
 
 
 class _CancelledError(Exception):

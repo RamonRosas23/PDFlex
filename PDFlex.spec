@@ -3,7 +3,7 @@ import os
 
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('assets', 'assets')]
+datas = [('assets', 'assets'), ('docs/legal', 'legal')]
 binaries = []
 hiddenimports = []
 

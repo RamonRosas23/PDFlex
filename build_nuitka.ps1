@@ -9,12 +9,15 @@
 #      .\build_nuitka.ps1              # build normal
 #      .\build_nuitka.ps1 -SkipVenv   # reutiliza el venv existente
 #      .\build_nuitka.ps1 -SkipBuild  # solo recompila el instalador
+#      .\build_nuitka.ps1 -RequireBundledTesseract
+#                                     # build comercial con OCR offline incluido
 # ============================================================
 param(
     [switch]$SkipVenv,
     [switch]$SkipBuild,
     [switch]$SkipSetupBootstrapper,
     [switch]$SkipSign,
+    [switch]$RequireBundledTesseract,
     [string]$EnterpriseServicesMode = "",
     [string]$EnterpriseServicesSource = ""
 )
@@ -213,6 +216,29 @@ if ($tdFiles.Count -eq 0) { Err "No hay modelos .traineddata en assets\tessdata.
 $tdSize = ($tdFiles | Measure-Object -Property Length -Sum).Sum / 1MB
 Ok "tessdata: $($tdFiles.Count) modelos ($([math]::Round($tdSize,1)) MB)"
 
+$tesseractExe = Join-Path $ProjectDir "assets\tesseract\tesseract.exe"
+if (Test-Path -LiteralPath $tesseractExe) {
+    Ok "Tesseract embebido: assets\tesseract\tesseract.exe"
+    $tesseractDir = Split-Path -Parent $tesseractExe
+    $tesseractNoticeFiles = Get-ChildItem -LiteralPath $tesseractDir -Recurse -File |
+        Where-Object { $_.Name -match '^(LICENSE|LICENCE|NOTICE|COPYING|COPYRIGHT)' }
+    if ($tesseractNoticeFiles.Count -gt 0) {
+        Ok "Avisos de Tesseract: $($tesseractNoticeFiles.Count) archivo(s)"
+    } else {
+        Err "Tesseract esta embebido, pero faltan LICENSE/NOTICE/COPYING en assets\tesseract."
+    }
+} elseif ($RequireBundledTesseract) {
+    Err "Build comercial con OCR offline requiere assets\tesseract\tesseract.exe."
+} else {
+    Warn "Tesseract no esta embebido; OCR requerira PDFLEX_TESSERACT o instalacion externa."
+}
+
+$legalSource = Join-Path $ProjectDir "docs\legal"
+if (-not (Test-Path -LiteralPath $legalSource)) {
+    Err "docs\legal no encontrado. No se puede generar una build comercializable sin avisos legales."
+}
+Ok "Documentos legales base: OK"
+
 $icoPath = Join-Path $ProjectDir "assets\icon.ico"
 if (-not (Test-Path $icoPath)) { Err "Ícono no encontrado: $icoPath" }
 Ok "Ícono: OK"
@@ -242,6 +268,7 @@ if (-not $SkipBuild) {
 
         # ── Assets y datos ────────────────────────────────────────────────
         "--include-data-dir=assets=assets",      # tessdata, iconos, etc.
+        "--include-data-dir=docs\legal=legal",   # avisos comerciales/terceros
         "--include-package-data=certifi",        # CA bundle para requests
 
         # ── Módulos con imports dinámicos ─────────────────────────────────
@@ -347,6 +374,40 @@ if (Test-Path $tdDest) {
 } else {
     Warn "tessdata NO copiado a dist\PDFlex\assets\tessdata — verifica el build."
 }
+
+$tesseractDest = Join-Path $AppDir "assets\tesseract\tesseract.exe"
+if (Test-Path -LiteralPath $tesseractDest) {
+    Ok "Tesseract embebido en distribucion"
+} elseif ($RequireBundledTesseract) {
+    Err "Tesseract no quedo embebido en dist\PDFlex\assets\tesseract\tesseract.exe."
+}
+
+$legalDest = Join-Path $AppDir "legal"
+if (-not (Test-Path -LiteralPath $legalDest)) {
+    New-Item -ItemType Directory -Force -Path $legalDest | Out-Null
+    Copy-Item -LiteralPath (Join-Path $legalSource "*") -Destination $legalDest -Recurse -Force
+}
+$noticeFile = Join-Path $legalDest "THIRD_PARTY_NOTICES.md"
+if (-not (Test-Path -LiteralPath $noticeFile)) {
+    Err "Avisos legales no encontrados en dist\PDFlex\legal."
+}
+$collector = Join-Path $ProjectDir "packaging\collect_licenses.py"
+if (-not (Test-Path -LiteralPath $collector)) {
+    Err "packaging\collect_licenses.py no encontrado."
+}
+$licensesOut = Join-Path $legalDest "third_party_licenses"
+$manifest = Join-Path $licensesOut "manifest.json"
+if ($SkipBuild -and (Test-Path -LiteralPath $manifest)) {
+    Ok "Avisos legales existentes conservados en distribucion"
+} else {
+    $collectorPython = if (Test-Path -LiteralPath $VenvPython) { $VenvPython } else { $Python }
+    & $collectorPython $collector --output $licensesOut
+    if ($LASTEXITCODE -ne 0) { Err "No se pudieron recolectar licencias de terceros." }
+}
+if (-not (Test-Path -LiteralPath $manifest)) {
+    Err "No se genero legal\third_party_licenses\manifest.json."
+}
+Ok "Avisos legales incluidos en distribucion"
 
 # Motores PDF opcionales para que el compresor híbrido funcione igual en PCs
 # sin QPDF/Ghostscript instalados. Coloca distribuciones aprobadas en:

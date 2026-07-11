@@ -72,7 +72,17 @@ El repositorio incluye automatizaciones para obtener ejecutables independientes 
 - `build_exe.ps1`: Construye una distribución portable `onedir` mediante PyInstaller.
 - `build_setup.ps1`: Genera un instalador formal y un ZIP portable distribuyendo los artefactos con InnoSetup (`installer.iss`).
 
-> NOTA: Para el OCR, la carpeta `assets/tessdata/` debe ser distribuida junto con el ejecutable generado o empaquetada e instruido a Tesseract sobre su ubicación en ejecución temporal.
+Los builds comerciales incluyen `docs/legal` dentro de `dist/PDFlex/legal` y
+generan `legal/third_party_licenses/manifest.json` con las versiones y avisos de
+las librerías instaladas en el entorno de build.
+
+> NOTA: Para vender OCR como función offline incluida, usa
+> `.\build_nuitka.ps1 -RequireBundledTesseract`; el build fallará si no existe
+> `assets/tesseract/tesseract.exe`. Si no se embebe Tesseract, OCR requerirá
+> `PDFLEX_TESSERACT` o una instalación externa aprobada.
+
+Antes de publicar una versión para clientes, revisa
+`docs/legal/COMMERCIAL_READINESS.md` y `docs/legal/RELEASE_CHECKLIST.md`.
 
 ## Flujo de Trabajo y Arquitectura
 

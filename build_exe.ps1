@@ -52,6 +52,26 @@ Write-Host "      Dependencias instaladas correctamente."
 if ($LASTEXITCODE -ne 0) { throw "PySide6 no se puede importar en el entorno de build." }
 Write-Host "      PySide6 validado correctamente."
 
+$LegalSource = Join-Path $ProjectDir "docs\legal"
+$ThirdPartyNoticeSource = Join-Path $LegalSource "THIRD_PARTY_NOTICES.md"
+if (-not (Test-Path -LiteralPath $ThirdPartyNoticeSource)) {
+    throw "No se encontro docs\legal\THIRD_PARTY_NOTICES.md. No se generara una build sin avisos legales."
+}
+Write-Host "      Documentos legales base validados."
+
+$TesseractExe = Join-Path $ProjectDir "assets\tesseract\tesseract.exe"
+if (-not (Test-Path -LiteralPath $TesseractExe)) {
+    Write-Host "      Aviso: Tesseract no esta embebido; OCR requerira PDFLEX_TESSERACT o instalacion externa." -ForegroundColor Yellow
+} else {
+    $TesseractDir = Split-Path -Parent $TesseractExe
+    $TesseractNoticeFiles = Get-ChildItem -LiteralPath $TesseractDir -Recurse -File |
+        Where-Object { $_.Name -match '^(LICENSE|LICENCE|NOTICE|COPYING|COPYRIGHT)' }
+    if ($TesseractNoticeFiles.Count -eq 0) {
+        throw "Tesseract esta embebido, pero faltan LICENSE/NOTICE/COPYING en assets\tesseract."
+    }
+    Write-Host "      Tesseract embebido con avisos legales."
+}
+
 # ── 3b. post-install script de pywin32 ───────────────────────
 #  pywin32 requiere correr su post-install para registrar las DLLs en el venv
 $PyWin32PostInstall = Join-Path $VenvDir "Scripts\pywin32_postinstall.py"
@@ -68,6 +88,32 @@ $SpecFile = Join-Path $ProjectDir "PDFlex.spec"
 & $VenvPython -m PyInstaller $SpecFile --clean --noconfirm
 
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller terminó con error." }
+
+$LegalDir = Join-Path $ProjectDir "dist\PDFlex\legal"
+if (-not (Test-Path -LiteralPath $LegalDir)) {
+    New-Item -ItemType Directory -Force -Path $LegalDir | Out-Null
+    Copy-Item -LiteralPath (Join-Path $LegalSource "*") -Destination $LegalDir -Recurse -Force
+}
+
+$ThirdPartyNotice = Join-Path $LegalDir "THIRD_PARTY_NOTICES.md"
+if (-not (Test-Path -LiteralPath $ThirdPartyNotice)) {
+    throw "PyInstaller no incluyo dist\PDFlex\legal\THIRD_PARTY_NOTICES.md."
+}
+
+$LicenseCollector = Join-Path $ProjectDir "packaging\collect_licenses.py"
+if (-not (Test-Path -LiteralPath $LicenseCollector)) {
+    throw "No se encontro packaging\collect_licenses.py."
+}
+
+$LicenseOut = Join-Path $LegalDir "third_party_licenses"
+& $VenvPython $LicenseCollector --output $LicenseOut
+if ($LASTEXITCODE -ne 0) { throw "No se pudieron recolectar licencias de terceros." }
+
+$LicenseManifest = Join-Path $LicenseOut "manifest.json"
+if (-not (Test-Path -LiteralPath $LicenseManifest)) {
+    throw "No se genero dist\PDFlex\legal\third_party_licenses\manifest.json."
+}
+Write-Host "      Avisos y licencias de terceros incluidos."
 
 # ── 5. Resultado ─────────────────────────────────────────────
 $ExePath = Join-Path $ProjectDir "dist\PDFlex\PDFlex.exe"

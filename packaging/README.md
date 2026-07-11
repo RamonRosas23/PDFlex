@@ -16,6 +16,23 @@ auto-updater.
 .\build_nuitka.ps1
 ```
 
+El build copia los avisos legales base desde `docs\legal` y recolecta las
+licencias exactas de los paquetes instalados hacia:
+
+```text
+dist\PDFlex\legal\third_party_licenses\
+```
+
+Si vas a vender OCR como incluido/offline, usa el modo estricto:
+
+```powershell
+.\build_nuitka.ps1 -RequireBundledTesseract
+```
+
+Ese modo exige `assets\tesseract\tesseract.exe`; sin ese binario, OCR debe
+documentarse como dependiente de `PDFLEX_TESSERACT` o de una instalación externa
+de Tesseract.
+
 Para regenerar solo el instalador usando la distribucion existente:
 
 ```powershell

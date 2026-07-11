@@ -7,11 +7,15 @@ from io import BytesIO
 from pathlib import Path
 import math
 import random
+from tempfile import TemporaryDirectory
 from typing import Callable, List, Tuple
 
-import fitz
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter
+from reportlab.lib.utils import ImageReader
+from reportlab.pdfgen.canvas import Canvas
+
+from core.pdf_backend import PdfRenderDocument, Rect, apply_page_overlays
 
 
 RGBColor = Tuple[float, float, float]
@@ -176,11 +180,11 @@ class HighlightMark:
             y1_norm=_clamp(max(self.y0_norm, self.y1_norm), 0.0, 1.0),
         )
 
-    def to_display_rect(self, page: fitz.Page) -> fitz.Rect:
+    def to_display_rect(self, page_width: float, page_height: float) -> Rect:
         mark = self.normalized()
-        pw = max(1.0, page.rect.width)
-        ph = max(1.0, page.rect.height)
-        return fitz.Rect(
+        pw = max(1.0, page_width)
+        ph = max(1.0, page_height)
+        return Rect(
             mark.x0_norm * pw,
             mark.y0_norm * ph,
             mark.x1_norm * pw,
@@ -248,61 +252,64 @@ class HighlightEngine:
         if not job.marks:
             return HighlightResult(job=job, success=False, error="Dibuja al menos un trazo.")
 
-        doc: fitz.Document | None = None
         try:
             options = job.options.clamped()
-            doc = fitz.open(str(source))
-            if doc.is_encrypted:
-                raise RuntimeError("El PDF esta protegido o cifrado.")
-            if doc.page_count <= 0:
-                raise RuntimeError("El PDF no tiene paginas.")
-
-            grouped = _group_marks(job.marks, doc.page_count)
-            if not grouped:
-                raise RuntimeError("No hay trazos validos para este PDF.")
-
-            count = 0
-            for page_index, marks in grouped.items():
-                if should_cancel and should_cancel():
-                    raise _CancelledError()
-                page = doc[page_index]
-                for mark_index, mark in enumerate(marks):
-                    display_rect = mark.to_display_rect(page)
-                    if display_rect.width < 1.0 or display_rect.height < 1.0:
-                        continue
-                    display_rect = expanded_highlight_rect(display_rect, page.rect, options)
-                    if display_rect.width < 1.0 or display_rect.height < 1.0:
-                        continue
-                    stream = _texture_png_for_rect(display_rect, options, page_index, mark_index, mark)
-                    page.insert_image(
-                        _display_rect_for_page(page, display_rect),
-                        stream=stream,
-                        keep_proportion=False,
-                        overlay=options.overlay,
+            with PdfRenderDocument(source) as document:
+                grouped = _group_marks(job.marks, document.page_count)
+                if not grouped:
+                    raise RuntimeError("No hay trazos validos para este PDF.")
+                with TemporaryDirectory(prefix="pdflex-highlight-") as temp_dir:
+                    overlay_path = Path(temp_dir) / "overlay.pdf"
+                    canvas = Canvas(str(overlay_path), pagesize=(1, 1), pageCompression=1)
+                    count = 0
+                    mapping: dict[int, int] = {}
+                    for overlay_index, (page_index, marks) in enumerate(sorted(grouped.items())):
+                        if should_cancel and should_cancel():
+                            raise _CancelledError()
+                        info = document.page_info(page_index)
+                        canvas.setPageSize((info.width_pt, info.height_pt))
+                        page_rect = Rect(0, 0, info.width_pt, info.height_pt)
+                        for mark_index, mark in enumerate(marks):
+                            display_rect = mark.to_display_rect(info.width_pt, info.height_pt)
+                            if display_rect.width < 1.0 or display_rect.height < 1.0:
+                                continue
+                            display_rect = expanded_highlight_rect(
+                                display_rect, page_rect, options
+                            )
+                            if display_rect.width < 1.0 or display_rect.height < 1.0:
+                                continue
+                            stream = _texture_png_for_rect(
+                                display_rect, options, page_index, mark_index, mark
+                            )
+                            canvas.drawImage(
+                                ImageReader(BytesIO(stream)),
+                                display_rect.x0,
+                                info.height_pt - display_rect.y1,
+                                width=display_rect.width,
+                                height=display_rect.height,
+                                preserveAspectRatio=False,
+                                mask="auto",
+                            )
+                            count += 1
+                        canvas.showPage()
+                        mapping[page_index] = overlay_index
+                    canvas.save()
+                    if count <= 0:
+                        raise RuntimeError("Los trazos eran demasiado pequenos o invalidos.")
+                    report = apply_page_overlays(
+                        source, overlay_path, mapping, output, over=options.overlay
                     )
-                    count += 1
-
-            if count <= 0:
-                raise RuntimeError("Los trazos eran demasiado pequenos o invalidos.")
-
-            doc.save(str(output), garbage=4, clean=True, deflate=True)
             return HighlightResult(
                 job=job,
                 output_path=str(output),
                 success=True,
-                total_pages=doc.page_count,
+                total_pages=report.page_count,
                 mark_count=count,
             )
         except _CancelledError:
             return HighlightResult(job=job, success=False, error="Operacion cancelada.")
         except Exception as exc:
             return HighlightResult(job=job, success=False, error=str(exc))
-        finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
 
 
 def render_highlight_texture(
@@ -348,15 +355,15 @@ def render_highlight_texture(
 
 
 def expanded_highlight_rect(
-    rect: fitz.Rect,
-    page_rect: fitz.Rect,
+    rect: Rect,
+    page_rect: Rect,
     options: HighlightOptions,
-) -> fitz.Rect:
+) -> Rect:
     options = options.clamped()
     x_pad = min(28.0, rect.height * (0.25 + options.overshoot * 1.25))
     y_pad = min(12.0, rect.height * (options.bleed * 0.34 + options.roughness * 0.08))
-    expanded = fitz.Rect(rect.x0 - x_pad, rect.y0 - y_pad, rect.x1 + x_pad, rect.y1 + y_pad)
-    return fitz.Rect(
+    expanded = Rect(rect.x0 - x_pad, rect.y0 - y_pad, rect.x1 + x_pad, rect.y1 + y_pad)
+    return Rect(
         max(page_rect.x0, expanded.x0),
         max(page_rect.y0, expanded.y0),
         min(page_rect.x1, expanded.x1),
@@ -365,7 +372,7 @@ def expanded_highlight_rect(
 
 
 def _texture_png_for_rect(
-    rect: fitz.Rect,
+    rect: Rect,
     options: HighlightOptions,
     page_index: int,
     mark_index: int,
@@ -497,7 +504,7 @@ def _rgba_from_alpha(color: tuple[int, int, int], alpha: np.ndarray) -> Image.Im
     return Image.fromarray(rgba, "RGBA")
 
 
-def _texture_scale(rect: fitz.Rect) -> float:
+def _texture_scale(rect: Rect) -> float:
     longest = max(1.0, rect.width, rect.height)
     scale = 2.35
     if longest * scale > 3200:
@@ -517,24 +524,6 @@ def _group_marks(marks: List[HighlightMark], page_count: int) -> dict[int, list[
             continue
         grouped.setdefault(normalized.page_index, []).append(normalized)
     return grouped
-
-
-def _display_rect_for_page(page: fitz.Page, rect: fitz.Rect) -> fitz.Rect:
-    if not int(page.rotation) % 360:
-        return rect
-    matrix = page.derotation_matrix
-    corners = [
-        fitz.Point(rect.x0, rect.y0) * matrix,
-        fitz.Point(rect.x1, rect.y0) * matrix,
-        fitz.Point(rect.x0, rect.y1) * matrix,
-        fitz.Point(rect.x1, rect.y1) * matrix,
-    ]
-    return fitz.Rect(
-        min(point.x for point in corners),
-        min(point.y for point in corners),
-        max(point.x for point in corners),
-        max(point.y for point in corners),
-    )
 
 
 def _mark_seed(

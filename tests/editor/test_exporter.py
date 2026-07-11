@@ -12,11 +12,15 @@ from core.editor.model.layers import Layer
 from core.editor.model.page_target import PageTarget
 from core.editor.model.placement import Anchor, Frame, Placement
 from core.editor.model.rules import PageRule
+from core.pdf_backend import PdfRenderDocument
 
 
 def _build_doc(pdf_path) -> EditorDocument:
-    with fitz.open(pdf_path) as d:
-        geos = [PageGeometry.from_page(i, d[i]) for i in range(d.page_count)]
+    with PdfRenderDocument(pdf_path) as document:
+        geos = [
+            PageGeometry.from_page_info(document.page_info(i))
+            for i in range(document.page_count)
+        ]
     sha = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
     return EditorDocument(source_path=str(pdf_path), source_sha256=sha,
                           page_geometries=geos)

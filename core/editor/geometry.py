@@ -1,16 +1,15 @@
-"""Espacios de coordenadas de PDFlex Studio.
+"""Coordinate helpers for PDFlex Studio.
 
-Espacio canónico del modelo: "display" — puntos PDF tras aplicar /Rotate,
-origen sup-izq, Y hacia abajo (lo que reportan fitz.Page.rect y get_text()).
-
-Las funciones insert_*() de PyMuPDF interpretan rectángulos en el sistema NO
-rotado de la página. Este módulo centraliza esa conversión: NADIE más en el
-código multiplica por derotation_matrix (lección del bug de membrete_engine).
+The editor model uses display coordinates: PDF points after applying page
+rotation, with the origin at the visible top-left corner and Y growing down.
+Exporting now writes display-sized overlay pages, so no backend-specific
+derotation matrix is needed for drawing.
 """
 from __future__ import annotations
+
 from dataclasses import dataclass
 
-import fitz
+from core.pdf_backend import PageInfo, Rect
 
 MM_PER_INCH = 25.4
 PT_PER_INCH = 72.0
@@ -25,53 +24,40 @@ def pt_to_mm(pt: float) -> float:
 
 
 Matrix6 = tuple[float, float, float, float, float, float]
+IDENTITY_MATRIX: Matrix6 = (1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
 
 
 @dataclass(frozen=True)
 class PageGeometry:
-    """Geometría inmutable de una página, capturada UNA vez desde fitz.
+    """Immutable display geometry for one PDF page."""
 
-    Se captura al abrir el documento; el resto del motor trabaja con estos
-    valores puros sin tocar fitz (regla de hilos del spec §5.3).
-    """
     index: int
-    width_pt: float          # dimensiones DISPLAY (rotation-aware)
+    width_pt: float
     height_pt: float
-    rotation: int            # 0 | 90 | 180 | 270
-    derotation_matrix: Matrix6
-    rotation_matrix: Matrix6
+    rotation: int
+    derotation_matrix: Matrix6 = IDENTITY_MATRIX
+    rotation_matrix: Matrix6 = IDENTITY_MATRIX
 
     @classmethod
-    def from_page(cls, index: int, page: fitz.Page) -> "PageGeometry":
+    def from_page_info(cls, info: PageInfo) -> "PageGeometry":
         return cls(
-            index=index,
-            width_pt=page.rect.width,
-            height_pt=page.rect.height,
-            rotation=page.rotation % 360,
-            derotation_matrix=tuple(page.derotation_matrix),
-            rotation_matrix=tuple(page.rotation_matrix),
+            index=info.index,
+            width_pt=info.width_pt,
+            height_pt=info.height_pt,
+            rotation=info.rotation % 360,
         )
 
 
-# ---------------------------------------------------------------------------
-# Chokepoint de inserción — VERDAD EMPÍRICA FINAL (sondas 1-3 del 2026-06-09,
-# PyMuPDF 1.27.2.3, demostrada POR PÍXELES RENDERIZADOS en
-# tests/editor/test_export_roundtrip.py — única corte que no miente):
-#
-#   * insert_textbox / Shape.draw_* / insert_image interpretan TODOS el rect
-#     en espacio SIN ROTAR → derotar SIEMPRE (esta función).
-#   * Texto e imagen además orientan su contenido según la página sin rotar:
-#     rotate=geo.rotation lo endereza en pantalla (las primitivas lo aplican).
-#   * Las APIs de extracción (get_text/get_drawings/get_image_info) reportan
-#     en espacio SIN ROTAR en 1.27: NO sirven para verificar posición display
-#     (parecen "eco" del input). Verificar posición = renderizar y medir.
-#
-# Si una versión futura de PyMuPDF cambia el contrato, la prueba reina falla
-# y el fix vive en ESTA función, en ningún otro lado.
-# ---------------------------------------------------------------------------
+def display_rect(rect: object) -> Rect:
+    """Return a backend-neutral display rectangle."""
+    return Rect(
+        float(getattr(rect, "x0")),
+        float(getattr(rect, "y0")),
+        float(getattr(rect, "x1")),
+        float(getattr(rect, "y1")),
+    )
 
-def insertion_rect(rect: fitz.Rect, geo: PageGeometry) -> fitz.Rect:
-    """Display → coords de inserción (espacio sin rotar) para insert_*/draw_*."""
-    out = fitz.Rect(rect) * fitz.Matrix(*geo.derotation_matrix)
-    out.normalize()
-    return out
+
+def insertion_rect(rect: object, _geo: PageGeometry) -> Rect:
+    """Compatibility alias for old callers; overlays draw in display space."""
+    return display_rect(rect)

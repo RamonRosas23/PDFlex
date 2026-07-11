@@ -1,20 +1,17 @@
-"""PRUEBA REINA (gate de Fase 0): lo insertado queda EXACTAMENTE donde se pidió,
-en las 4 rotaciones, verificado POR PÍXELES releyendo el PDF generado.
-
-Nota crítica (sondas 2026-06-09, PyMuPDF 1.27): las APIs de extracción
-(get_text / get_drawings / get_image_info) reportan en espacio SIN ROTAR —
-la única verificación válida de posición display es renderizar y medir píxeles.
-"""
+"""Gate visual: lo exportado por overlays queda donde se pidio en /Rotate."""
 import fitz
 import numpy as np
 import pytest
+from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen.canvas import Canvas
 
 from core.editor.geometry import PageGeometry
 from core.editor.export.primitives import (
     stamp_image, stamp_image_rotated, stamp_rect, stamp_text,
 )
+from core.pdf_backend import PdfRenderDocument, Rect, apply_page_overlays
 
-TARGET = fitz.Rect(120.0, 180.0, 320.0, 260.0)  # display space
+TARGET = Rect(120.0, 180.0, 320.0, 260.0)  # display space
 ROTATIONS = [0, 90, 180, 270]
 _SCALE = 2  # render del verificador: 2x → resolución de 0.5 pt
 
@@ -22,10 +19,14 @@ _SCALE = 2  # render del verificador: 2x → resolución de 0.5 pt
 def _roundtrip(make_pdf, rotation, stamp_fn):
     src = make_pdf(rotations=[rotation])
     out = src.with_name(f"out_{rotation}.pdf")
-    with fitz.open(src) as doc:
-        geo = PageGeometry.from_page(0, doc[0])
-        stamp_fn(doc[0], geo)
-        doc.save(str(out))
+    overlay = src.with_name(f"overlay_{rotation}.pdf")
+    with PdfRenderDocument(src) as document:
+        geo = PageGeometry.from_page_info(document.page_info(0))
+        canvas = Canvas(str(overlay), pagesize=(geo.width_pt, geo.height_pt))
+        stamp_fn(canvas, geo)
+        canvas.showPage()
+        canvas.save()
+    apply_page_overlays(src, overlay, {0: 0}, out)
     return out
 
 
@@ -50,13 +51,17 @@ def _visual_bbox_pt(page, *, red_corner: bool = False):
     return bbox, corner
 
 
+def _coords(rect) -> tuple[float, float, float, float]:
+    return (rect.x0, rect.y0, rect.x1, rect.y1)
+
+
 @pytest.mark.parametrize("rotation", ROTATIONS)
 def test_rect_lands_exactly_where_placed(make_pdf, rotation):
     out = _roundtrip(make_pdf, rotation,
                      lambda page, geo: stamp_rect(page, geo, TARGET, fill=(1, 0, 0)))
     with fitz.open(out) as doc:
         got, _ = _visual_bbox_pt(doc[0])
-        for g, w in zip(tuple(got), tuple(TARGET)):
+        for g, w in zip(_coords(got), _coords(TARGET)):
             assert g == pytest.approx(w, abs=0.5), f"/Rotate={rotation}: {got} vs {TARGET}"
 
 
@@ -70,7 +75,7 @@ def test_text_lands_inside_box_and_reads_horizontal(make_pdf, rotation):
         assert "PDFlex Studio" in doc[0].get_text()
         # Posición y horizontalidad: SOLO por píxeles
         got, _ = _visual_bbox_pt(doc[0])
-        outer = fitz.Rect(TARGET) + (-1.5, -1.5, 1.5, 1.5)
+        outer = fitz.Rect(*_coords(TARGET)) + (-1.5, -1.5, 1.5, 1.5)
         assert outer.contains(got), \
             f"/Rotate={rotation}: píxeles {got} fuera de {TARGET}"
         w, h = got.width, got.height
@@ -78,7 +83,7 @@ def test_text_lands_inside_box_and_reads_horizontal(make_pdf, rotation):
             f"/Rotate={rotation}: bbox {w:.0f}x{h:.0f} no es horizontal — texto girado"
 
 
-SQUARE = fitz.Rect(150.0, 200.0, 230.0, 280.0)  # cuadrado: la sonda no se deforma
+SQUARE = Rect(150.0, 200.0, 230.0, 280.0)  # cuadrado: la sonda no se deforma
 
 
 @pytest.mark.parametrize("rotation", ROTATIONS)
@@ -88,7 +93,7 @@ def test_image_lands_exactly_and_upright(make_pdf, probe_png, rotation):
                      lambda page, geo: stamp_image(page, geo, SQUARE, probe_png))
     with fitz.open(out) as doc:
         got, corner = _visual_bbox_pt(doc[0], red_corner=True)
-        for g, w in zip(tuple(got), tuple(SQUARE)):
+        for g, w in zip(_coords(got), _coords(SQUARE)):
             assert g == pytest.approx(w, abs=0.5), f"/Rotate={rotation}: {got} vs {SQUARE}"
         assert corner == ("izq", "sup"), \
             f"/Rotate={rotation}: rojo en {corner}, imagen rotada por error"
@@ -106,7 +111,7 @@ def test_image_rotated_90cw_directional(make_pdf, probe_png, rotation):
                                                            probe_png, angle_deg=90.0))
     with fitz.open(out) as doc:
         got, corner = _visual_bbox_pt(doc[0], red_corner=True)
-        for g, w in zip(tuple(got), tuple(SQUARE)):
+        for g, w in zip(_coords(got), _coords(SQUARE)):
             assert g == pytest.approx(w, abs=0.75), f"/Rotate={rotation}: {got} vs {SQUARE}"
         assert corner == ("der", "sup"), \
             f"/Rotate={rotation}: rojo en {corner} — signo de rotación incorrecto"
@@ -135,9 +140,8 @@ def test_text_rotated_45_centered_and_diagonal(make_pdf, rotation):
     de producto = Qt: el contenido se maqueta sup-izq dentro del frame y el
     FRAME es lo que gira). Por píxeles; el contenido sigue extraíble."""
     text = "IIIIIIIIIIIIIIII"
-    tw = fitz.get_text_length(text, fontname="helv", fontsize=14)
-    # insert_textbox exige alto ≥ ~fontsize*1.68 (sondeado: 23.5 pt para 14 pt)
-    box = fitz.Rect(120.0, 180.0, 120.0 + tw + 1.0, 180.0 + 26.0)
+    tw = stringWidth(text, "Helvetica", 14)
+    box = Rect(120.0, 180.0, 120.0 + tw + 1.0, 180.0 + 26.0)
 
     def _stamp(page, geo):
         leftover = stamp_text(page, geo, box, text, fontsize=14, angle_deg=45.0)

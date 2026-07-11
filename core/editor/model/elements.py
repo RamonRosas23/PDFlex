@@ -1,4 +1,4 @@
-"""Elementos del editor: dataclasses serializables, sin Qt y sin fitz.
+"""Elementos del editor: dataclasses serializables, sin Qt y sin backend PDF.
 
 Serialización: to_dict()/element_from_dict() con campo "schema" para
 migraciones futuras (spec §17). Las imágenes referencian assets por hash

@@ -64,7 +64,7 @@ class CompresorWindowTests(unittest.TestCase):
             )
             try:
                 window._docs_card.add_paths([str(pdf_path)])
-                window._engine_combo.setCurrentIndex(1)  # PyMuPDF interno
+                window._engine_combo.setCurrentIndex(1)  # Motor interno libre
                 window._validation_combo.setCurrentIndex(1)  # Estricta
                 window._dpi_target_spin.setValue(180)
                 window._dpi_threshold_spin.setValue(240)
@@ -72,7 +72,7 @@ class CompresorWindowTests(unittest.TestCase):
                 window._gray_check.setChecked(True)
 
                 jobs = window._build_jobs()
-                self.assertEqual(jobs[0].options.engine_mode, "pymupdf")
+                self.assertEqual(jobs[0].options.engine_mode, "internal")
                 self.assertEqual(jobs[0].options.validation_level, "strict")
                 self.assertEqual(jobs[0].options.dpi_target, 180)
                 self.assertEqual(jobs[0].options.dpi_threshold, 240)
@@ -240,7 +240,7 @@ class CompresorWindowTests(unittest.TestCase):
 
                 error = window._validate_ready()
                 self.assertIsNotNone(error)
-                self.assertIn("Automatico o PyMuPDF", error)
+                self.assertIn("Automatico o Motor interno libre", error)
             finally:
                 window.deleteLater()
                 self.app.processEvents()

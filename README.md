@@ -58,9 +58,10 @@ python main.py
 > ```
 
 Dependencias principales:
-- `PyMuPDF` (lectura/escritura veloz de PDFs, Detección de bloques de texto)
-- `Pillow` y `OpenCV` (manipulación de firmas, remoción de fondos, pre-procesamiento)
-- `pytesseract` (enlace al motor de OCR Tesseract)
+- `pypdfium2` / PDFium (renderizado, inspección visual y extracción de texto)
+- `pikepdf` / QPDF y `pypdf` (estructura, formularios, cifrado y ensamblado)
+- `ReportLab`, `Pillow` y `OpenCV` (composición, imagen y pre-procesamiento)
+- Tesseract CLI (OCR mediante binario libre distribuible junto a `assets/tessdata/`)
 - `PySide6` (Interfaz moderna, QThreads, UX limpia)
 
 ### Opción B — Opciones de Compilación (distribución)

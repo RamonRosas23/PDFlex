@@ -10,7 +10,7 @@ hiddenimports = []
 if os.path.isdir('tools'):
     datas.append(('tools', 'tools'))
 
-for pkg in ('pymupdf', 'PIL', 'docx', 'numpy', 'cv2', 'requests'):
+for pkg in ('pypdfium2', 'pikepdf', 'pypdf', 'PIL', 'docx', 'numpy', 'cv2', 'requests'):
     tmp = collect_all(pkg)
     datas += tmp[0]; binaries += tmp[1]; hiddenimports += tmp[2]
 
@@ -43,13 +43,13 @@ a = Analysis(
 )
 pyz = PYZ(a.pure)
 
-# ── UPX: excluir todas las DLLs de Qt6 y PyMuPDF ───────────────────
+# ── UPX: excluir DLLs sensibles de Qt6 y runtimes nativos PDF ──────
 # UPX puede corromper Qt6 y causar crash al arrancar.
 UPX_EXCLUDE = [
     "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll",
     "Qt6OpenGL.dll", "Qt6Svg.dll", "Qt6PrintSupport.dll",
     "qwindows.dll", "qwindowsvistastyle.dll",
-    "mupdf*.dll", "fitz*.pyd",
+    "pdfium*.dll", "pikepdf*.pyd", "qpdf*.dll",
     "python3*.dll", "vcruntime*.dll", "msvcp*.dll",
 ]
 

@@ -499,7 +499,7 @@ TOOLS: List[ToolDescriptor] = [
             "Extrae imágenes y recursos embebidos directamente desde PDFs, "
             "sin convertir páginas completas.\n\n"
             "**Características:**\n"
-            "- Conserva el formato original cuando PyMuPDF lo expone\n"
+            "- Conserva el formato original cuando el backend PDF lo expone\n"
             "- Agrupa resultados por PDF origen\n"
             "- Evita duplicados por recurso interno\n"
             "- Filtro por tamaño mínimo\n"

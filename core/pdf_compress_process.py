@@ -1,8 +1,8 @@
 """Isolated PDF compression worker process.
 
 This module runs outside the Qt process and communicates through temporary
-JSON files. Keeping PyMuPDF / image work out of the UI process prevents native
-code or long GIL holds from freezing progress updates.
+JSON files. Keeping heavy image work out of the UI process prevents native
+code or long CPU holds from freezing progress updates.
 """
 from __future__ import annotations
 

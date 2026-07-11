@@ -347,7 +347,7 @@ class PdfToImgsWindow(PipelineWindow):
     # ------------------------------------------------------------------ #
 
     def _on_docs_changed(self, paths: List[str]) -> None:
-        """Actualiza caché de páginas para nuevos archivos (evita fitz.open en el resumen)."""
+        """Actualiza caché de páginas para nuevos archivos (evita abrir PDFs en el resumen)."""
         for p in paths:
             if p not in self._pdf_page_cache:
                 try:
@@ -441,7 +441,7 @@ class PdfToImgsWindow(PipelineWindow):
         total = 0
         for raw_path in self._docs_card.paths():
             path = Path(raw_path)
-            # Usar caché para evitar fitz.open en el hilo principal
+            # Usar caché para evitar abrir PDFs en el hilo principal
             if raw_path in self._pdf_page_cache:
                 page_count = self._pdf_page_cache[raw_path]
             else:

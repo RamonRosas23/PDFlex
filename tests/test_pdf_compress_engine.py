@@ -820,10 +820,10 @@ class PdfCompressEngineTests(unittest.TestCase):
                 compress_engine._write_isolated_image_candidate = original_write_turbo
 
             self.assertTrue(result.success, result.error)
-            self.assertEqual(result.strategy, "pymupdf turbo aislado")
+            self.assertEqual(result.strategy, "turbo libre aislado")
             self.assertLess(result.output_bytes, result.input_bytes)
 
-    def test_pymupdf_mode_uses_pagewise_rewrite_for_masked_image_pdf(self) -> None:
+    def test_internal_mode_uses_pagewise_rewrite_for_masked_image_pdf(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = self._make_metadata_heavy_pdf(root / "risky_pagewise.pdf")
@@ -864,7 +864,7 @@ class PdfCompressEngineTests(unittest.TestCase):
                         pdf_path=str(source),
                         output_path=str(output),
                         profile_id="balanced",
-                        options=CompressOptions(engine_mode="pymupdf"),
+                        options=CompressOptions(engine_mode="internal"),
                     )
                 )
             finally:

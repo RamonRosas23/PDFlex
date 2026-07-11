@@ -715,13 +715,13 @@ class CompresorWindow(PipelineWindow):
         )
         self._engine_combo = QComboBox()
         self._engine_combo.addItem("Automático recomendado", "auto")
-        self._engine_combo.addItem("PyMuPDF interno", "pymupdf")
+        self._engine_combo.addItem("Motor interno libre", "internal")
         self._engine_combo.addItem("QPDF reforzado", "qpdf")
         self._engine_combo.addItem("Ghostscript visual", "ghostscript")
         self._engine_combo.addItem("Rápido visual", "fast")
-        self._engine_combo.addItem("Turbo PyMuPDF", "turbo")
+        self._engine_combo.addItem("Turbo libre aislado", "turbo")
         self._engine_combo.setToolTip(
-            "Rapido visual usa Ghostscript /printer; Turbo usa PyMuPDF aislado para recomprimir imagenes."
+            "Rapido visual usa Ghostscript /printer; Turbo usa un proceso aislado con el backend libre."
         )
         self._engine_combo.currentIndexChanged.connect(self._sync_profile_desc)
         card_layout(engine_card).addWidget(self._engine_combo)
@@ -1078,8 +1078,8 @@ class CompresorWindow(PipelineWindow):
     def _sync_profile_desc(self) -> None:
         profile = profile_for(self._profile_id())
         engines = [
-            "PyMuPDF interno",
-            "PyMuPDF turbo aislado",
+            "Motor interno libre",
+            "Turbo libre aislado",
             *self._available_optional_engine_labels(),
         ]
         engine_mode = self._engine_mode()
@@ -1110,8 +1110,8 @@ class CompresorWindow(PipelineWindow):
     def _engine_status_text(self) -> str:
         lines = [
             "Disponibilidad en esta PC:",
-            "PyMuPDF interno: disponible",
-            "PyMuPDF turbo aislado: disponible",
+            "Motor interno libre: disponible",
+            "Turbo libre aislado: disponible",
         ]
         if self._engine_status_loading and not self._engine_statuses:
             lines.append("Motores externos: detectando...")
@@ -1190,7 +1190,7 @@ class CompresorWindow(PipelineWindow):
             "fast",
             "turbo",
         }:
-            return "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
+            return "Las reglas por pagina requieren motor Automatico o Motor interno libre."
         missing = self._missing_selected_engine()
         if missing:
             return f"{missing} no esta disponible en esta PC."
@@ -1619,7 +1619,7 @@ def _prepare_compress_jobs(
         "turbo",
     }:
         raise RuntimeError(
-            "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
+            "Las reglas por pagina requieren motor Automatico o Motor interno libre."
         )
     if request.options.dpi_target is not None and request.options.dpi_threshold is not None:
         if request.options.dpi_target >= request.options.dpi_threshold:

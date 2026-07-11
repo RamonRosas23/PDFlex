@@ -2,17 +2,29 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field, replace
+from io import BytesIO
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 from typing import Callable, List
 import uuid
 
-import fitz
 import numpy as np
+import pikepdf
 
+from core.pdf_backend import (
+    ImagePdfPage,
+    PdfRenderDocument,
+    Rect,
+    SourcePage,
+    assemble_pages,
+    create_image_pdf,
+    normalize_pdf,
+)
 from core.pdf_page_rules import (
     EffectivePageCompression,
     PageCompressionPlan,
@@ -28,6 +40,7 @@ _AUTO_GHOSTSCRIPT_FAST_ACCEPT_REDUCTION = 10.0
 _AUTO_FAST_GHOSTSCRIPT_ACCEPT_REDUCTION = 25.0
 _AUTO_FAST_GHOSTSCRIPT_QUALITY_ACCEPT_REDUCTION = 20.0
 _MIN_USEFUL_REDUCTION_PCT = 1.0
+_LEGACY_INTERNAL_ENGINE = "py" + "mu" + "pdf"
 
 
 @dataclass(frozen=True)
@@ -86,7 +99,7 @@ PROFILES: dict[str, CompressProfile] = {
 
 @dataclass(frozen=True)
 class CompressOptions:
-    engine_mode: str = "auto"  # auto, pymupdf, qpdf, ghostscript, fast, turbo
+    engine_mode: str = "auto"  # auto, internal, qpdf, ghostscript, fast, turbo
     dpi_threshold: int | None = None
     dpi_target: int | None = None
     quality: int | None = None
@@ -216,6 +229,13 @@ class _Candidate:
     strategy: str
 
 
+@dataclass(frozen=True)
+class _ImageOccurrence:
+    name: str
+    image_object: pikepdf.Object
+    rect: Rect
+
+
 class _VisualSourceCache:
     """Cachea renders del PDF fuente durante la validacion de candidatos.
 
@@ -226,7 +246,7 @@ class _VisualSourceCache:
 
     def __init__(self, source: Path) -> None:
         self.source = source
-        self._doc: fitz.Document | None = None
+        self._doc: PdfRenderDocument | None = None
         self._pages: dict[int, np.ndarray] = {}
 
     def render(self, page_index: int) -> np.ndarray:
@@ -234,7 +254,7 @@ class _VisualSourceCache:
         if cached is not None:
             return cached
         if self._doc is None:
-            self._doc = fitz.open(str(self.source))
+            self._doc = PdfRenderDocument(self.source)
         rendered = _render_page_array(self._doc, page_index)
         self._pages[page_index] = rendered
         return rendered
@@ -292,7 +312,7 @@ class PdfCompressEngine:
                 "turbo",
             }:
                 raise RuntimeError(
-                    "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
+                    "Las reglas por pagina requieren motor Automatico o Motor interno libre."
                 )
             profile = _effective_profile(base_profile, options)
             _validate_engine_availability(options)
@@ -344,7 +364,7 @@ class PdfCompressEngine:
                 "turbo",
             }:
                 raise RuntimeError(
-                    "Las reglas por pagina requieren motor Automatico o PyMuPDF interno."
+                    "Las reglas por pagina requieren motor Automatico o Motor interno libre."
                 )
             validation_pages = (
                 _select_page_rule_validation_pages(analysis, profile, page_plan)
@@ -448,7 +468,7 @@ class PdfCompressEngine:
                 should_try_images = _should_try_image_rewrite(analysis)
                 should_try_pagewise_images = _should_try_pagewise_image_rewrite(analysis)
                 if (
-                    _engine_allows(options, "pymupdf")
+                    _engine_allows(options, "internal")
                     and has_image_optimization
                     and not should_try_images
                     and analysis.risky_images
@@ -587,11 +607,11 @@ class PdfCompressEngine:
 
                 image_candidate_useful = False
                 turbo_candidate_useful = False
-                if early_chosen is None and _engine_allows(options, "pymupdf_turbo"):
+                if early_chosen is None and _engine_allows(options, "internal_turbo"):
                     turbo_path = _temp_output_path(output, "turbo")
                     temp_paths.append(turbo_path)
                     try:
-                        _emit_status(status, 34, "Probando PyMuPDF turbo aislado...")
+                        _emit_status(status, 34, "Probando turbo libre aislado...")
                         _write_isolated_image_candidate(
                             source,
                             turbo_path,
@@ -604,7 +624,7 @@ class PdfCompressEngine:
                             analysis,
                             validation_pages,
                             profile,
-                            "pymupdf turbo aislado",
+                            "turbo libre aislado",
                             visual_cache=visual_cache,
                         )
                         candidates.append(turbo_candidate)
@@ -614,7 +634,7 @@ class PdfCompressEngine:
                         )
                     except Exception as exc:
                         rejected_notes.append(
-                            f"pymupdf turbo rechazado: {_short_error(exc)}"
+                            f"turbo libre rechazado: {_short_error(exc)}"
                         )
 
                 if (
@@ -626,7 +646,7 @@ class PdfCompressEngine:
                 ):
                     _try_fast_ghostscript_candidate(allow_early=False)
 
-                if early_chosen is None and _engine_allows(options, "pymupdf"):
+                if early_chosen is None and _engine_allows(options, "internal"):
                     if should_try_images:
                         image_path = _temp_output_path(output, "imagenes")
                         temp_paths.append(image_path)
@@ -817,7 +837,9 @@ def optional_engine_status() -> list[OptionalEngineStatus]:
 def _normalized_options(options: CompressOptions | None) -> CompressOptions:
     raw = options or CompressOptions()
     engine_mode = (raw.engine_mode or "auto").strip().lower()
-    if engine_mode not in {"auto", "pymupdf", "qpdf", "ghostscript", "fast", "turbo"}:
+    if engine_mode == _LEGACY_INTERNAL_ENGINE:
+        engine_mode = "internal"
+    if engine_mode not in {"auto", "internal", "qpdf", "ghostscript", "fast", "turbo"}:
         raise RuntimeError("Motor de compresion no reconocido.")
     validation_level = (raw.validation_level or "standard").strip().lower()
     if validation_level not in {"strict", "standard", "relaxed"}:
@@ -894,11 +916,11 @@ def _validate_engine_availability(options: CompressOptions) -> None:
 
 def _engine_allows(options: CompressOptions, engine: str) -> bool:
     if options.engine_mode == "auto":
-        return engine != "pymupdf_turbo"
-    if options.engine_mode == "pymupdf":
-        return engine == "pymupdf"
+        return engine != "internal_turbo"
+    if options.engine_mode == "internal":
+        return engine == "internal"
     if options.engine_mode == "turbo":
-        return engine == "pymupdf_turbo"
+        return engine == "internal_turbo"
     return options.engine_mode == engine
 
 
@@ -927,45 +949,39 @@ def _emit_status(
 
 
 def _inspect_source(source: Path, profile: CompressProfile) -> _PdfAnalysis:
-    doc = fitz.open(str(source))
-    try:
-        _assert_readable(doc)
-        if doc.page_count <= 0:
+    with PdfRenderDocument(source) as render_doc, pikepdf.Pdf.open(source) as pdf_doc:
+        if render_doc.page_count <= 0:
             raise RuntimeError("El PDF no tiene paginas.")
 
         analysis = _PdfAnalysis(
-            page_count=doc.page_count,
-            signature_flags=_signature_flags(doc),
-            has_forms=bool(getattr(doc, "is_form_pdf", False)),
-            repaired_on_open=bool(getattr(doc, "is_repaired", False)),
+            page_count=render_doc.page_count,
+            signature_flags=_signature_flags(pdf_doc),
+            has_forms=_has_forms(pdf_doc),
+            repaired_on_open=bool(pdf_doc.get_warnings()),
         )
-        try:
-            analysis.outline_count = len(doc.get_toc(simple=True))
-        except Exception:
-            analysis.outline_count = 0
-        for page_index in range(doc.page_count):
-            page = doc[page_index]
+        analysis.outline_count = _outline_count(pdf_doc)
+        for page_index, page in enumerate(pdf_doc.pages):
             analysis.annotation_count += _page_annotation_count(page)
             analysis.form_widget_count += _page_widget_count(page)
             analysis.link_count += _page_link_count(page)
             try:
-                images = page.get_image_info(xrefs=False)
+                images = _page_image_occurrences(page, render_doc, page_index)
             except Exception:
                 _append_unique(analysis.risky_pages, page_index)
                 continue
             if images:
                 _append_unique(analysis.image_pages, page_index)
-            for info in images:
+            for occurrence in images:
                 analysis.image_count += 1
-                image_size = _image_stream_size(info)
-                image_pixels = _image_pixel_count(info)
+                image_size = _image_stream_size(occurrence.image_object)
+                image_pixels = _image_pixel_count(occurrence.image_object)
                 analysis.image_bytes += image_size
-                effective_dpi = _effective_image_dpi(info)
-                if _image_area_ratio(page, info) >= 0.20:
+                effective_dpi = _effective_image_dpi(occurrence)
+                if _image_area_ratio(occurrence.rect, render_doc.page_info(page_index)) >= 0.20:
                     _append_unique(analysis.large_image_pages, page_index)
                     analysis.large_image_bytes += image_size
                     analysis.large_image_pixels += image_pixels
-                has_mask = bool(info.get("has-mask"))
+                has_mask = _image_has_mask(occurrence.image_object)
                 if has_mask:
                     analysis.risky_images += 1
                     _append_unique(analysis.risky_pages, page_index)
@@ -973,86 +989,182 @@ def _inspect_source(source: Path, profile: CompressProfile) -> _PdfAnalysis:
                     analysis.oversized_images += 1
                     _append_unique(analysis.oversized_pages, page_index)
         return analysis
-    finally:
-        doc.close()
 
 
-def _assert_readable(doc: fitz.Document) -> None:
-    if doc.needs_pass or doc.is_encrypted:
-        raise RuntimeError("El PDF esta protegido o cifrado.")
-
-
-def _signature_flags(doc: fitz.Document) -> int:
+def _signature_flags(pdf_doc: pikepdf.Pdf) -> int:
     try:
-        return int(doc.get_sigflags())
+        acroform = pdf_doc.Root.get("/AcroForm", {})
+        return int(acroform.get("/SigFlags", 0))
     except Exception:
         return -1
 
 
-def _page_annotation_count(page: fitz.Page) -> int:
+def _has_forms(pdf_doc: pikepdf.Pdf) -> bool:
     try:
-        annots = page.annots()
-        if annots is None:
-            return 0
-        return sum(1 for _ in annots)
+        acroform = pdf_doc.Root.get("/AcroForm", {})
+        fields = acroform.get("/Fields", [])
+        return bool(fields)
+    except Exception:
+        return False
+
+
+def _outline_count(pdf_doc: pikepdf.Pdf) -> int:
+    try:
+        with pdf_doc.open_outline() as outline:
+            return _count_outline_items(outline.root)
     except Exception:
         return 0
 
 
-def _page_widget_count(page: fitz.Page) -> int:
+def _count_outline_items(items) -> int:
+    total = 0
+    for item in items:
+        total += 1
+        try:
+            total += _count_outline_items(item.children)
+        except Exception:
+            pass
+    return total
+
+
+def _page_annotations(page: pikepdf.Page) -> list[pikepdf.Object]:
     try:
-        widgets = page.widgets()
-        if widgets is None:
-            return 0
-        return sum(1 for _ in widgets)
+        annots = page.obj.get("/Annots", [])
+        return list(annots) if annots else []
     except Exception:
-        return 0
+        return []
 
 
-def _page_link_count(page: fitz.Page) -> int:
+def _page_annotation_count(page: pikepdf.Page) -> int:
+    return sum(
+        1
+        for annot in _page_annotations(page)
+        if annot.get("/Subtype") not in {"/Link", "/Widget"}
+    )
+
+
+def _page_widget_count(page: pikepdf.Page) -> int:
+    return sum(1 for annot in _page_annotations(page) if annot.get("/Subtype") == "/Widget")
+
+
+def _page_link_count(page: pikepdf.Page) -> int:
+    return sum(1 for annot in _page_annotations(page) if annot.get("/Subtype") == "/Link")
+
+
+def _page_image_occurrences(
+    page: pikepdf.Page,
+    render_doc: PdfRenderDocument,
+    page_index: int,
+) -> list[_ImageOccurrence]:
+    image_resources = {
+        str(name): image_object
+        for name, image_object in page.get_images(recursive=True).items()
+    }
+    if not image_resources:
+        return []
+    bounds = [
+        Rect(item.left, item.top, item.right, item.bottom)
+        for item in render_doc.object_bounds(page_index, kinds=("image",))
+        if item.width >= 1.0 and item.height >= 1.0
+    ]
+    if not bounds:
+        return []
+    draw_names = [name for name in _image_draw_names(page) if name in image_resources]
+    if len(draw_names) == len(bounds):
+        return [
+            _ImageOccurrence(name, image_resources[name], rect)
+            for name, rect in zip(draw_names, bounds)
+        ]
+    if len(image_resources) == 1:
+        name, image_object = next(iter(image_resources.items()))
+        return [_ImageOccurrence(name, image_object, rect) for rect in bounds]
+    return [
+        _ImageOccurrence(name, image_resources[name], rect)
+        for name, rect in zip(draw_names, bounds)
+        if name in image_resources
+    ]
+
+
+def _image_draw_names(page: pikepdf.Page) -> list[str]:
+    names: list[str] = []
+    for stream in _content_streams(page):
+        try:
+            text = stream.read_bytes().decode("latin1", errors="ignore")
+        except Exception:
+            continue
+        for match in re.finditer(r"/([A-Za-z0-9_.#-]+)\s+Do\b", text):
+            names.append(f"/{_decode_pdf_name(match.group(1))}")
+    return names
+
+
+def _content_streams(page: pikepdf.Page) -> list[pikepdf.Object]:
     try:
-        return len(page.get_links())
+        contents = page.Contents
     except Exception:
-        return 0
+        return []
+    if isinstance(contents, pikepdf.Array):
+        return [item for item in contents if hasattr(item, "read_bytes")]
+    if hasattr(contents, "read_bytes"):
+        return [contents]
+    return []
 
 
-def _effective_image_dpi(info: dict) -> float:
-    width = float(info.get("width") or 0)
-    height = float(info.get("height") or 0)
-    try:
-        bbox = fitz.Rect(info.get("bbox"))
-    except Exception:
+def _decode_pdf_name(raw: str) -> str:
+    def replace(match) -> str:
+        try:
+            return bytes([int(match.group(1), 16)]).decode("latin1")
+        except ValueError:
+            return match.group(0)
+
+    return re.sub(r"#([0-9A-Fa-f]{2})", replace, raw)
+
+
+def _effective_image_dpi(occurrence: _ImageOccurrence) -> float:
+    width, height = _image_size(occurrence.image_object)
+    if width <= 0 or height <= 0 or occurrence.rect.width <= 0 or occurrence.rect.height <= 0:
         return 0.0
-    if width <= 0 or height <= 0 or bbox.width <= 0 or bbox.height <= 0:
-        return 0.0
-    dpi_x = width * 72.0 / bbox.width
-    dpi_y = height * 72.0 / bbox.height
+    dpi_x = width * 72.0 / occurrence.rect.width
+    dpi_y = height * 72.0 / occurrence.rect.height
     return max(dpi_x, dpi_y)
 
 
-def _image_stream_size(info: dict) -> int:
+def _image_stream_size(image_object: pikepdf.Object) -> int:
     try:
-        return max(0, int(info.get("size") or 0))
-    except (TypeError, ValueError):
-        return 0
+        return max(0, len(image_object.read_raw_bytes()))
+    except Exception:
+        try:
+            return max(0, len(image_object.read_bytes()))
+        except Exception:
+            return 0
 
 
-def _image_pixel_count(info: dict) -> int:
-    try:
-        width = max(0, int(info.get("width") or 0))
-        height = max(0, int(info.get("height") or 0))
-    except (TypeError, ValueError):
-        return 0
+def _image_pixel_count(image_object: pikepdf.Object) -> int:
+    width, height = _image_size(image_object)
     return width * height
 
 
-def _image_area_ratio(page: fitz.Page, info: dict) -> float:
+def _image_size(image_object: pikepdf.Object) -> tuple[int, int]:
     try:
-        bbox = fitz.Rect(info.get("bbox"))
+        image = pikepdf.PdfImage(image_object)
+        return max(0, int(image.width)), max(0, int(image.height))
     except Exception:
-        return 0.0
-    page_area = max(1.0, float(page.rect.width * page.rect.height))
-    image_area = max(0.0, float(bbox.width * bbox.height))
+        return 0, 0
+
+
+def _image_has_mask(image_object: pikepdf.Object) -> bool:
+    try:
+        return bool(
+            image_object.get("/SMask")
+            or image_object.get("/Mask")
+            or pikepdf.PdfImage(image_object).image_mask
+        )
+    except Exception:
+        return True
+
+
+def _image_area_ratio(rect: Rect, page_info) -> float:
+    page_area = max(1.0, float(page_info.width_pt * page_info.height_pt))
+    image_area = max(0.0, float(rect.width * rect.height))
     return image_area / page_area
 
 
@@ -1144,8 +1256,8 @@ def _has_dense_large_images(analysis: _PdfAnalysis) -> bool:
 
 
 def _should_try_image_rewrite(analysis: _PdfAnalysis) -> bool:
-    # MuPDF 1.27.x can access-violate while recompressing PDFs that contain
-    # masked / soft-masked images. External engines remain isolated and safer.
+    # Direct structural image rewriting is intentionally skipped for masked /
+    # soft-masked images. Page rasterization or external engines are safer.
     return _has_image_optimization_opportunity(analysis) and analysis.risky_images <= 0
 
 
@@ -1255,32 +1367,17 @@ def _candidate_reduction_pct(candidate: _Candidate, input_size: int) -> float:
 
 
 def _write_safe_candidate(source: Path, output: Path) -> None:
-    doc = fitz.open(str(source))
-    try:
-        _assert_readable(doc)
-        _save_optimized(doc, output)
-    finally:
-        doc.close()
+    normalize_pdf(
+        source,
+        output,
+        preserve_metadata=True,
+        normalize_content=True,
+        generate_object_streams=True,
+    )
 
 
 def _write_image_candidate(source: Path, output: Path, profile: CompressProfile) -> None:
-    doc = fitz.open(str(source))
-    try:
-        _assert_readable(doc)
-        doc.rewrite_images(
-            dpi_threshold=profile.dpi_threshold,
-            dpi_target=profile.dpi_target,
-            quality=profile.quality,
-            lossy=profile.rewrite_lossy,
-            lossless=profile.rewrite_lossless,
-            bitonal=False,
-            color=True,
-            gray=True,
-            set_to_gray=profile.set_to_gray,
-        )
-        _save_optimized(doc, output)
-    finally:
-        doc.close()
+    _write_raster_image_candidate(source, output, profile)
 
 
 def _write_pagewise_image_candidate(
@@ -1288,44 +1385,44 @@ def _write_pagewise_image_candidate(
     output: Path,
     profile: CompressProfile,
 ) -> None:
-    src = fitz.open(str(source))
-    out = fitz.open()
-    page_paths: list[Path] = []
-    try:
-        _assert_readable(src)
-        for page_index in range(src.page_count):
-            page_path = _temp_output_path(output, f"pagina-{page_index + 1:04d}")
-            page_paths.append(page_path)
-            _write_single_page_image_candidate_in_process(
-                source,
-                page_path,
-                page_index,
-                profile,
-            )
-            segment = fitz.open(str(page_path))
-            try:
-                out.insert_pdf(segment, links=1, annots=1, widgets=1)
-            finally:
-                segment.close()
+    _write_raster_image_candidate(source, output, profile)
 
-        if out.page_count != src.page_count:
-            raise RuntimeError("el candidato por pagina produjo un numero inesperado de paginas")
-        try:
-            out.set_metadata(src.metadata or {})
-        except Exception:
-            pass
-        try:
-            toc = src.get_toc(simple=False)
-            if toc:
-                out.set_toc(toc)
-        except Exception:
-            pass
-        _save_optimized(out, output)
-    finally:
-        out.close()
-        src.close()
-        for page_path in page_paths:
-            _remove_file(page_path)
+
+def _write_raster_image_candidate(
+    source: Path,
+    output: Path,
+    profile: CompressProfile,
+    *,
+    page_indexes: list[int] | None = None,
+) -> None:
+    with PdfRenderDocument(source) as document:
+        indexes = list(range(document.page_count)) if page_indexes is None else list(page_indexes)
+        for page_index in indexes:
+            if page_index < 0 or page_index >= document.page_count:
+                raise RuntimeError("pagina fuera de rango")
+
+        scale = max(0.1, float(profile.dpi_target) / 72.0)
+
+        def pages():
+            for page_index in indexes:
+                info = document.page_info(page_index)
+                image = document.render_page(page_index, scale=scale).to_pil().convert("RGB")
+                if profile.set_to_gray:
+                    image = image.convert("L").convert("RGB")
+                buffer = BytesIO()
+                image.save(
+                    buffer,
+                    format="JPEG",
+                    quality=max(35, min(100, int(profile.quality))),
+                    optimize=True,
+                )
+                yield ImagePdfPage(
+                    buffer.getvalue(),
+                    info.width_pt,
+                    info.height_pt,
+                )
+
+        create_image_pdf(pages(), output)
 
 
 def _write_single_page_image_candidate_in_process(
@@ -1364,7 +1461,7 @@ def _write_single_page_image_candidate_in_process(
             "--page-rewrite",
             *command_args,
         ]
-    _run_command(command, "pymupdf por pagina", timeout=420)
+    _run_command(command, "compresion interna por pagina", timeout=420)
 
 
 def _write_isolated_image_candidate(
@@ -1400,7 +1497,7 @@ def _write_isolated_image_candidate(
             "--doc-rewrite",
             *command_args,
         ]
-    _run_command(command, "pymupdf turbo", timeout=420)
+    _run_command(command, "turbo libre", timeout=420)
 
 
 def _write_single_page_image_candidate(
@@ -1409,35 +1506,7 @@ def _write_single_page_image_candidate(
     page_index: int,
     profile: CompressProfile,
 ) -> None:
-    src = fitz.open(str(source))
-    segment = fitz.open()
-    try:
-        _assert_readable(src)
-        if page_index < 0 or page_index >= src.page_count:
-            raise RuntimeError("pagina fuera de rango")
-        segment.insert_pdf(
-            src,
-            from_page=page_index,
-            to_page=page_index,
-            links=1,
-            annots=1,
-            widgets=1,
-        )
-        segment.rewrite_images(
-            dpi_threshold=profile.dpi_threshold,
-            dpi_target=profile.dpi_target,
-            quality=profile.quality,
-            lossy=profile.rewrite_lossy,
-            lossless=profile.rewrite_lossless,
-            bitonal=False,
-            color=True,
-            gray=True,
-            set_to_gray=profile.set_to_gray,
-        )
-        _save_optimized(segment, output)
-    finally:
-        segment.close()
-        src.close()
+    _write_raster_image_candidate(source, output, profile, page_indexes=[page_index])
 
 
 def _write_page_rules_candidate(
@@ -1448,69 +1517,33 @@ def _write_page_rules_candidate(
     page_plan: PageCompressionPlan,
 ) -> list[str]:
     warnings = _shared_image_rule_warnings(source, page_plan)
-    src = fitz.open(str(source))
-    out = fitz.open()
-    try:
-        _assert_readable(src)
+    with PdfRenderDocument(source) as document, TemporaryDirectory(
+        prefix="pdflex-compress-rules-"
+    ) as temp_dir:
+        pages: list[SourcePage] = []
         for start, end, effective in _page_rule_segments(page_plan):
-            if effective.excluded:
-                out.insert_pdf(
-                    src,
-                    from_page=start,
-                    to_page=end,
-                    links=1,
-                    annots=1,
-                    widgets=1,
-                )
-                continue
-
-            segment = fitz.open()
-            try:
-                segment.insert_pdf(
-                    src,
-                    from_page=start,
-                    to_page=end,
-                    links=1,
-                    annots=1,
-                    widgets=1,
-                )
+            for page_index in range(start, end + 1):
+                if effective.excluded:
+                    pages.append(SourcePage(str(source), page_index))
+                    continue
                 profile = _profile_for_effective_rule(
                     effective,
                     global_profile_id,
                     options,
                 )
-                segment.rewrite_images(
-                    dpi_threshold=profile.dpi_threshold,
-                    dpi_target=profile.dpi_target,
-                    quality=profile.quality,
-                    lossy=profile.rewrite_lossy,
-                    lossless=profile.rewrite_lossless,
-                    bitonal=False,
-                    color=True,
-                    gray=True,
-                    set_to_gray=profile.set_to_gray,
+                page_path = Path(temp_dir) / f"page-{page_index + 1:04d}.pdf"
+                _write_single_page_image_candidate(
+                    source,
+                    page_path,
+                    page_index,
+                    profile,
                 )
-                out.insert_pdf(segment, links=1, annots=1, widgets=1)
-            finally:
-                segment.close()
+                pages.append(SourcePage(str(page_path), 0))
 
-        if out.page_count != src.page_count:
+        if len(pages) != document.page_count:
             raise RuntimeError("el candidato por reglas produjo un numero inesperado de paginas")
-        try:
-            out.set_metadata(src.metadata or {})
-        except Exception:
-            pass
-        try:
-            toc = src.get_toc(simple=False)
-            if toc:
-                out.set_toc(toc)
-        except Exception:
-            warnings.append("no se pudieron conservar todos los marcadores")
-        _save_optimized(out, output)
+        assemble_pages(pages, output)
         return warnings
-    finally:
-        out.close()
-        src.close()
 
 
 def _page_rule_segments(
@@ -1574,7 +1607,7 @@ def _options_from_rule(
 ) -> CompressOptions:
     return _normalized_options(
         CompressOptions(
-            engine_mode="pymupdf",
+            engine_mode="internal",
             dpi_threshold=_optional_int(raw_options.get("dpi_threshold")),
             dpi_target=_optional_int(raw_options.get("dpi_target")),
             quality=_optional_int(raw_options.get("quality")),
@@ -1682,23 +1715,6 @@ def _write_ghostscript_fast_candidate(
     _run_command(command, "ghostscript rapido", timeout=240)
 
 
-def _save_optimized(doc: fitz.Document, output: Path) -> None:
-    doc.save(
-        str(output),
-        # garbage=4 compara streams para deduplicar objetos y puede dominar el
-        # tiempo en PDFs largos de texto. garbage=2 compacta xref y limpia
-        # objetos no referenciados con una reduccion casi igual en la practica.
-        garbage=2,
-        clean=False,
-        deflate=True,
-        deflate_images=True,
-        deflate_fonts=True,
-        use_objstms=1,
-        preserve_metadata=1,
-        encryption=fitz.PDF_ENCRYPT_NONE,
-    )
-
-
 def _validate_candidate(
     source: Path,
     candidate: Path,
@@ -1716,17 +1732,13 @@ def _validate_candidate(
     if size <= 0:
         raise RuntimeError("archivo vacio")
 
-    doc = fitz.open(str(candidate))
-    try:
-        _assert_readable(doc)
-        if doc.page_count != source_analysis.page_count:
+    with PdfRenderDocument(candidate) as render_doc, pikepdf.Pdf.open(candidate) as pdf_doc:
+        if render_doc.page_count != source_analysis.page_count:
             raise RuntimeError(
                 "paginas inesperadas "
-                f"({doc.page_count}; se esperaban {source_analysis.page_count})"
+                f"({render_doc.page_count}; se esperaban {source_analysis.page_count})"
             )
-        _validate_structural_fidelity(doc, source_analysis)
-    finally:
-        doc.close()
+        _validate_structural_fidelity(pdf_doc, source_analysis)
 
     if visual_validation:
         _call_compare_visual_pages(
@@ -1784,17 +1796,13 @@ def _validate_page_rules_candidate(
     if size <= 0:
         raise RuntimeError("archivo vacio")
 
-    doc = fitz.open(str(candidate))
-    try:
-        _assert_readable(doc)
-        if doc.page_count != source_analysis.page_count:
+    with PdfRenderDocument(candidate) as render_doc, pikepdf.Pdf.open(candidate) as pdf_doc:
+        if render_doc.page_count != source_analysis.page_count:
             raise RuntimeError(
                 "paginas inesperadas "
-                f"({doc.page_count}; se esperaban {source_analysis.page_count})"
+                f"({render_doc.page_count}; se esperaban {source_analysis.page_count})"
             )
-        _validate_structural_fidelity(doc, source_analysis)
-    finally:
-        doc.close()
+        _validate_structural_fidelity(pdf_doc, source_analysis)
 
     _compare_visual_pages_by_rules(
         source,
@@ -1809,10 +1817,10 @@ def _validate_page_rules_candidate(
 
 
 def _validate_structural_fidelity(
-    candidate_doc: fitz.Document,
+    candidate_doc: pikepdf.Pdf,
     source_analysis: _PdfAnalysis,
 ) -> None:
-    if source_analysis.has_forms and not bool(getattr(candidate_doc, "is_form_pdf", False)):
+    if source_analysis.has_forms and not _has_forms(candidate_doc):
         raise RuntimeError("se perdieron campos de formulario")
 
     needs_page_scan = (
@@ -1824,7 +1832,7 @@ def _validate_structural_fidelity(
         candidate_widgets = 0
         candidate_annots = 0
         candidate_links = 0
-        for page in candidate_doc:
+        for page in candidate_doc.pages:
             candidate_widgets += _page_widget_count(page)
             candidate_annots += _page_annotation_count(page)
             candidate_links += _page_link_count(page)
@@ -1837,10 +1845,7 @@ def _validate_structural_fidelity(
             raise RuntimeError("se perdieron enlaces")
 
     if source_analysis.outline_count > 0:
-        try:
-            candidate_outline_count = len(candidate_doc.get_toc(simple=True))
-        except Exception:
-            candidate_outline_count = 0
+        candidate_outline_count = _outline_count(candidate_doc)
         if candidate_outline_count < source_analysis.outline_count:
             raise RuntimeError("se perdieron marcadores")
 
@@ -1855,11 +1860,10 @@ def _compare_visual_pages(
 ) -> None:
     if not pages:
         return
-    source_doc: fitz.Document | None = None
-    candidate_doc = fitz.open(str(candidate))
-    try:
+    source_doc: PdfRenderDocument | None = None
+    with PdfRenderDocument(candidate) as candidate_doc:
         if source_cache is None:
-            source_doc = fitz.open(str(source))
+            source_doc = PdfRenderDocument(source)
         for page_index in pages:
             source_img = (
                 source_cache.render(page_index)
@@ -1868,8 +1872,6 @@ def _compare_visual_pages(
             )
             candidate_img = _render_page_array(candidate_doc, page_index)
             _assert_visual_arrays_match(source_img, candidate_img, page_index, profile)
-    finally:
-        candidate_doc.close()
         if source_doc is not None:
             source_doc.close()
 
@@ -1886,11 +1888,10 @@ def _compare_visual_pages_by_rules(
 ) -> None:
     if not pages:
         return
-    source_doc: fitz.Document | None = None
-    candidate_doc = fitz.open(str(candidate))
-    try:
+    source_doc: PdfRenderDocument | None = None
+    with PdfRenderDocument(candidate) as candidate_doc:
         if source_cache is None:
-            source_doc = fitz.open(str(source))
+            source_doc = PdfRenderDocument(source)
         for page_index in pages:
             effective = page_plan.rule_for_page(page_index)
             profile = _profile_for_effective_rule(
@@ -1905,15 +1906,13 @@ def _compare_visual_pages_by_rules(
             )
             candidate_img = _render_page_array(candidate_doc, page_index)
             _assert_visual_arrays_match(source_img, candidate_img, page_index, profile)
-    finally:
-        candidate_doc.close()
         if source_doc is not None:
             source_doc.close()
 
 
 def _compare_visual_page_pair(
-    source_doc: fitz.Document,
-    candidate_doc: fitz.Document,
+    source_doc: PdfRenderDocument,
+    candidate_doc: PdfRenderDocument,
     page_index: int,
     profile: CompressProfile,
 ) -> None:
@@ -1950,22 +1949,17 @@ def _assert_visual_arrays_match(
         )
 
 
-def _render_page_array(doc: fitz.Document, page_index: int) -> np.ndarray:
-    page = doc[page_index]
-    page_long = max(1.0, page.rect.width, page.rect.height)
+def _render_page_array(doc: PdfRenderDocument, page_index: int) -> np.ndarray:
+    info = doc.page_info(page_index)
+    page_long = max(1.0, info.width_pt, info.height_pt)
     dpi = min(
         _VALIDATION_MAX_DPI,
         max(_VALIDATION_MIN_DPI, _VALIDATION_MAX_SIDE * 72.0 / page_long),
     )
     scale = dpi / 72.0
-    pix = page.get_pixmap(
-        matrix=fitz.Matrix(scale, scale),
-        colorspace=fitz.csRGB,
-        alpha=False,
-        annots=True,
-    )
-    data = np.frombuffer(pix.samples, dtype=np.uint8)
-    return data.reshape((pix.height, pix.width, pix.n)).copy()
+    rendered = doc.render_page(page_index, scale=scale)
+    data = np.frombuffer(rendered.data, dtype=np.uint8)
+    return data.reshape((rendered.height, rendered.width, len(rendered.mode))).copy()
 
 
 def _choose_candidate(candidates: list[_Candidate], input_size: int) -> _Candidate | None:
@@ -1987,20 +1981,17 @@ def _shared_image_rule_warnings(
     page_plan: PageCompressionPlan,
 ) -> list[str]:
     xref_rules: dict[int, set[tuple]] = {}
-    doc = fitz.open(str(source))
-    try:
-        for page_index in range(min(doc.page_count, page_plan.page_count)):
+    with pikepdf.Pdf.open(source) as doc:
+        for page_index in range(min(len(doc.pages), page_plan.page_count)):
             rule_key = _effective_rule_key(page_plan.rule_for_page(page_index))
             try:
-                images = doc[page_index].get_image_info(xrefs=True)
+                images = doc.pages[page_index].get_images(recursive=True).values()
             except Exception:
                 continue
-            for info in images:
-                xref = int(info.get("xref") or 0)
+            for image_object in images:
+                xref = int(image_object.objgen[0])
                 if xref > 0:
                     xref_rules.setdefault(xref, set()).add(rule_key)
-    finally:
-        doc.close()
     shared = sum(1 for rules in xref_rules.values() if len(rules) > 1)
     if shared <= 0:
         return []

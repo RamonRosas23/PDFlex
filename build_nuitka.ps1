@@ -196,9 +196,9 @@ if ($SkipBuild) {
     $nuitkaVer = & $VenvPython -m nuitka --version 2>&1 | Select-Object -First 1
     Ok "Nuitka: $nuitkaVer"
 
-    & $VenvPython -c "import cv2, fitz, numpy, PIL; from PySide6 import QtCore, QtGui, QtSvg, QtWidgets; print(cv2.__version__, QtCore.qVersion())" 2>$null | Out-Null
+    & $VenvPython -c "import cv2, numpy, PIL, pikepdf, pypdfium2; from PySide6 import QtCore, QtGui, QtSvg, QtWidgets; print(cv2.__version__, QtCore.qVersion())" 2>$null | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        Err "El entorno de build no puede importar OpenCV/PyMuPDF/Numpy/Pillow/PySide6."
+        Err "El entorno de build no puede importar OpenCV/Numpy/Pillow/PDFium/pikepdf/PySide6."
     }
     Ok "Motores visuales OpenCV/PySide6: OK"
 }
@@ -352,7 +352,7 @@ if (Test-Path $tdDest) {
 # sin QPDF/Ghostscript instalados. Coloca distribuciones aprobadas en:
 #   tools\qpdf\...
 #   tools\ghostscript\...
-# El motor tambien funciona sin ellos, usando PyMuPDF interno.
+# El motor tambien funciona sin ellos, usando el backend interno libre.
 Copy-OptionalPdfEngine `
     -Name "QPDF" `
     -SourceCandidates @(

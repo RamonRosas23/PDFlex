@@ -376,7 +376,7 @@ TOOLS: List[ToolDescriptor] = [
         description_md=(
             "**¿Qué hace?**\n"
             "Genera copias normalizadas de PDFs para mejorar compatibilidad "
-            "y recuperar documentos con estructura dañada cuando MuPDF pueda abrirlos.\n\n"
+            "y recuperar documentos con estructura dañada cuando el backend PDF pueda abrirlos.\n\n"
             "**Características:**\n"
             "- Reescritura con limpieza interna, garbage y deflate\n"
             "- Perfil de compatibilidad sin object streams\n"

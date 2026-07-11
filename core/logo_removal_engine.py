@@ -3,12 +3,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from io import BytesIO
+import os
 from pathlib import Path
+import re
+from tempfile import TemporaryDirectory
 from typing import Callable, Iterable, List, Sequence
+import uuid
 
-import fitz
 import numpy as np
+import pikepdf
 from PIL import Image, ImageDraw
+from reportlab.pdfgen.canvas import Canvas
+
+from core.pdf_backend import PdfRenderDocument, Rect
 
 try:
     import cv2
@@ -57,8 +64,8 @@ class LogoMatch:
     method: str
 
     @property
-    def rect(self) -> fitz.Rect:
-        return fitz.Rect(self.x0, self.y0, self.x1, self.y1)
+    def rect(self) -> Rect:
+        return Rect(self.x0, self.y0, self.x1, self.y1)
 
 
 @dataclass
@@ -93,6 +100,13 @@ class _PreparedLogo:
     gray: np.ndarray
     alpha: np.ndarray
     aspect: float
+
+
+@dataclass(frozen=True)
+class _PageImageOccurrence:
+    name: str
+    image_object: pikepdf.Object
+    rect: Rect
 
 
 class LogoRemovalEngine:
@@ -140,61 +154,58 @@ class LogoRemovalEngine:
         source = Path(job.pdf_path)
         output = Path(job.output_path)
         output.parent.mkdir(parents=True, exist_ok=True)
-        doc: fitz.Document | None = None
 
         try:
             self._validate_job(job)
             logos = _load_logos(job.logo_paths)
-            doc = fitz.open(str(source))
-            if doc.needs_pass:
-                raise RuntimeError("El PDF está protegido o cifrado.")
-            if doc.page_count <= 0:
-                raise RuntimeError("El PDF no tiene páginas.")
+            with PdfRenderDocument(source) as render_doc, pikepdf.Pdf.open(source) as pdf_doc:
+                if render_doc.page_count <= 0:
+                    raise RuntimeError("El PDF no tiene páginas.")
 
-            page_indexes = parse_page_selection(
-                job.options.page_scope,
-                job.options.custom_pages,
-                doc.page_count,
-            )
-            all_matches: list[LogoMatch] = []
-            for page_position, page_index in enumerate(page_indexes, start=1):
-                if should_cancel and should_cancel():
-                    raise _CancelledError()
-                if page_progress:
-                    page_progress(page_position, len(page_indexes))
-                matches = self.detect_page(
-                    doc,
-                    page_index,
-                    logos,
+                page_indexes = parse_page_selection(
+                    job.options.page_scope,
+                    job.options.custom_pages,
+                    render_doc.page_count,
+                )
+                all_matches: list[LogoMatch] = []
+                for page_position, page_index in enumerate(page_indexes, start=1):
+                    if should_cancel and should_cancel():
+                        raise _CancelledError()
+                    if page_progress:
+                        page_progress(page_position, len(page_indexes))
+                    matches = self.detect_page(
+                        pdf_doc,
+                        render_doc,
+                        page_index,
+                        logos,
+                        job.options,
+                        should_cancel=should_cancel,
+                    )
+                    all_matches.extend(matches)
+
+                grouped = _group_matches(all_matches)
+                changed_pages = self._apply_matches(
+                    pdf_doc,
+                    render_doc,
+                    grouped,
                     job.options,
                     should_cancel=should_cancel,
                 )
-                all_matches.extend(matches)
+                _save_pdf_atomic(pdf_doc, output)
 
-            grouped = _group_matches(all_matches)
-            changed_pages = 0
-            for page_index, matches in grouped.items():
-                if should_cancel and should_cancel():
-                    raise _CancelledError()
-                page = doc[page_index]
-                applied = self._apply_matches(page, matches, job.options)
-                if applied:
-                    changed_pages += 1
-
-            doc.save(str(output), garbage=4, clean=True, deflate=True)
-            embedded = sum(match.method == "embedded" for match in all_matches)
-            visual = sum(match.method == "visual" for match in all_matches)
-            return LogoRemovalResult(
-                job=job,
-                output_path=str(output),
-                success=True,
-                total_pages=doc.page_count,
-                scanned_pages=len(page_indexes),
-                pages_changed=changed_pages,
-                match_count=len(all_matches),
-                embedded_matches=embedded,
-                visual_matches=visual,
-            )
+                embedded = sum(match.method == "embedded" for match in all_matches)
+                visual = sum(match.method == "visual" for match in all_matches)
+                return LogoRemovalResult(
+                    job=job,
+                    output_path=str(output),
+                    success=True,
+                    total_pages=render_doc.page_count,
+                    scanned_pages=len(page_indexes),
+                    pages_changed=changed_pages,
+                    match_count=len(all_matches),
+                    embedded_matches=embedded,
+                    visual_matches=visual,
+                )
         except _CancelledError:
             return LogoRemovalResult(
                 job=job,
@@ -209,16 +220,11 @@ class LogoRemovalEngine:
                 success=False,
                 error=str(exc) or type(exc).__name__,
             )
-        finally:
-            if doc is not None:
-                try:
-                    doc.close()
-                except Exception:
-                    pass
 
     def detect_page(
         self,
-        doc: fitz.Document,
+        pdf_doc: pikepdf.Pdf,
+        render_doc: PdfRenderDocument,
         page_index: int,
         logos: Sequence[_PreparedLogo],
         options: LogoRemovalOptions,
@@ -227,16 +233,15 @@ class LogoRemovalEngine:
     ) -> list[LogoMatch]:
         if should_cancel and should_cancel():
             raise _CancelledError()
-        if page_index < 0 or page_index >= doc.page_count:
+        if page_index < 0 or page_index >= render_doc.page_count:
             return []
-        page = doc[page_index]
         matches: list[LogoMatch] = []
 
         if options.detection_mode in {"hybrid", "embedded"}:
             matches.extend(
                 self._detect_embedded(
-                    doc,
-                    page,
+                    pdf_doc,
+                    render_doc,
                     page_index,
                     logos,
                     options,
@@ -251,7 +256,7 @@ class LogoRemovalEngine:
                 visual = []
             elif options.detection_mode == "visual":
                 visual = self._detect_visual(
-                    page,
+                    render_doc,
                     page_index,
                     logos,
                     options,
@@ -265,18 +270,18 @@ class LogoRemovalEngine:
                 if missing_logos:
                     visual.extend(
                         self._detect_visual(
-                            page,
+                            render_doc,
                             page_index,
                             missing_logos,
                             options,
                             should_cancel=should_cancel,
                         )
                     )
-                container_rect = _hybrid_container_rect(page, matches)
+                container_rect = _hybrid_container_rect(pdf_doc, render_doc, page_index, matches)
                 if found_logos and container_rect is not None:
                     visual.extend(
                         self._detect_visual(
-                            page,
+                            render_doc,
                             page_index,
                             found_logos,
                             options,
@@ -302,27 +307,25 @@ class LogoRemovalEngine:
     ) -> tuple[Image.Image, list[LogoMatch], int]:
         self._validate_options(options)
         logos = _load_logos(logo_paths)
-        doc = fitz.open(pdf_path)
-        try:
-            if doc.needs_pass:
-                raise RuntimeError("El PDF está protegido o cifrado.")
-            if doc.page_count <= 0:
+        with PdfRenderDocument(pdf_path) as render_doc, pikepdf.Pdf.open(pdf_path) as pdf_doc:
+            if render_doc.page_count <= 0:
                 raise RuntimeError("El PDF no tiene páginas.")
-            page_index = max(0, min(int(page_index), doc.page_count - 1))
-            page = doc[page_index]
-            dpi = _bounded_dpi(page, options.render_dpi, max_side)
-            pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
-            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples).convert("RGBA")
+            page_index = max(0, min(int(page_index), render_doc.page_count - 1))
+            info = render_doc.page_info(page_index)
+            dpi = _bounded_dpi(info, options.render_dpi, max_side)
+            rendered = render_doc.render_page(page_index, scale=dpi / 72.0)
+            image = rendered.to_pil().convert("RGBA")
             matches = self.detect_page(
-                doc,
+                pdf_doc,
+                render_doc,
                 page_index,
                 logos,
                 options,
                 should_cancel=should_cancel,
             )
 
-            scale_x = image.width / max(1.0, page.rect.width)
-            scale_y = image.height / max(1.0, page.rect.height)
+            scale_x = image.width / max(1.0, info.width_pt)
+            scale_y = image.height / max(1.0, info.height_pt)
             draw = ImageDraw.Draw(image, "RGBA")
             for match in matches:
                 rect = (
@@ -343,14 +346,12 @@ class LogoRemovalEngine:
                     fill=color,
                 )
                 draw.text((rect[0] + 4, label_y + 3), label, fill=(8, 10, 12, 255))
-            return image, matches, doc.page_count
-        finally:
-            doc.close()
+            return image, matches, render_doc.page_count
 
     def _detect_embedded(
         self,
-        doc: fitz.Document,
-        page: fitz.Page,
+        pdf_doc: pikepdf.Pdf,
+        render_doc: PdfRenderDocument,
         page_index: int,
         logos: Sequence[_PreparedLogo],
         options: LogoRemovalOptions,
@@ -358,63 +359,68 @@ class LogoRemovalEngine:
         should_cancel: Callable[[], bool] | None = None,
     ) -> list[LogoMatch]:
         matches: list[LogoMatch] = []
-        seen_xrefs: set[int] = set()
+        candidates_by_object: dict[tuple[int, int], _PreparedLogo] = {}
+        scores_by_object: dict[tuple[int, int], tuple[_PreparedLogo, float]] = {}
         threshold = max(0.68, options.similarity - 0.09)
 
-        for info in page.get_images(full=True):
+        for occurrence in _page_image_occurrences(pdf_doc, render_doc, page_index):
             if should_cancel and should_cancel():
                 raise _CancelledError()
-            xref = int(info[0])
-            smask = int(info[1]) if len(info) > 1 else 0
-            if xref <= 0 or xref in seen_xrefs:
-                continue
-            seen_xrefs.add(xref)
+            object_id = tuple(int(part) for part in occurrence.image_object.objgen)
             try:
-                candidate = _prepare_logo_image(_extract_pdf_image(doc, xref, smask), f"xref:{xref}")
+                candidate = candidates_by_object.get(object_id)
+                if candidate is None:
+                    candidate = _prepare_logo_image(
+                        _extract_pdf_image(occurrence.image_object),
+                        f"xref:{object_id[0]}",
+                    )
+                    candidates_by_object[object_id] = candidate
             except Exception:
                 continue
 
-            best_logo: _PreparedLogo | None = None
-            best_score = 0.0
-            for logo in logos:
-                score = _image_similarity(candidate, logo)
-                if score > best_score:
-                    best_score = score
-                    best_logo = logo
+            best = scores_by_object.get(object_id)
+            if best is None:
+                best_logo: _PreparedLogo | None = None
+                best_score = 0.0
+                for logo in logos:
+                    score = _image_similarity(candidate, logo)
+                    if score > best_score:
+                        best_score = score
+                        best_logo = logo
+                if best_logo is None:
+                    continue
+                best = (best_logo, best_score)
+                scores_by_object[object_id] = best
+            best_logo, best_score = best
             if best_logo is None or best_score < threshold:
                 continue
 
-            try:
-                rects = page.get_image_rects(xref, transform=False)
-            except Exception:
-                rects = []
-            for rect in rects:
-                display_rect = _native_rect_to_display(page, fitz.Rect(rect))
-                clipped = display_rect & page.rect
-                if clipped.width < 1.0 or clipped.height < 1.0:
-                    continue
-                matches.append(
-                    LogoMatch(
-                        page_index=page_index,
-                        x0=clipped.x0,
-                        y0=clipped.y0,
-                        x1=clipped.x1,
-                        y1=clipped.y1,
-                        confidence=min(1.0, best_score),
-                        logo_path=best_logo.path,
-                        method="embedded",
-                    )
+            info = render_doc.page_info(page_index)
+            clipped = _clip_rect(occurrence.rect, _page_rect(info))
+            if clipped.width < 1.0 or clipped.height < 1.0:
+                continue
+            matches.append(
+                LogoMatch(
+                    page_index=page_index,
+                    x0=clipped.x0,
+                    y0=clipped.y0,
+                    x1=clipped.x1,
+                    y1=clipped.y1,
+                    confidence=min(1.0, best_score),
+                    logo_path=best_logo.path,
+                    method="embedded",
                 )
+            )
         return matches
 
     def _detect_visual(
         self,
-        page: fitz.Page,
+        render_doc: PdfRenderDocument,
         page_index: int,
         logos: Sequence[_PreparedLogo],
         options: LogoRemovalOptions,
         *,
-        search_rect: fitz.Rect | None = None,
+        search_rect: Rect | None = None,
         should_cancel: Callable[[], bool] | None = None,
     ) -> list[LogoMatch]:
         if cv2 is None:
@@ -422,34 +428,46 @@ class LogoRemovalEngine:
                 "La detección visual requiere OpenCV. Reinstala PDFlex para completar la dependencia."
             )
 
-        dpi = _bounded_dpi(page, options.render_dpi, 1700)
-        pix = page.get_pixmap(matrix=fitz.Matrix(dpi / 72.0, dpi / 72.0), alpha=False)
-        page_rgb = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+        info = render_doc.page_info(page_index)
+        page_rect = _page_rect(info)
+        dpi = _bounded_dpi(info, options.render_dpi, 1700)
+        rendered = render_doc.render_page(page_index, scale=dpi / 72.0)
+        page_rgb = np.frombuffer(rendered.data, dtype=np.uint8).reshape(
+            rendered.height,
+            rendered.width,
+            len(rendered.mode),
+        )
         page_rgb = page_rgb[:, :, :3].copy()
         offset_x = 0
         offset_y = 0
-        full_width = pix.width
+        full_width = rendered.width
         if search_rect is not None:
-            clipped = fitz.Rect(search_rect) & page.rect
+            clipped = _clip_rect(search_rect, page_rect)
             if clipped.width < 2.0 or clipped.height < 2.0:
                 return []
-            offset_x = max(0, int(np.floor(clipped.x0 / page.rect.width * pix.width)))
-            offset_y = max(0, int(np.floor(clipped.y0 / page.rect.height * pix.height)))
-            crop_x1 = min(pix.width, int(np.ceil(clipped.x1 / page.rect.width * pix.width)))
-            crop_y1 = min(pix.height, int(np.ceil(clipped.y1 / page.rect.height * pix.height)))
+            offset_x = max(0, int(np.floor(clipped.x0 / page_rect.width * rendered.width)))
+            offset_y = max(0, int(np.floor(clipped.y0 / page_rect.height * rendered.height)))
+            crop_x1 = min(
+                rendered.width,
+                int(np.ceil(clipped.x1 / page_rect.width * rendered.width)),
+            )
+            crop_y1 = min(
+                rendered.height,
+                int(np.ceil(clipped.y1 / page_rect.height * rendered.height)),
+            )
             page_rgb = page_rgb[offset_y:crop_y1, offset_x:crop_x1]
             if page_rgb.shape[0] < 8 or page_rgb.shape[1] < 8:
                 return []
         page_gray = cv2.cvtColor(page_rgb, cv2.COLOR_RGB2GRAY)
         page_edges = cv2.Canny(page_gray, 50, 150)
-        scale_x = page.rect.width / max(1, pix.width)
-        scale_y = page.rect.height / max(1, pix.height)
+        scale_x = page_rect.width / max(1, rendered.width)
+        scale_y = page_rect.height / max(1, rendered.height)
         threshold = max(0.60, min(0.995, options.similarity))
         required_score = 0.60 + (threshold - 0.50) * 0.60
         candidates: list[LogoMatch] = []
 
         region_height, region_width = page_gray.shape[:2]
-        coarse_scale = min(1.0, 760.0 / max(pix.width, pix.height))
+        coarse_scale = min(1.0, 760.0 / max(rendered.width, rendered.height))
         coarse_size = (
             max(1, round(region_width * coarse_scale)),
             max(1, round(region_height * coarse_scale)),
@@ -590,39 +608,66 @@ class LogoRemovalEngine:
 
     def _apply_matches(
         self,
-        page: fitz.Page,
-        matches: Sequence[LogoMatch],
+        pdf_doc: pikepdf.Pdf,
+        render_doc: PdfRenderDocument,
+        grouped: dict[int, list[LogoMatch]],
         options: LogoRemovalOptions,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> int:
-        applied = 0
-        fill = (1.0, 1.0, 1.0) if options.fill_mode == "white" else None
-        for match in matches:
-            rect = fitz.Rect(match.rect)
-            if options.padding_pt:
-                rect += (
-                    -options.padding_pt,
-                    -options.padding_pt,
-                    options.padding_pt,
-                    options.padding_pt,
-                )
-            rect &= page.rect
-            if rect.width < 1.0 or rect.height < 1.0:
-                continue
-            native_rect = _display_rect_for_page(page, rect)
-            page.add_redact_annot(native_rect, fill=fill, cross_out=False)
-            applied += 1
+        changed_pages = 0
+        visual_overlays: dict[int, list[Rect]] = {}
 
-        if applied:
-            page.apply_redactions(
-                images=fitz.PDF_REDACT_IMAGE_PIXELS,
-                graphics=(
-                    fitz.PDF_REDACT_LINE_ART_REMOVE_IF_COVERED
-                    if options.remove_vector_graphics
-                    else fitz.PDF_REDACT_LINE_ART_NONE
-                ),
-                text=fitz.PDF_REDACT_TEXT_NONE,
-            )
-        return applied
+        for page_index, matches in sorted(grouped.items()):
+            if should_cancel and should_cancel():
+                raise _CancelledError()
+            if not 0 <= page_index < render_doc.page_count:
+                continue
+            page = pdf_doc.pages[page_index]
+            embedded = [match for match in matches if match.method == "embedded"]
+            visual = [match for match in matches if match.method == "visual"]
+            page_changed = False
+
+            if embedded:
+                occurrences = _page_image_occurrences(pdf_doc, render_doc, page_index)
+                names = _matched_resource_names_from_occurrences(occurrences, embedded)
+                if names:
+                    page_changed = _remove_image_draws(page, names) or page_changed
+                    try:
+                        page.remove_unreferenced_resources()
+                    except Exception:
+                        pass
+                unresolved = [
+                    match for match in embedded
+                    if not any(
+                        _rect_iou(match.rect, occurrence.rect) >= 0.42
+                        and occurrence.name in names
+                        for occurrence in occurrences
+                    )
+                ]
+                # If a complex content stream cannot be edited structurally,
+                # still make the visual result correct. Simple XObject logo
+                # pages are removed above and keep searchable text.
+                visual.extend(unresolved)
+
+            if visual:
+                info = render_doc.page_info(page_index)
+                page_rect = _page_rect(info)
+                rects = [
+                    _clip_rect(_expand_rect(match.rect, options.padding_pt), page_rect)
+                    for match in visual
+                ]
+                rects = [rect for rect in rects if rect.width >= 1.0 and rect.height >= 1.0]
+                if rects:
+                    visual_overlays.setdefault(page_index, []).extend(rects)
+                    page_changed = True
+
+            if page_changed:
+                changed_pages += 1
+
+        if visual_overlays:
+            _apply_white_overlays(pdf_doc, render_doc, visual_overlays)
+        return changed_pages
 
     def _validate_job(self, job: LogoRemovalJob) -> None:
         if not Path(job.pdf_path).exists():
@@ -761,21 +806,15 @@ def _crop_logo_content(image: Image.Image) -> Image.Image:
     return cropped.crop((x0, y0, x1, y1))
 
 
-def _extract_pdf_image(doc: fitz.Document, xref: int, smask: int) -> Image.Image:
-    base_info = doc.extract_image(xref)
-    if not base_info or not base_info.get("image"):
-        raise ValueError("No se pudo extraer la imagen embebida.")
-    base = Image.open(BytesIO(base_info["image"])).convert("RGBA")
-    if smask > 0:
-        try:
-            mask_info = doc.extract_image(smask)
-            mask = Image.open(BytesIO(mask_info["image"])).convert("L")
-            if mask.size != base.size:
-                mask = mask.resize(base.size, Image.Resampling.LANCZOS)
-            base.putalpha(mask)
-        except Exception:
-            pass
-    return base
+def _extract_pdf_image(image_object: pikepdf.Object) -> Image.Image:
+    image = pikepdf.PdfImage(image_object)
+    try:
+        return image.as_pil_image().convert("RGBA")
+    except Exception:
+        buffer = BytesIO()
+        image.extract_to(stream=buffer)
+        buffer.seek(0)
+        return Image.open(buffer).convert("RGBA")
 
 
 def _image_similarity(first: _PreparedLogo, second: _PreparedLogo) -> float:
@@ -967,11 +1006,11 @@ def _nms_pixel_candidates(
     kept: list[tuple[float, int, int, int, int]] = []
     for candidate in sorted(candidates, key=lambda item: item[0], reverse=True):
         _, x, y, width, height = candidate
-        rect = fitz.Rect(x, y, x + width, y + height)
+        rect = Rect(x, y, x + width, y + height)
         if any(
             _rect_iou(
                 rect,
-                fitz.Rect(other_x, other_y, other_x + other_w, other_y + other_h),
+                Rect(other_x, other_y, other_x + other_w, other_y + other_h),
             )
             >= 0.36
             for _, other_x, other_y, other_w, other_h in kept
@@ -992,53 +1031,45 @@ def _geometric_widths(min_width: int, max_width: int, count: int) -> list[int]:
     return sorted({max(8, int(round(value))) for value in values})
 
 
-def _bounded_dpi(page: fitz.Page, requested: int, max_side: int) -> float:
-    page_long = max(1.0, page.rect.width, page.rect.height)
+def _bounded_dpi(page_info, requested: int, max_side: int) -> float:
+    page_long = max(1.0, float(page_info.width_pt), float(page_info.height_pt))
     limit = max_side * 72.0 / page_long
     return max(72.0, min(float(requested), limit))
 
 
 def _hybrid_container_rect(
-    page: fitz.Page,
+    pdf_doc: pikepdf.Pdf,
+    render_doc: PdfRenderDocument,
+    page_index: int,
     embedded_matches: Sequence[LogoMatch],
-) -> fitz.Rect | None:
+) -> Rect | None:
     """Return the union of large images that may contain extra rasterized logos."""
     if not embedded_matches:
         return None
     base_width = max(match.rect.width for match in embedded_matches)
     base_height = max(match.rect.height for match in embedded_matches)
-    base_area = max(match.rect.get_area() for match in embedded_matches)
-    regions: list[fitz.Rect] = []
-    seen_xrefs: set[int] = set()
-    for info in page.get_images(full=True):
-        xref = int(info[0])
-        if xref <= 0 or xref in seen_xrefs:
+    base_area = max(_rect_area(match.rect) for match in embedded_matches)
+    regions: list[Rect] = []
+    for occurrence in _page_image_occurrences(pdf_doc, render_doc, page_index):
+        rect = occurrence.rect
+        if rect.width < 2.0 or rect.height < 2.0:
             continue
-        seen_xrefs.add(xref)
-        try:
-            rects = page.get_image_rects(xref, transform=False)
-        except Exception:
+        if any(_rect_iou(rect, match.rect) >= 0.38 for match in embedded_matches):
             continue
-        for raw_rect in rects:
-            rect = _native_rect_to_display(page, fitz.Rect(raw_rect)) & page.rect
-            if rect.width < 2.0 or rect.height < 2.0:
-                continue
-            if any(_rect_iou(rect, match.rect) >= 0.38 for match in embedded_matches):
-                continue
-            is_container = (
-                rect.get_area() >= base_area * 3.0
-                or rect.width >= base_width * 2.0
-                or rect.height >= base_height * 2.0
-            )
-            if is_container:
-                regions.append(rect)
+        is_container = (
+            _rect_area(rect) >= base_area * 3.0
+            or rect.width >= base_width * 2.0
+            or rect.height >= base_height * 2.0
+        )
+        if is_container:
+            regions.append(rect)
     if not regions:
         return None
-    union = fitz.Rect(regions[0])
+    union = regions[0]
     for rect in regions[1:]:
-        union.include_rect(rect)
-    union += (-2.0, -2.0, 2.0, 2.0)
-    return union & page.rect
+        union = _union_rect(union, rect)
+    info = render_doc.page_info(page_index)
+    return _clip_rect(_expand_rect(union, 2.0), _page_rect(info))
 
 
 def _group_matches(matches: Sequence[LogoMatch]) -> dict[int, list[LogoMatch]]:
@@ -1054,7 +1085,7 @@ def _deduplicate_matches(matches: Sequence[LogoMatch]) -> list[LogoMatch]:
         key=lambda item: (
             item.method == "embedded",
             item.confidence,
-            item.rect.get_area(),
+            _rect_area(item.rect),
         ),
         reverse=True,
     )
@@ -1070,48 +1101,284 @@ def _deduplicate_matches(matches: Sequence[LogoMatch]) -> list[LogoMatch]:
     return kept
 
 
-def _rect_iou(first: fitz.Rect, second: fitz.Rect) -> float:
-    intersection = first & second
+def _page_image_occurrences(
+    pdf_doc: pikepdf.Pdf,
+    render_doc: PdfRenderDocument,
+    page_index: int,
+) -> list[_PageImageOccurrence]:
+    page = pdf_doc.pages[page_index]
+    try:
+        image_resources = {
+            str(name): image_object
+            for name, image_object in page.get_images(recursive=True).items()
+        }
+    except Exception:
+        image_resources = {}
+    if not image_resources:
+        return []
+
+    bounds = [
+        Rect(item.left, item.top, item.right, item.bottom)
+        for item in render_doc.object_bounds(page_index, kinds=("image",))
+        if item.width >= 1.0 and item.height >= 1.0
+    ]
+    if not bounds:
+        return []
+
+    draw_names = [
+        name for name in _image_draw_names(page)
+        if name in image_resources
+    ]
+    occurrences: list[_PageImageOccurrence] = []
+    if len(draw_names) == len(bounds):
+        for name, rect in zip(draw_names, bounds):
+            occurrences.append(_PageImageOccurrence(name, image_resources[name], rect))
+        return occurrences
+
+    if len(image_resources) == 1:
+        name, image_object = next(iter(image_resources.items()))
+        return [_PageImageOccurrence(name, image_object, rect) for rect in bounds]
+
+    for name, rect in zip(draw_names, bounds):
+        image_object = image_resources.get(name)
+        if image_object is not None:
+            occurrences.append(_PageImageOccurrence(name, image_object, rect))
+    return occurrences
+
+
+def _image_draw_names(page: pikepdf.Page) -> list[str]:
+    names: list[str] = []
+    for contents in _content_streams(page):
+        try:
+            text = contents.read_bytes().decode("latin1", errors="ignore")
+        except Exception:
+            continue
+        names.extend(
+            f"/{_decode_pdf_name(match.group(1))}"
+            for match in re.finditer(r"/([A-Za-z0-9_.#-]+)\s+Do\b", text)
+        )
+    return names
+
+
+def _matched_resource_names_from_occurrences(
+    occurrences: Sequence[_PageImageOccurrence],
+    matches: Sequence[LogoMatch],
+) -> set[str]:
+    names: set[str] = set()
+    for match in matches:
+        best: _PageImageOccurrence | None = None
+        best_score = 0.0
+        for occurrence in occurrences:
+            score = _rect_iou(match.rect, occurrence.rect)
+            if score > best_score:
+                best = occurrence
+                best_score = score
+        if best is not None and best_score >= 0.42:
+            names.add(best.name)
+    if not names and len(occurrences) == 1 and matches:
+        names.add(occurrences[0].name)
+    return names
+
+
+def _remove_image_draws(page: pikepdf.Page, resource_names: set[str]) -> bool:
+    if not resource_names:
+        return False
+    changed = False
+    for contents in _content_streams(page):
+        try:
+            original = contents.read_bytes().decode("latin1", errors="ignore")
+        except Exception:
+            continue
+        updated = _remove_image_draw_blocks(original, resource_names)
+        if updated != original:
+            contents.write(updated.encode("latin1"), filter=pikepdf.Name("/FlateDecode"))
+            changed = True
+    return changed
+
+
+def _remove_image_draw_blocks(content: str, resource_names: set[str]) -> str:
+    token_re = re.compile(r"/([A-Za-z0-9_.#-]+)\s+Do\b|(?<![/A-Za-z0-9_.#-])(q|Q)(?![A-Za-z0-9_.#-])")
+    stack: list[list[int | bool]] = []
+    ranges: list[tuple[int, int]] = []
+    standalone: list[tuple[int, int]] = []
+
+    for match in token_re.finditer(content):
+        operator = match.group(2)
+        if operator == "q":
+            stack.append([match.start(), False])
+            continue
+        if operator == "Q":
+            if stack:
+                start, targeted = stack.pop()
+                if targeted:
+                    ranges.append((int(start), match.end()))
+            continue
+        raw_name = match.group(1)
+        if raw_name is None:
+            continue
+        name = f"/{_decode_pdf_name(raw_name)}"
+        if name not in resource_names:
+            continue
+        if stack:
+            stack[-1][1] = True
+        else:
+            standalone.append(_line_range(content, match.start(), match.end()))
+
+    ranges.extend(standalone)
+    if not ranges:
+        return content
+
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(ranges):
+        start, end = _expand_to_line(content, start, end)
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+
+    pieces: list[str] = []
+    cursor = 0
+    for start, end in merged:
+        pieces.append(content[cursor:start])
+        cursor = end
+    pieces.append(content[cursor:])
+    return "".join(pieces)
+
+
+def _content_streams(page: pikepdf.Page) -> list[pikepdf.Object]:
+    try:
+        contents = page.Contents
+    except Exception:
+        return []
+    if isinstance(contents, pikepdf.Array):
+        return [item for item in contents if hasattr(item, "read_bytes")]
+    if hasattr(contents, "read_bytes"):
+        return [contents]
+    return []
+
+
+def _decode_pdf_name(raw: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        try:
+            return bytes([int(match.group(1), 16)]).decode("latin1")
+        except ValueError:
+            return match.group(0)
+
+    return re.sub(r"#([0-9A-Fa-f]{2})", replace, raw)
+
+
+def _line_range(content: str, start: int, end: int) -> tuple[int, int]:
+    line_start = content.rfind("\n", 0, start) + 1
+    line_end = content.find("\n", end)
+    if line_end < 0:
+        line_end = len(content)
+    else:
+        line_end += 1
+    return line_start, line_end
+
+
+def _expand_to_line(content: str, start: int, end: int) -> tuple[int, int]:
+    while start > 0 and content[start - 1] in " \t\r\n":
+        start -= 1
+        if start == 0 or content[start - 1] == "\n":
+            break
+    while end < len(content) and content[end] in " \t\r\n":
+        end += 1
+        if end >= len(content) or content[end - 1] == "\n":
+            break
+    return start, end
+
+
+def _apply_white_overlays(
+    pdf_doc: pikepdf.Pdf,
+    render_doc: PdfRenderDocument,
+    overlays: dict[int, list[Rect]],
+) -> None:
+    with TemporaryDirectory(prefix="pdflex-logo-overlay-") as temp_dir:
+        overlay_path = Path(temp_dir) / "overlay.pdf"
+        canvas = Canvas(str(overlay_path), pagesize=(1, 1), pageCompression=1)
+        mapping: dict[int, int] = {}
+        for overlay_index, (page_index, rects) in enumerate(sorted(overlays.items())):
+            info = render_doc.page_info(page_index)
+            canvas.setPageSize((info.width_pt, info.height_pt))
+            canvas.setFillColorRGB(1, 1, 1)
+            canvas.setStrokeColorRGB(1, 1, 1)
+            for rect in rects:
+                canvas.rect(
+                    rect.x0,
+                    info.height_pt - rect.y1,
+                    rect.width,
+                    rect.height,
+                    stroke=0,
+                    fill=1,
+                )
+            canvas.showPage()
+            mapping[page_index] = overlay_index
+        canvas.save()
+        with pikepdf.Pdf.open(overlay_path) as overlay_doc:
+            for page_index, overlay_index in mapping.items():
+                pdf_doc.pages[page_index].add_overlay(overlay_doc.pages[overlay_index])
+
+
+def _save_pdf_atomic(document: pikepdf.Pdf, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(f".{output.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        document.save(
+            temporary,
+            compress_streams=True,
+            recompress_flate=True,
+            object_stream_mode=pikepdf.ObjectStreamMode.generate,
+        )
+        os.replace(temporary, output)
+    finally:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _page_rect(page_info) -> Rect:
+    return Rect(0.0, 0.0, float(page_info.width_pt), float(page_info.height_pt))
+
+
+def _rect_iou(first: Rect, second: Rect) -> float:
+    intersection = _intersect_rect(first, second)
     if intersection.is_empty:
         return 0.0
-    union = first.get_area() + second.get_area() - intersection.get_area()
-    return intersection.get_area() / max(1e-6, union)
+    union = _rect_area(first) + _rect_area(second) - _rect_area(intersection)
+    return _rect_area(intersection) / max(1e-6, union)
 
 
-def _display_rect_for_page(page: fitz.Page, rect: fitz.Rect) -> fitz.Rect:
-    if not int(page.rotation) % 360:
-        return rect
-    matrix = page.derotation_matrix
-    points = [
-        fitz.Point(rect.x0, rect.y0) * matrix,
-        fitz.Point(rect.x1, rect.y0) * matrix,
-        fitz.Point(rect.x0, rect.y1) * matrix,
-        fitz.Point(rect.x1, rect.y1) * matrix,
-    ]
-    return fitz.Rect(
-        min(point.x for point in points),
-        min(point.y for point in points),
-        max(point.x for point in points),
-        max(point.y for point in points),
+def _rect_area(rect: Rect) -> float:
+    return max(0.0, rect.width) * max(0.0, rect.height)
+
+
+def _intersect_rect(first: Rect, second: Rect) -> Rect:
+    return Rect(
+        max(first.x0, second.x0),
+        max(first.y0, second.y0),
+        min(first.x1, second.x1),
+        min(first.y1, second.y1),
     )
 
 
-def _native_rect_to_display(page: fitz.Page, rect: fitz.Rect) -> fitz.Rect:
-    if not int(page.rotation) % 360:
-        return rect
-    matrix = page.rotation_matrix
-    points = [
-        fitz.Point(rect.x0, rect.y0) * matrix,
-        fitz.Point(rect.x1, rect.y0) * matrix,
-        fitz.Point(rect.x0, rect.y1) * matrix,
-        fitz.Point(rect.x1, rect.y1) * matrix,
-    ]
-    return fitz.Rect(
-        min(point.x for point in points),
-        min(point.y for point in points),
-        max(point.x for point in points),
-        max(point.y for point in points),
+def _union_rect(first: Rect, second: Rect) -> Rect:
+    return Rect(
+        min(first.x0, second.x0),
+        min(first.y0, second.y0),
+        max(first.x1, second.x1),
+        max(first.y1, second.y1),
     )
+
+
+def _clip_rect(rect: Rect, bounds: Rect) -> Rect:
+    return _intersect_rect(rect, bounds)
+
+
+def _expand_rect(rect: Rect, padding: float) -> Rect:
+    pad = max(0.0, float(padding))
+    return Rect(rect.x0 - pad, rect.y0 - pad, rect.x1 + pad, rect.y1 + pad)
 
 
 class _CancelledError(Exception):

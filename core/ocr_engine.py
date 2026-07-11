@@ -2,7 +2,7 @@
 
 La estrategia privilegia precision y trazabilidad:
   - conserva texto nativo cuando la pagina ya tiene una capa confiable;
-  - renderiza y reconoce escaneos con Tesseract integrado en PyMuPDF;
+  - renderiza con PDFium y reconoce escaneos con Tesseract local;
   - compara una pasada original y otra mejorada para rescatar escaneos debiles;
   - prueba rotaciones adicionales cuando la lectura inicial parece pobre;
   - exporta una transcripcion editable en Word y/o TXT.
@@ -15,15 +15,19 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Callable, Iterable, List, Literal, Optional
 import os
 import re
+import shutil
+import subprocess
 import sys
 import unicodedata
 
-import fitz
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
+
+from core.pdf_backend import PdfRenderDocument, pdf_page_count
 
 from .output_naming import output_stem_for_source
 
@@ -171,6 +175,40 @@ def get_tessdata_dir() -> Path:
     return candidates[-1]
 
 
+def get_tesseract_executable() -> Optional[Path]:
+    """Busca un ejecutable Tesseract local o instalado en PATH."""
+    override = os.environ.get("PDFLEX_TESSERACT", "").strip()
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override))
+
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        candidates.extend([
+            Path(meipass) / "tesseract" / "tesseract.exe",
+            Path(meipass) / "assets" / "tesseract" / "tesseract.exe",
+        ])
+    elif getattr(sys, "frozen", False):
+        exe_dir = Path(sys.executable).parent
+        candidates.extend([
+            exe_dir / "tesseract" / "tesseract.exe",
+            exe_dir / "assets" / "tesseract" / "tesseract.exe",
+        ])
+
+    root = Path(__file__).resolve().parents[1]
+    candidates.extend([
+        root / "assets" / "tesseract" / "tesseract.exe",
+        root / "tools" / "tesseract" / "tesseract.exe",
+    ])
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+
+    found = shutil.which("tesseract")
+    return Path(found) if found else None
+
+
 def available_languages() -> List[str]:
     """Lista de modelos OCR disponibles en la instalacion actual."""
 
@@ -216,29 +254,11 @@ def ocr_pdf_page_text(
     dpi: int = 220,
 ) -> str:
     """Reconoce una pagina y devuelve texto plano para consumidores ligeros."""
-    config = OcrConfig(
-        languages=languages,
-        dpi=dpi,
-        precision_mode="fast",
-        preserve_native_text=False,
-        enhance_scans=False,
-        recover_rotated_pages=False,
-        output_mode="txt",
-    )
-    with fitz.open(str(pdf_path)) as doc:
-        if not 0 <= page_index < doc.page_count:
+    with PdfRenderDocument(pdf_path) as document:
+        if not 0 <= page_index < document.page_count:
             raise IndexError("Pagina fuera de rango.")
-        pix = doc[page_index].get_pixmap(
-            dpi=config.dpi,
-            colorspace=fitz.csRGB,
-            alpha=False,
-        )
-    candidate = OcrEngine()._ocr_pixmap(
-        pix,
-        config,
-        variant="OCR / clasificador",
-    )
-    return candidate.text
+        image = document.render_page(page_index, scale=dpi / 72.0).to_pil()
+    return _tesseract_image_to_text(image, languages=languages)
 
 
 class OcrEngine:
@@ -300,7 +320,7 @@ class OcrEngine:
         should_cancel: Optional[Callable[[], bool]] = None,
     ) -> OcrJobResult:
         try:
-            doc = fitz.open(job.pdf_path)
+            doc = PdfRenderDocument(job.pdf_path)
         except Exception as exc:
             return OcrJobResult(job=job, success=False, error=str(exc))
 
@@ -324,9 +344,8 @@ class OcrEngine:
                         f"{Path(job.pdf_path).name}: analizando página {page_index + 1}/{total}",
                     )
 
-                page = doc[page_index]
                 pages.append(
-                    self._extract_page(page, page_index, config, should_cancel)
+                    self._extract_page(doc, page_index, config, should_cancel)
                 )
 
                 if progress:
@@ -379,22 +398,21 @@ class OcrEngine:
         total = 0
         for job in jobs:
             try:
-                with fitz.open(job.pdf_path) as doc:
-                    total += doc.page_count
+                total += pdf_page_count(job.pdf_path)
             except Exception:
                 total += 1
         return max(1, total)
 
     def _extract_page(
         self,
-        page: fitz.Page,
+        document: PdfRenderDocument,
         page_index: int,
         config: OcrConfig,
         should_cancel: Optional[Callable[[], bool]],
     ) -> OcrPageResult:
-        native_paragraphs = _extract_blocks(page)
+        native_paragraphs = _extract_blocks(document, page_index)
         native_text = _join_paragraphs(native_paragraphs)
-        image_coverage = _page_image_coverage(page)
+        image_coverage = _page_image_coverage(document, page_index)
 
         if (
             config.preserve_native_text
@@ -416,13 +434,11 @@ class OcrEngine:
         sideways_hint = (
             config.recover_rotated_pages
             and config.precision_mode != "fast"
-            and _page_looks_sideways(page)
+            and _page_looks_sideways(document, page_index)
         )
-        pix = page.get_pixmap(dpi=config.dpi, colorspace=fitz.csRGB, alpha=False)
-        image: Optional[Image.Image] = None
+        image = document.render_page(page_index, scale=config.dpi / 72.0).to_pil()
 
         if sideways_hint:
-            image = _pixmap_to_pil(pix)
             best: Optional[_ExtractionCandidate] = None
             for rotation in (90, 270):
                 if _is_cancelled(should_cancel):
@@ -434,20 +450,26 @@ class OcrEngine:
             if best is None or not _is_high_confidence(best.text, best.score):
                 best = _best_candidate(
                     best,
-                    self._ocr_pixmap(
-                        pix,
+                    self._ocr_image(
+                        image,
                         config,
+                        rotation=0,
+                        enhanced=False,
                         variant="OCR / imagen original",
                     ),
-                ) if best else self._ocr_pixmap(
-                    pix,
+                ) if best else self._ocr_image(
+                    image,
                     config,
+                    rotation=0,
+                    enhanced=False,
                     variant="OCR / imagen original",
                 )
         else:
-            best = self._ocr_pixmap(
-                pix,
+            best = self._ocr_image(
+                image,
                 config,
+                rotation=0,
+                enhanced=False,
                 variant="OCR / imagen original",
             )
 
@@ -458,8 +480,6 @@ class OcrEngine:
         ):
             if _is_cancelled(should_cancel):
                 raise _CancelledError
-            if image is None:
-                image = _pixmap_to_pil(pix)
             best = _best_candidate(
                 best,
                 self._ocr_image(
@@ -477,8 +497,6 @@ class OcrEngine:
             and _needs_rotation_recovery(best.text, best.score)
         )
         if should_try_rotation:
-            if image is None:
-                image = _pixmap_to_pil(pix)
             for rotation in (90, 270, 180):
                 if _is_cancelled(should_cancel):
                     raise _CancelledError
@@ -521,6 +539,7 @@ class OcrEngine:
         *,
         rotation: int,
         enhanced: bool,
+        variant: str = "",
     ) -> _ExtractionCandidate:
         prepared = image
         if rotation:
@@ -530,41 +549,16 @@ class OcrEngine:
 
         if prepared.mode != "RGB":
             prepared = prepared.convert("RGB")
-        pix = fitz.Pixmap(
-            fitz.csRGB,
-            prepared.width,
-            prepared.height,
-            prepared.tobytes(),
-            False,
-        )
-        parts = ["OCR"]
-        if enhanced:
-            parts.append("mejora de contraste")
-        if rotation:
-            parts.append(f"rotación {rotation} grados")
-        return self._ocr_pixmap(
-            pix,
-            config,
-            variant=" / ".join(parts),
-            rotation=rotation,
-        )
+        if not variant:
+            parts = ["OCR"]
+            if enhanced:
+                parts.append("mejora de contraste")
+            if rotation:
+                parts.append(f"rotación {rotation} grados")
+            variant = " / ".join(parts)
 
-    def _ocr_pixmap(
-        self,
-        pix: fitz.Pixmap,
-        config: OcrConfig,
-        *,
-        variant: str,
-        rotation: int = 0,
-    ) -> _ExtractionCandidate:
-        ocr_pdf = pix.pdfocr_tobytes(
-            language=config.languages,
-            tessdata=str(get_tessdata_dir()),
-            compress=True,
-        )
-
-        with fitz.open("pdf", ocr_pdf) as doc:
-            paragraphs = _extract_blocks(doc[0])
+        text = _tesseract_image_to_text(prepared, languages=config.languages)
+        paragraphs = _paragraphs_from_text(text)
         text = _join_paragraphs(paragraphs)
 
         return _ExtractionCandidate(
@@ -640,18 +634,12 @@ def _is_cancelled(callback: Optional[Callable[[], bool]]) -> bool:
     return bool(callback and callback())
 
 
-def _pixmap_to_pil(pix: fitz.Pixmap) -> Image.Image:
-    """Crea una imagen PIL solo cuando una variante secundaria la necesita."""
-
-    return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
-
-
-def _page_looks_sideways(page: fitz.Page) -> bool:
+def _page_looks_sideways(document: PdfRenderDocument, page_index: int) -> bool:
     """Detecta texto lateral con una miniatura barata antes de ejecutar OCR."""
 
     try:
-        pix = page.get_pixmap(dpi=72, colorspace=fitz.csGRAY, alpha=False)
-        gray = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
+        image = document.render_page(page_index, scale=1.0, grayscale=True).to_pil()
+        gray = np.asarray(image.convert("L"), dtype=np.uint8)
         ink = gray < 210
         if int(ink.sum()) < 120:
             return False
@@ -669,15 +657,10 @@ def _best_candidate(
     return candidate if candidate.score > current.score else current
 
 
-def _extract_blocks(page: fitz.Page) -> List[str]:
-    paragraphs: List[str] = []
-    for block in page.get_text("blocks", sort=True):
-        if len(block) < 5:
-            continue
-        text = _normalize_text(str(block[4]))
-        if text:
-            paragraphs.append(text)
-    return paragraphs
+def _extract_blocks(document: PdfRenderDocument, page_index: int) -> List[str]:
+    return _paragraphs_from_text_blocks(
+        block.text for block in document.text_blocks(page_index)
+    )
 
 
 def _normalize_text(text: str) -> str:
@@ -692,17 +675,72 @@ def _join_paragraphs(paragraphs: Iterable[str]) -> str:
     return "\n\n".join(part.strip() for part in paragraphs if part.strip()).strip()
 
 
-def _page_image_coverage(page: fitz.Page) -> float:
-    page_area = max(1.0, page.rect.width * page.rect.height)
+def _page_image_coverage(document: PdfRenderDocument, page_index: int) -> float:
+    info = document.page_info(page_index)
+    page_area = max(1.0, info.width_pt * info.height_pt)
     image_area = 0.0
     try:
-        for info in page.get_image_info():
-            rect = fitz.Rect(info.get("bbox", (0, 0, 0, 0)))
-            rect.intersect(page.rect)
-            image_area += max(0.0, rect.width) * max(0.0, rect.height)
+        for bounds in document.object_bounds(page_index, kinds=("image",)):
+            width = max(0.0, min(bounds.right, info.width_pt) - max(bounds.left, 0.0))
+            height = max(0.0, min(bounds.bottom, info.height_pt) - max(bounds.top, 0.0))
+            image_area += width * height
     except Exception:
         return 0.0
     return min(1.0, image_area / page_area)
+
+
+def _paragraphs_from_text(text: str) -> List[str]:
+    return _paragraphs_from_text_blocks(text.splitlines())
+
+
+def _paragraphs_from_text_blocks(blocks: Iterable[str]) -> List[str]:
+    paragraphs: List[str] = []
+    for block in blocks:
+        text = _normalize_text(str(block))
+        if text:
+            paragraphs.append(text)
+    return paragraphs
+
+
+def _tesseract_image_to_text(image: Image.Image, *, languages: str) -> str:
+    executable = get_tesseract_executable()
+    if executable is None:
+        raise RuntimeError(
+            "No se encontro el ejecutable de Tesseract. "
+            "Configura PDFLEX_TESSERACT o empaqueta assets/tesseract/tesseract.exe."
+        )
+    tessdata = get_tessdata_dir()
+    if not tessdata.is_dir():
+        raise RuntimeError("No se encontro assets/tessdata para Tesseract.")
+
+    with TemporaryDirectory(prefix="pdflex-ocr-") as temp_dir:
+        input_path = Path(temp_dir) / "page.png"
+        prepared = image.convert("RGB")
+        prepared.save(input_path, format="PNG")
+        env = os.environ.copy()
+        env["TESSDATA_PREFIX"] = str(tessdata)
+        completed = subprocess.run(
+            [
+                str(executable),
+                str(input_path),
+                "stdout",
+                "-l",
+                languages,
+                "--tessdata-dir",
+                str(tessdata),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+            env=env,
+        )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(f"Tesseract no pudo reconocer la pagina: {detail}")
+    return _normalize_text(completed.stdout)
 
 
 def _is_reliable_native_text(text: str, image_coverage: float) -> bool:

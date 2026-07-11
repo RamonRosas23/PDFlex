@@ -8,6 +8,7 @@
 #      .\build_setup.ps1
 #      .\build_setup.ps1 -SkipInstaller # reutiliza setup existente
 #      .\build_setup.ps1 -SkipSign      # omite firma aunque haya variables
+#      .\build_setup.ps1 -RequireSign   # falla si no se puede firmar
 #
 #  Firma opcional por variables de entorno:
 #      SIGNTOOL_PATH
@@ -21,6 +22,7 @@ param(
     [switch]$SkipEngine,
     [switch]$SkipBootstrapper,
     [switch]$SkipSign,
+    [switch]$RequireSign,
     [string]$EnterpriseServicesMode = "",
     [string]$EnterpriseServicesSource = "",
     [string]$Python = "C:\Users\OCMX_Sistemas1\AppData\Local\Programs\Python\Python311\python.exe"
@@ -213,12 +215,18 @@ function Find-SignTool {
 
 function Sign-Artifact([string]$Path) {
     if ($SkipSign) {
+        if ($RequireSign) {
+            Err "No se puede usar -SkipSign junto con -RequireSign."
+        }
         Warn "Firma omitida por -SkipSign: $(Split-Path $Path -Leaf)"
         return
     }
 
     $signtool = Find-SignTool
     if (-not $signtool) {
+        if ($RequireSign) {
+            Err "SignTool no encontrado y -RequireSign esta activo."
+        }
         Warn "SignTool no encontrado. El instalador queda sin firma digital."
         return
     }
@@ -247,6 +255,9 @@ function Sign-Artifact([string]$Path) {
             "/sha1", $env:CODESIGN_THUMBPRINT, $Path
         )
     } else {
+        if ($RequireSign) {
+            Err "Firma digital requerida, pero no hay CODESIGN_CERT_PATH ni CODESIGN_THUMBPRINT configurado."
+        }
         Warn "Firma digital no configurada. Define CODESIGN_CERT_PATH o CODESIGN_THUMBPRINT."
         return
     }
@@ -321,7 +332,7 @@ if ($reuseExisting) {
     Ok "Instalador Inno: $SetupFileName ($setupMB MB)"
 }
 
-Step "3/4" "Firma opcional"
+Step "3/4" "Firma digital"
 Sign-Artifact $SetupExe
 
 Step "4/4" "Resumen"

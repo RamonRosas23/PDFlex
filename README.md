@@ -74,15 +74,20 @@ El repositorio incluye automatizaciones para obtener ejecutables independientes 
 
 Los builds comerciales incluyen `docs/legal` dentro de `dist/PDFlex/legal` y
 generan `legal/third_party_licenses/manifest.json` con las versiones y avisos de
-las librerías instaladas en el entorno de build.
+las librerías instaladas en el entorno de build. Esa carpeta también contiene
+los borradores de `EULA.md`, `PRIVACY_NOTICE.md` y la guía `CODE_SIGNING.md`.
 
 > NOTA: Para vender OCR como función offline incluida, usa
 > `.\build_nuitka.ps1 -RequireBundledTesseract`; el build fallará si no existe
 > `assets/tesseract/tesseract.exe`. Si no se embebe Tesseract, OCR requerirá
 > `PDFLEX_TESSERACT` o una instalación externa aprobada.
 
+Para instaladores públicos/comerciales usa `.\build_nuitka.ps1 -RequireSign`
+cuando ya tengas certificado de firma configurado.
+
 Antes de publicar una versión para clientes, revisa
-`docs/legal/COMMERCIAL_READINESS.md` y `docs/legal/RELEASE_CHECKLIST.md`.
+`docs/legal/COMMERCIAL_READINESS.md`, completa los placeholders de
+EULA/privacidad y sigue `docs/legal/RELEASE_CHECKLIST.md`.
 
 ## Flujo de Trabajo y Arquitectura
 

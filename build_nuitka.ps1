@@ -9,6 +9,8 @@
 #      .\build_nuitka.ps1              # build normal
 #      .\build_nuitka.ps1 -SkipVenv   # reutiliza el venv existente
 #      .\build_nuitka.ps1 -SkipBuild  # solo recompila el instalador
+#      .\build_nuitka.ps1 -RequireSign
+#                                     # falla si el instalador no puede firmarse
 #      .\build_nuitka.ps1 -RequireBundledTesseract
 #                                     # build comercial con OCR offline incluido
 # ============================================================
@@ -17,6 +19,7 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipSetupBootstrapper,
     [switch]$SkipSign,
+    [switch]$RequireSign,
     [switch]$RequireBundledTesseract,
     [string]$EnterpriseServicesMode = "",
     [string]$EnterpriseServicesSource = ""
@@ -237,6 +240,20 @@ $legalSource = Join-Path $ProjectDir "docs\legal"
 if (-not (Test-Path -LiteralPath $legalSource)) {
     Err "docs\legal no encontrado. No se puede generar una build comercializable sin avisos legales."
 }
+$requiredLegalFiles = @(
+    "THIRD_PARTY_NOTICES.md",
+    "EULA.md",
+    "PRIVACY_NOTICE.md",
+    "COMMERCIAL_READINESS.md",
+    "RELEASE_CHECKLIST.md",
+    "CODE_SIGNING.md"
+)
+foreach ($legalFileName in $requiredLegalFiles) {
+    $legalFilePath = Join-Path $legalSource $legalFileName
+    if (-not (Test-Path -LiteralPath $legalFilePath)) {
+        Err "docs\legal\$legalFileName no encontrado. No se puede generar una build comercializable sin documentacion legal completa."
+    }
+}
 Ok "Documentos legales base: OK"
 
 $icoPath = Join-Path $ProjectDir "assets\icon.ico"
@@ -387,9 +404,11 @@ if (-not (Test-Path -LiteralPath $legalDest)) {
     New-Item -ItemType Directory -Force -Path $legalDest | Out-Null
     Copy-Item -LiteralPath (Join-Path $legalSource "*") -Destination $legalDest -Recurse -Force
 }
-$noticeFile = Join-Path $legalDest "THIRD_PARTY_NOTICES.md"
-if (-not (Test-Path -LiteralPath $noticeFile)) {
-    Err "Avisos legales no encontrados en dist\PDFlex\legal."
+foreach ($legalFileName in $requiredLegalFiles) {
+    $legalDistPath = Join-Path $legalDest $legalFileName
+    if (-not (Test-Path -LiteralPath $legalDistPath)) {
+        Err "Documento legal no encontrado en distribucion: dist\PDFlex\legal\$legalFileName"
+    }
 }
 $collector = Join-Path $ProjectDir "packaging\collect_licenses.py"
 if (-not (Test-Path -LiteralPath $collector)) {
@@ -449,6 +468,7 @@ if (-not (Test-Path $setupBuilder)) {
 $setupArgs = @{}
 if ($SkipSetupBootstrapper) { Warn "-SkipSetupBootstrapper esta obsoleto; se generara el instalador directo." }
 if ($SkipSign)              { $setupArgs["SkipSign"] = $true }
+if ($RequireSign)           { $setupArgs["RequireSign"] = $true }
 $setupArgs["EnterpriseServicesMode"] = $EffectiveEnterpriseServicesMode
 if ($EnterpriseServicesSource) {
     $setupArgs["EnterpriseServicesSource"] = $EnterpriseServicesSource

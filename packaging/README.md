@@ -23,6 +23,13 @@ licencias exactas de los paquetes instalados hacia:
 dist\PDFlex\legal\third_party_licenses\
 ```
 
+Antes de publicar, completa y revisa:
+
+- `docs\legal\EULA.md`
+- `docs\legal\PRIVACY_NOTICE.md`
+- `docs\legal\CODE_SIGNING.md`
+- `docs\legal\RELEASE_CHECKLIST.md`
+
 Si vas a vender OCR como incluido/offline, usa el modo estricto:
 
 ```powershell
@@ -64,10 +71,15 @@ La firma es opcional y se activa por variables de entorno:
 $env:CODESIGN_CERT_PATH = "C:\certs\pdflex.pfx"
 $env:CODESIGN_CERT_PASSWORD = "..."
 $env:CODESIGN_TIMESTAMP_URL = "http://timestamp.digicert.com"
+.\build_nuitka.ps1 -RequireSign
 ```
 
 Tambien se soporta firma desde el almacen de certificados:
 
 ```powershell
 $env:CODESIGN_THUMBPRINT = "THUMBPRINT_DEL_CERTIFICADO"
+.\build_nuitka.ps1 -RequireSign
 ```
+
+`-RequireSign` falla el build si falta SignTool, certificado o timestamp/firma
+correcta. Para pruebas locales sin firma puedes usar `-SkipSign`.

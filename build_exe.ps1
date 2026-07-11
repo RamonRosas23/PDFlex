@@ -53,9 +53,19 @@ if ($LASTEXITCODE -ne 0) { throw "PySide6 no se puede importar en el entorno de 
 Write-Host "      PySide6 validado correctamente."
 
 $LegalSource = Join-Path $ProjectDir "docs\legal"
-$ThirdPartyNoticeSource = Join-Path $LegalSource "THIRD_PARTY_NOTICES.md"
-if (-not (Test-Path -LiteralPath $ThirdPartyNoticeSource)) {
-    throw "No se encontro docs\legal\THIRD_PARTY_NOTICES.md. No se generara una build sin avisos legales."
+$RequiredLegalFiles = @(
+    "THIRD_PARTY_NOTICES.md",
+    "EULA.md",
+    "PRIVACY_NOTICE.md",
+    "COMMERCIAL_READINESS.md",
+    "RELEASE_CHECKLIST.md",
+    "CODE_SIGNING.md"
+)
+foreach ($legalFileName in $RequiredLegalFiles) {
+    $legalFilePath = Join-Path $LegalSource $legalFileName
+    if (-not (Test-Path -LiteralPath $legalFilePath)) {
+        throw "No se encontro docs\legal\$legalFileName. No se generara una build sin documentacion legal completa."
+    }
 }
 Write-Host "      Documentos legales base validados."
 
@@ -95,9 +105,11 @@ if (-not (Test-Path -LiteralPath $LegalDir)) {
     Copy-Item -LiteralPath (Join-Path $LegalSource "*") -Destination $LegalDir -Recurse -Force
 }
 
-$ThirdPartyNotice = Join-Path $LegalDir "THIRD_PARTY_NOTICES.md"
-if (-not (Test-Path -LiteralPath $ThirdPartyNotice)) {
-    throw "PyInstaller no incluyo dist\PDFlex\legal\THIRD_PARTY_NOTICES.md."
+foreach ($legalFileName in $RequiredLegalFiles) {
+    $legalDistPath = Join-Path $LegalDir $legalFileName
+    if (-not (Test-Path -LiteralPath $legalDistPath)) {
+        throw "PyInstaller no incluyo dist\PDFlex\legal\$legalFileName."
+    }
 }
 
 $LicenseCollector = Join-Path $ProjectDir "packaging\collect_licenses.py"

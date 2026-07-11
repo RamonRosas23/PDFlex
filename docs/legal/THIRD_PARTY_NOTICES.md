@@ -8,6 +8,10 @@ used to create the release into `legal/third_party_licenses/`.
 This is not legal advice; keep final commercial terms, EULA, privacy policy and
 sales terms under review by qualified counsel before public sale.
 
+Customer-facing commercial terms are drafted separately in `EULA.md` and
+`PRIVACY_NOTICE.md`. Those files govern PDFlex customer use and data handling;
+this file only summarizes third-party software notices.
+
 ## GUI runtime
 
 | Component | Use in PDFlex | License / obligation summary |
@@ -47,8 +51,10 @@ sales terms under review by qualified counsel before public sale.
 Do not publish a PDFlex installer unless:
 
 1. `legal/THIRD_PARTY_NOTICES.md` is included in the distribution.
-2. `legal/third_party_licenses/manifest.json` exists and lists the exact package
+2. `legal/EULA.md` and `legal/PRIVACY_NOTICE.md` are included in the
+   distribution.
+3. `legal/third_party_licenses/manifest.json` exists and lists the exact package
    versions used by the build.
-3. The PyMuPDF dependency guard passes.
-4. If OCR is advertised as included/offline, `assets/tesseract/tesseract.exe`
+4. The PyMuPDF dependency guard passes.
+5. If OCR is advertised as included/offline, `assets/tesseract/tesseract.exe`
    or another approved Tesseract bundle is present and its notices are included.

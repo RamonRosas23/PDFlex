@@ -46,8 +46,11 @@ def test_commercial_release_materials_are_packaged() -> None:
 
     required_files = [
         root / "docs" / "legal" / "THIRD_PARTY_NOTICES.md",
+        root / "docs" / "legal" / "EULA.md",
+        root / "docs" / "legal" / "PRIVACY_NOTICE.md",
         root / "docs" / "legal" / "COMMERCIAL_READINESS.md",
         root / "docs" / "legal" / "RELEASE_CHECKLIST.md",
+        root / "docs" / "legal" / "CODE_SIGNING.md",
         root / "packaging" / "collect_licenses.py",
     ]
     missing = [str(path.relative_to(root)) for path in required_files if not path.is_file()]
@@ -62,6 +65,13 @@ def test_commercial_release_materials_are_packaged() -> None:
     for script in (build_exe, build_nuitka):
         assert "collect_licenses.py" in script
         assert "THIRD_PARTY_NOTICES.md" in script
+        assert "EULA.md" in script
+        assert "PRIVACY_NOTICE.md" in script
         assert "third_party_licenses" in script
 
     assert "RequireBundledTesseract" in build_nuitka
+    assert "RequireSign" in build_nuitka
+    assert "RequireSign" in (root / "build_setup.ps1").read_text(
+        encoding="utf-8",
+        errors="ignore",
+    )

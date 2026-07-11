@@ -8,9 +8,7 @@ import shutil
 import unicodedata
 from typing import Callable, List
 
-import fitz
-
-from core.ocr_engine import get_tessdata_dir
+from core.pdf_backend import PdfRenderDocument
 from core.output_paths import sanitize_filename, unique_output_path
 
 
@@ -152,22 +150,21 @@ def extract_document_text(
     use_ocr_fallback: bool = True,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[str, str]:
-    with fitz.open(str(pdf_path)) as doc:
-        if doc.is_encrypted:
-            raise RuntimeError("El PDF esta protegido o cifrado.")
+    with PdfRenderDocument(pdf_path) as doc:
         page_limit = max(1, min(max_pages, doc.page_count))
         parts: list[str] = []
         used_ocr = False
         for page_index in range(page_limit):
             if should_cancel and should_cancel():
                 raise _CancelledError()
-            page = doc[page_index]
-            native = _normalize_text(page.get_text("text", sort=True))
+            native = _normalize_text(doc.extract_text(page_index))
             if native:
                 parts.append(native)
                 continue
             if use_ocr_fallback:
-                ocr_text = _ocr_page_text_with_timeout(page, timeout_secs=30)
+                ocr_text = _ocr_page_text_with_timeout(
+                    pdf_path, page_index, timeout_secs=30
+                )
                 if ocr_text:
                     used_ocr = True
                     parts.append(ocr_text)
@@ -284,11 +281,18 @@ def _detect_cliente(text: str) -> str:
     return ""
 
 
-def _ocr_page_text_with_timeout(page: "fitz.Page", timeout_secs: int = 30) -> str:
+def _ocr_page_text_with_timeout(
+    pdf_path: str | Path,
+    page_index: int | None = None,
+    timeout_secs: int = 30,
+) -> str:
     """Ejecuta OCR con timeout. Retorna '' si excede el tiempo límite o falla."""
     import concurrent.futures
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(_ocr_page_text, page)
+        if page_index is None:
+            future = executor.submit(_ocr_page_text, pdf_path)
+        else:
+            future = executor.submit(_ocr_page_text, pdf_path, page_index)
         try:
             return future.result(timeout=timeout_secs)
         except concurrent.futures.TimeoutError:
@@ -297,15 +301,14 @@ def _ocr_page_text_with_timeout(page: "fitz.Page", timeout_secs: int = 30) -> st
             return ""
 
 
-def _ocr_page_text(page: fitz.Page) -> str:
-    pix = page.get_pixmap(dpi=220, colorspace=fitz.csRGB, alpha=False)
-    ocr_pdf = pix.pdfocr_tobytes(
-        language="spa+eng",
-        tessdata=str(get_tessdata_dir()),
-        compress=True,
+def _ocr_page_text(pdf_path: str | Path, page_index: int | None = None) -> str:
+    if page_index is None:
+        raise ValueError("page_index es requerido para OCR real.")
+    from core.ocr_engine import ocr_pdf_page_text
+
+    return _normalize_text(
+        ocr_pdf_page_text(pdf_path, page_index, languages="spa+eng", dpi=220)
     )
-    with fitz.open("pdf", ocr_pdf) as doc:
-        return _normalize_text(doc[0].get_text("text", sort=True))
 
 
 def _normalize_text(text: str) -> str:

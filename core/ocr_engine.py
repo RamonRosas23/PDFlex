@@ -208,6 +208,39 @@ def validate_tessdata(languages: str) -> Optional[str]:
     return None
 
 
+def ocr_pdf_page_text(
+    pdf_path: str | Path,
+    page_index: int,
+    *,
+    languages: str = "spa+eng",
+    dpi: int = 220,
+) -> str:
+    """Reconoce una pagina y devuelve texto plano para consumidores ligeros."""
+    config = OcrConfig(
+        languages=languages,
+        dpi=dpi,
+        precision_mode="fast",
+        preserve_native_text=False,
+        enhance_scans=False,
+        recover_rotated_pages=False,
+        output_mode="txt",
+    )
+    with fitz.open(str(pdf_path)) as doc:
+        if not 0 <= page_index < doc.page_count:
+            raise IndexError("Pagina fuera de rango.")
+        pix = doc[page_index].get_pixmap(
+            dpi=config.dpi,
+            colorspace=fitz.csRGB,
+            alpha=False,
+        )
+    candidate = OcrEngine()._ocr_pixmap(
+        pix,
+        config,
+        variant="OCR / clasificador",
+    )
+    return candidate.text
+
+
 class OcrEngine:
     """Extrae texto nativo o aplica OCR por pagina y genera entregables."""
 

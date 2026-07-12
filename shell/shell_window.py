@@ -177,6 +177,13 @@ class ShellWindow(QMainWindow):
             lambda: self._start_update_check(manual=True)
         )
         options_menu.addAction(self._check_updates_action)
+        options_menu.addSeparator()
+        self._show_license_action = QAction(
+            "Ver licencia",
+            self._options_btn,
+        )
+        self._show_license_action.triggered.connect(self._show_license_status)
+        options_menu.addAction(self._show_license_action)
         self._options_btn.setMenu(options_menu)
         h.addWidget(self._options_btn)
 
@@ -440,6 +447,25 @@ class ShellWindow(QMainWindow):
             return
         self._startup_update_check_attempt += 1
         self._start_update_check(manual=False, startup=True)
+
+    # ── Licencia ─────────────────────────────────────────────────────────── #
+
+    def _show_license_status(self) -> None:
+        from ui.license.license_gate import get_current_claims
+
+        claims = get_current_claims()
+        if claims is None:
+            QMessageBox.warning(
+                self,
+                "Licencia",
+                "No se pudo cargar la información de tu licencia en este momento. "
+                "Inténtalo de nuevo más tarde.",
+            )
+            return
+
+        from ui.license.license_status_dialog import LicenseStatusDialog
+        dlg = LicenseStatusDialog(claims, self)
+        dlg.exec()
 
     def _start_update_check(self, manual: bool = False, startup: bool = False) -> bool:
         """Lanza la comprobación de actualizaciones en segundo plano."""

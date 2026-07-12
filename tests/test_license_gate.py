@@ -152,6 +152,39 @@ def test_start_background_revalidation_saves_token_silently_on_success():
     save_token.assert_called_once_with("PLT1.bg.token")
 
 
+def test_get_current_claims_returns_claims_when_token_valid():
+    verified = VerifiedLicense(claims=_claims(), needs_revalidation=False)
+
+    with patch.object(lg.license_storage, "load_token", return_value="PLT1.x.y"), \
+         patch.object(lg, "verify_token", return_value=verified), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")):
+        result = lg.get_current_claims()
+
+    assert result is not None
+    assert result.key_id == "key-abc"
+
+
+def test_get_current_claims_returns_none_when_no_token_stored():
+    with patch.object(lg.license_storage, "load_token", return_value=None), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")):
+        assert lg.get_current_claims() is None
+
+
+def test_get_current_claims_returns_none_when_fingerprint_fails():
+    with patch.object(lg, "compute_fingerprint_or_none", return_value=None), \
+         patch.object(lg.license_storage, "load_token") as load_token:
+        assert lg.get_current_claims() is None
+
+    load_token.assert_not_called()
+
+
+def test_get_current_claims_returns_none_when_token_invalid():
+    with patch.object(lg.license_storage, "load_token", return_value="PLT1.corrupt.token"), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
+         patch.object(lg, "verify_token", side_effect=LicenseInvalidError("firma inválida")):
+        assert lg.get_current_claims() is None
+
+
 def test_ensure_licensed_returns_none_and_warns_when_fingerprint_fails():
     with patch.object(lg, "compute_fingerprint_or_none", return_value=None), \
          patch.object(lg.license_storage, "load_token") as load_token, \

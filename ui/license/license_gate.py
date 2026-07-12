@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QMessageBox
 
 from core import license_storage
 from core.license_manager import LicenseRevalidateThread, LicenseRevalidateWorker
-from core.license_token import LicenseInvalidError, verify_token
+from core.license_token import LicenseClaims, LicenseInvalidError, verify_token
 from core.machine_fingerprint import compute_fingerprint_or_none
 from ui.license.activation_dialog import ActivationDialog
 from ui.license.reconnect_dialog import ReconnectDialog
@@ -56,6 +56,28 @@ def ensure_licensed(parent=None) -> str | None:
     except LicenseInvalidError:
         return None
     return reactivated.claims.key_id
+
+
+def get_current_claims() -> LicenseClaims | None:
+    """Reconstruye las claims de la licencia activa para paneles que se
+    abren en cualquier momento después del arranque (ej. la ventana
+    "Ver licencia" del menú Opciones). Devuelve None ante cualquier fallo
+    (sin token local, fingerprint no disponible, token inválido) — nunca
+    lanza; el llamador decide cómo comunicarlo."""
+    fingerprint = compute_fingerprint_or_none()
+    if fingerprint is None:
+        return None
+
+    stored_token = license_storage.load_token()
+    if stored_token is None:
+        return None
+
+    try:
+        verified = verify_token(stored_token, fingerprint.composite_hash, datetime.now(timezone.utc))
+    except LicenseInvalidError:
+        return None
+
+    return verified.claims
 
 
 def start_background_revalidation(key_id: str, parent) -> None:

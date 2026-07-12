@@ -46,7 +46,6 @@ class ActivationDialog(QDialog):
         self.setMaximumWidth(560)
         self.setWindowIcon(app_qicon())
         self._build()
-        self.show()
 
     def _build(self) -> None:
         outer = QVBoxLayout(self)

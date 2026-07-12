@@ -123,21 +123,31 @@ def load_token() -> str | None:
 
     Si una copia falta o no descifra, se repara desde la otra. Si ninguna
     descifra correctamente, devuelve None — nunca se asume activado
-    por defecto.
+    por defecto. Un valor de registro con base64 corrupto (p. ej. escrito
+    por otro proceso — la clave tiene permisos de escritura para
+    `users`) o bytes descifrados que no son UTF-8 válido se tratan igual
+    que un fallo de DPAPI: se descarta ese candidato y se prueba el
+    siguiente, sin dejar escapar la excepción.
     """
     registry_b64 = _registry_read()
     file_bytes = _file_read()
-    registry_bytes = base64.b64decode(registry_b64) if registry_b64 else None
+
+    registry_bytes: bytes | None
+    try:
+        registry_bytes = base64.b64decode(registry_b64) if registry_b64 else None
+    except Exception:
+        registry_bytes = None
 
     for candidate in (registry_bytes, file_bytes):
         if candidate is None:
             continue
         try:
             token_bytes = _dpapi_unprotect(candidate)
+            token = token_bytes.decode("utf-8")
         except Exception:
             continue
         _repair_if_needed(candidate, registry_bytes, file_bytes)
-        return token_bytes.decode("utf-8")
+        return token
 
     return None
 

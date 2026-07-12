@@ -74,3 +74,23 @@ def test_clear_token_deletes_both_copies():
 
     reg_delete.assert_called_once()
     file_delete.assert_called_once()
+
+
+def test_load_token_falls_back_to_file_when_registry_value_is_malformed_base64():
+    protected = b"PROTECTED-BYTES"
+    with patch.object(ls, "_registry_read", return_value="not-valid-base64!!!"), \
+         patch.object(ls, "_file_read", return_value=protected), \
+         patch.object(ls, "_dpapi_unprotect", return_value=b"PLT1.claims.sig"), \
+         patch.object(ls, "_registry_write") as reg_write:
+        token = ls.load_token()
+
+    assert token == "PLT1.claims.sig"
+    reg_write.assert_called_once()  # repara la copia de registro corrupta
+
+
+def test_load_token_returns_none_when_decrypted_bytes_are_not_valid_utf8():
+    protected = b"PROTECTED-BYTES"
+    with patch.object(ls, "_registry_read", return_value=None), \
+         patch.object(ls, "_file_read", return_value=protected), \
+         patch.object(ls, "_dpapi_unprotect", return_value=b"\xff\xfe\x00invalid-utf8"):
+        assert ls.load_token() is None

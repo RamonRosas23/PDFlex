@@ -39,7 +39,7 @@ Diseñar e implementar el lado cliente de un sistema de licencias por clave, con
 `main()` en `main.py`, antes de construir `ShellWindow`, ejecuta la puerta de licencia. Si no hay token local válido, se muestra `ActivationDialog` (modal, `ApplicationModal`, sin frame — mismo lenguaje visual que `PreviousCrashDialog`/`WordConvertDialog`: ícono cuadrado redondeado en el header, cuerpo compacto, footer con acciones).
 
 Contenido:
-- Campo único de clave, con máscara de formato automática (mayúsculas, guiones automáticos) para `PDFX-XXXXX-XXXXX-XXXXX-CCCC`.
+- Campo único de clave, con mayúsculas automáticas mientras se escribe/pega, formato esperado `PDFX-XXXXX-XXXXX-XXXXX-CCCC` (los guiones se escriben o se pegan tal cual — se decidió no auto-insertar guiones mientras se escribe porque complica editar/corregir un typo a mitad de la clave sin aportar mucho, dado que el caso real dominante es pegar la clave completa).
 - Validación de checksum **local e instantánea** al perder foco o al pulsar "Activar" (ver §5) — si el formato/checksum no cuadra, error inmediato sin llamada de red.
 - Botón "Activar" (estado de carga mientras hay una petición en curso).
 - Texto secundario: contacto de soporte de GRUPO OCMX para clientes sin clave.
@@ -222,14 +222,16 @@ Response 200: `{ "ok": true, "transfers_remaining": 2 }`
 
 La licencia es **por equipo**, no por usuario de Windows, así que el almacenamiento debe ser a nivel máquina (no `HKCU`/`%LOCALAPPDATA%`, que son por-usuario):
 
-- Registro: `HKLM\Software\GRUPO OCMX\PDFlex\License` (valores `Token`, `LastUpdatedUtc`) — mismo namespace que usa `enterprise_services`.
+- Registro: `HKLM\Software\GRUPO OCMX\PDFlexLicense` (valores `Token`, `LastUpdatedUtc`).
 - Archivo: `C:\ProgramData\GRUPO OCMX\PDFlex\License\license.dat`.
+
+**Importante sobre la ruta de registro:** debe ser una clave **hermana** de `Software\GRUPO OCMX\PDFlex` (no anidada dentro, ej. no `...\PDFlex\License`). La clave `Software\GRUPO OCMX\PDFlex` ya tiene `Flags: uninsdeletekey` en su primer valor dentro de `installer.iss` — cualquier cosa anidada ahí se borraría al desinstalar PDFlex. `PDFlexLicense` como clave hermana replica exactamente el patrón que ya usa `PDFlexEnterpriseServices` (`HKLM\Software\GRUPO OCMX\PDFlexEnterpriseServices`), precisamente por la misma razón: sobrevivir a la desinstalación de PDFlex.
 
 `PDFlex.exe` corre sin elevación en uso normal, así que **no puede** escribir en `HKLM` ni en `ProgramData` por defecto tras la instalación. Para resolverlo, `installer.iss` (que sí corre elevado) debe:
 
 - Crear la carpeta `ProgramData\GRUPO OCMX\PDFlex\License` en `[Dirs]` con `Permissions: users-modify`.
-- Crear la clave de registro en `[Registry]` con `Permissions: users-modify`.
-- **Sin** `Flags: uninsdeletekey`/`uninsdeletevalue` — desinstalar o actualizar PDFlex no debe borrar el estado de licencia, igual que la política ya establecida para `enterprise_services`. Así, reinstalar o actualizar no obliga a reactivar.
+- Crear la clave de registro `Software\GRUPO OCMX\PDFlexLicense` en `[Registry]` con `Permissions: users-modify`.
+- **Sin** `Flags: uninsdeletekey`/`uninsdeletevalue` en ninguna de las dos — desinstalar o actualizar PDFlex no debe borrar el estado de licencia. La carpeta de `ProgramData` sobrevive por partida doble: ni tiene flags de borrado, ni Inno Setup borra directorios no vacíos en desinstalación (y `license.dat` lo crea la app en tiempo de ejecución, no el instalador, así que ni siquiera queda registrado para limpieza). Así, reinstalar o actualizar no obliga a reactivar.
 
 Ambas copias se cifran con DPAPI a nivel de **máquina** (`win32crypt.CryptProtectData(..., flags=CRYPTPROTECT_LOCAL_MACHINE)`, disponible ya vía `pywin32`), no a nivel de usuario — así cualquier cuenta de Windows en ese equipo puede leer el token, pero copiar el archivo/valor a otro equipo produce datos indescifrables (la clave de cifrado de DPAPI está atada a la máquina).
 

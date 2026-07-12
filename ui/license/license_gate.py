@@ -105,7 +105,15 @@ def start_background_revalidation(key_id: str, parent) -> None:
     """Revalidación silenciosa: no bloquea ni interrumpe al usuario si
     falla. `parent` debe ser un QObject vivo (ej. la ventana principal)
     para que Qt mantenga el hilo vivo mientras corre — mismo patrón que
-    UpdateCheckThread en core/updater.py."""
+    UpdateCheckThread en core/updater.py.
+
+    El hilo también se guarda como `parent._license_revalidate_thread`
+    para que `ShellWindow.closeEvent` pueda esperar su terminación (hasta
+    3s) antes de cerrar — sin esto, cerrar PDFlex mientras esta llamada
+    de red sigue en curso destruye un QThread todavía corriendo, lo cual
+    Qt trata como error fatal (aborta el proceso: quedan sesiones
+    "running" nunca marcadas "clean", y logs de fallo nativo vacíos
+    porque no es un segfault real, es este abort intencional de Qt)."""
     fingerprint = compute_fingerprint_or_none()
     if fingerprint is None:
         return
@@ -115,4 +123,9 @@ def start_background_revalidation(key_id: str, parent) -> None:
     worker.error.connect(_handle_background_revalidation_error)
     worker.success.connect(thread.quit)
     worker.error.connect(thread.quit)
+    thread.finished.connect(thread.deleteLater)
+    try:
+        parent._license_revalidate_thread = thread
+    except AttributeError:
+        pass
     thread.start()

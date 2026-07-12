@@ -607,6 +607,11 @@ class ShellWindow(QMainWindow):
             if thread is not None and hasattr(thread, "isRunning") and thread.isRunning():
                 threads_to_wait.append(thread)
 
+        # Revalidación de licencia en segundo plano (ver ui/license/license_gate.py)
+        license_thread = getattr(self, "_license_revalidate_thread", None)
+        if license_thread is not None and license_thread.isRunning():
+            threads_to_wait.append(license_thread)
+
         # Esperar terminación de todos los threads (máximo 3s por thread)
         for t in threads_to_wait:
             if hasattr(t, "wait"):

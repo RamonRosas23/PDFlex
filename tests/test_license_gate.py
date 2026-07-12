@@ -131,6 +131,7 @@ def test_start_background_revalidation_saves_token_silently_on_success():
     class _SyncFakeThread:
         def __init__(self, worker, parent):
             self._worker = worker
+            self.finished = Mock()  # soporta .connect(...) como una señal real
 
         def start(self):
             self._worker.run()
@@ -138,18 +139,27 @@ def test_start_background_revalidation_saves_token_silently_on_success():
         def quit(self):
             pass
 
+        def deleteLater(self):
+            pass
+
     fake_response = Mock(
         status_code=200,
         json=lambda: {"token": "PLT1.bg.token", "license_expires_at": None},
     )
 
+    parent = Mock()
     with patch.object(lg, "LicenseRevalidateThread", _SyncFakeThread), \
          patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
          patch("requests.post", return_value=fake_response), \
          patch.object(lg.license_storage, "save_token") as save_token:
-        lg.start_background_revalidation("key-abc", Mock())
+        lg.start_background_revalidation("key-abc", parent)
 
     save_token.assert_called_once_with("PLT1.bg.token")
+    # ShellWindow.closeEvent busca este atributo exacto para esperar (hasta
+    # 3s) a que este hilo termine antes de cerrar -- sin él, cerrar PDFlex
+    # mientras esta llamada de red sigue en curso mata el proceso (Qt trata
+    # destruir un QThread todavía corriendo como error fatal).
+    assert isinstance(parent._license_revalidate_thread, _SyncFakeThread)
 
 
 def test_get_current_claims_returns_claims_when_token_valid():
@@ -210,11 +220,15 @@ def test_start_background_revalidation_does_nothing_on_transient_failure():
     class _SyncFakeThread:
         def __init__(self, worker, parent):
             self._worker = worker
+            self.finished = Mock()  # soporta .connect(...) como una señal real
 
         def start(self):
             self._worker.run()
 
         def quit(self):
+            pass
+
+        def deleteLater(self):
             pass
 
     fake_response = Mock(
@@ -242,11 +256,15 @@ def test_start_background_revalidation_clears_local_token_when_key_revoked():
     class _SyncFakeThread:
         def __init__(self, worker, parent):
             self._worker = worker
+            self.finished = Mock()  # soporta .connect(...) como una señal real
 
         def start(self):
             self._worker.run()
 
         def quit(self):
+            pass
+
+        def deleteLater(self):
             pass
 
     fake_response = Mock(

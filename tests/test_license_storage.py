@@ -15,6 +15,27 @@ def test_save_token_writes_both_registry_and_file():
     file_write.assert_called_once_with(b"PROTECTED")
 
 
+def test_save_token_does_not_raise_when_registry_write_is_denied():
+    # Reproduce el caso real: corriendo sin el instalador (que es quien
+    # concede Permissions: users-modify), escribir en HKLM sin elevación
+    # falla con PermissionError. save_token no debe dejarlo escapar --
+    # el servidor ya autorizó al usuario, un fallo de persistencia local
+    # no debe tumbar la activación ni la app.
+    with patch.object(ls, "_dpapi_protect", return_value=b"PROTECTED"), \
+         patch.object(ls, "_registry_write", side_effect=PermissionError("Acceso denegado")), \
+         patch.object(ls, "_file_write") as file_write:
+        ls.save_token("PLT1.claims.sig")  # no debe lanzar
+
+    file_write.assert_called_once_with(b"PROTECTED")
+
+
+def test_save_token_does_not_raise_when_both_writes_are_denied():
+    with patch.object(ls, "_dpapi_protect", return_value=b"PROTECTED"), \
+         patch.object(ls, "_registry_write", side_effect=PermissionError("Acceso denegado")), \
+         patch.object(ls, "_file_write", side_effect=OSError("disco lleno")):
+        ls.save_token("PLT1.claims.sig")  # no debe lanzar
+
+
 def test_load_token_returns_none_when_both_copies_missing():
     with patch.object(ls, "_registry_read", return_value=None), \
          patch.object(ls, "_file_read", return_value=None):

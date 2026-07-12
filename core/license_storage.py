@@ -103,10 +103,25 @@ def _file_delete() -> None:
 
 
 def save_token(token: str) -> None:
-    """Guarda `token` cifrado con DPAPI, por partida doble (registro + archivo)."""
+    """Guarda `token` cifrado con DPAPI, por partida doble (registro + archivo).
+
+    Cada escritura es best-effort e independiente: si una falla (ej. sin
+    permisos — corriendo sin haber pasado por el instalador, que es quien
+    concede `Permissions: users-modify`; disco lleno; antivirus bloqueando
+    el archivo) no debe tumbar la activación completa ni la app. El
+    servidor ya autorizó al usuario; en el peor caso, perder la
+    persistencia local solo implica que se le vuelva a pedir la licencia
+    en el próximo arranque — nunca un crash.
+    """
     protected = _dpapi_protect(token.encode("utf-8"))
-    _registry_write(base64.b64encode(protected).decode("ascii"))
-    _file_write(protected)
+    try:
+        _registry_write(base64.b64encode(protected).decode("ascii"))
+    except OSError:
+        pass
+    try:
+        _file_write(protected)
+    except OSError:
+        pass
 
 
 def _repair_if_needed(

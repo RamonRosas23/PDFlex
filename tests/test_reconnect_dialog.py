@@ -54,6 +54,30 @@ def test_revalidate_error_shows_message_and_reenables_retry():
         _app.processEvents()
 
 
+def test_network_error_schedules_auto_retry():
+    with patch.object(ReconnectDialog, "_start_revalidation_worker", lambda self: None):
+        dlg = ReconnectDialog("key-abc")
+    try:
+        with patch("ui.license.reconnect_dialog.QTimer.singleShot") as timer_mock:
+            dlg._on_revalidate_error("NETWORK_ERROR", "No se pudo conectar.")
+        timer_mock.assert_called_once()
+    finally:
+        dlg.close()
+        _app.processEvents()
+
+
+def test_key_revoked_does_not_schedule_auto_retry():
+    with patch.object(ReconnectDialog, "_start_revalidation_worker", lambda self: None):
+        dlg = ReconnectDialog("key-abc")
+    try:
+        with patch("ui.license.reconnect_dialog.QTimer.singleShot") as timer_mock:
+            dlg._on_revalidate_error("KEY_REVOKED", "La licencia fue revocada.")
+        timer_mock.assert_not_called()
+    finally:
+        dlg.close()
+        _app.processEvents()
+
+
 def test_retry_button_calls_worker_seam_again():
     calls = {"count": 0}
 

@@ -206,7 +206,7 @@ def test_start_background_revalidation_does_nothing_when_fingerprint_fails():
     save_token.assert_not_called()
 
 
-def test_start_background_revalidation_does_nothing_visible_on_failure():
+def test_start_background_revalidation_does_nothing_on_transient_failure():
     class _SyncFakeThread:
         def __init__(self, worker, parent):
             self._worker = worker
@@ -218,14 +218,55 @@ def test_start_background_revalidation_does_nothing_visible_on_failure():
             pass
 
     fake_response = Mock(
-        status_code=404,
-        json=lambda: {"error_code": "KEY_NOT_FOUND", "message": "no existe"},
+        status_code=500,
+        json=lambda: {"error_code": "SERVER_ERROR", "message": "error interno"},
     )
 
     with patch.object(lg, "LicenseRevalidateThread", _SyncFakeThread), \
          patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
          patch("requests.post", return_value=fake_response), \
-         patch.object(lg.license_storage, "save_token") as save_token:
+         patch.object(lg.license_storage, "save_token") as save_token, \
+         patch.object(lg.license_storage, "clear_token") as clear_token:
         lg.start_background_revalidation("key-abc", Mock())  # no debe lanzar
 
     save_token.assert_not_called()
+    clear_token.assert_not_called()  # error transitorio: no se toca el almacenamiento
+
+
+def test_start_background_revalidation_clears_local_token_when_key_revoked():
+    # Reproduce el reporte real: se revoca la clave en el servidor, pero
+    # el token local (firmado antes de la revocación) seguiría pasando
+    # verify_token() localmente hasta que venza su ventana de 14 días si
+    # no se limpia aquí en cuanto la revalidación en segundo plano se
+    # entera de la revocación.
+    class _SyncFakeThread:
+        def __init__(self, worker, parent):
+            self._worker = worker
+
+        def start(self):
+            self._worker.run()
+
+        def quit(self):
+            pass
+
+    fake_response = Mock(
+        status_code=410,
+        json=lambda: {"error_code": "KEY_REVOKED", "message": "La licencia fue revocada."},
+    )
+
+    with patch.object(lg, "LicenseRevalidateThread", _SyncFakeThread), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
+         patch("requests.post", return_value=fake_response), \
+         patch.object(lg.license_storage, "save_token") as save_token, \
+         patch.object(lg.license_storage, "clear_token") as clear_token:
+        lg.start_background_revalidation("key-abc", Mock())
+
+    save_token.assert_not_called()
+    clear_token.assert_called_once()
+
+
+def test_handle_background_revalidation_error_ignores_rate_limited():
+    with patch.object(lg.license_storage, "clear_token") as clear_token:
+        lg._handle_background_revalidation_error("RATE_LIMITED", "Demasiados intentos.")
+
+    clear_token.assert_not_called()

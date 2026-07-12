@@ -80,6 +80,27 @@ def get_current_claims() -> LicenseClaims | None:
     return verified.claims
 
 
+# Códigos que significan "esta licencia ya no es válida, punto" — a
+# diferencia de errores transitorios (red, servidor caído, límite de
+# tasa), que no deben tocar el token guardado localmente.
+_DEFINITIVE_REVOCATION_CODES = {
+    "KEY_REVOKED", "KEY_EXPIRED", "FINGERPRINT_MISMATCH", "KEY_NOT_FOUND",
+}
+
+
+def _handle_background_revalidation_error(error_code: str, _message: str) -> None:
+    """Si el servidor confirma en la revalidación silenciosa que la
+    licencia ya no es válida, borra el token local — de lo contrario
+    seguiría pasando la verificación de firma local (que no vuelve a
+    contactar al servidor) hasta que naturalmente venza su ventana de
+    `LICENSE_OFFLINE_GRACE_DAYS`, dejando usar la app con una licencia
+    ya revocada/expirada/reasignada durante ese tiempo. No interrumpe la
+    sesión actual — el bloqueo real ocurre en el siguiente arranque, vía
+    `ensure_licensed()` sin encontrar ya un token local."""
+    if error_code in _DEFINITIVE_REVOCATION_CODES:
+        license_storage.clear_token()
+
+
 def start_background_revalidation(key_id: str, parent) -> None:
     """Revalidación silenciosa: no bloquea ni interrumpe al usuario si
     falla. `parent` debe ser un QObject vivo (ej. la ventana principal)
@@ -91,6 +112,7 @@ def start_background_revalidation(key_id: str, parent) -> None:
     worker = LicenseRevalidateWorker(key_id, fingerprint)
     thread = LicenseRevalidateThread(worker, parent)
     worker.success.connect(lambda token, expires: license_storage.save_token(token))
+    worker.error.connect(_handle_background_revalidation_error)
     worker.success.connect(thread.quit)
     worker.error.connect(thread.quit)
     thread.start()

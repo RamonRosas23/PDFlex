@@ -114,21 +114,25 @@ def verify_token(token: str, expected_fingerprint: str, now: datetime) -> Verifi
     if status != "active":
         raise LicenseRevokedError(f"La licencia no está activa (estado: {status}).")
 
-    license_expires_raw = raw.get("license_expires_at")
-    license_expires_at = _parse_datetime(license_expires_raw) if license_expires_raw else None
-    if license_expires_at is not None and now > license_expires_at:
-        raise LicenseExpiredError("La licencia expiró.")
+    try:
+        license_expires_raw = raw.get("license_expires_at")
+        license_expires_at = _parse_datetime(license_expires_raw) if license_expires_raw else None
+        if license_expires_at is not None and now > license_expires_at:
+            raise LicenseExpiredError("La licencia expiró.")
 
-    valid_until = _parse_datetime(raw["valid_until"])
-    claims = LicenseClaims(
-        key_id=raw["key_id"],
-        fingerprint=raw["fingerprint"],
-        issued_at=_parse_datetime(raw["issued_at"]),
-        valid_until=valid_until,
-        license_expires_at=license_expires_at,
-        status=status,
-        customer_name=raw.get("customer_name") or "",
-        app=raw["app"],
-        seats_allowed=int(raw.get("seats_allowed", 1)),
-    )
+        valid_until = _parse_datetime(raw["valid_until"])
+        claims = LicenseClaims(
+            key_id=raw["key_id"],
+            fingerprint=raw["fingerprint"],
+            issued_at=_parse_datetime(raw["issued_at"]),
+            valid_until=valid_until,
+            license_expires_at=license_expires_at,
+            status=status,
+            customer_name=raw.get("customer_name") or "",
+            app=raw["app"],
+            seats_allowed=int(raw.get("seats_allowed", 1)),
+        )
+    except (KeyError, ValueError, TypeError) as exc:
+        raise LicenseFormatError("El token contiene datos incompletos o inválidos.") from exc
+
     return VerifiedLicense(claims=claims, needs_revalidation=now > valid_until)

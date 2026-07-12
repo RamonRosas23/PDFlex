@@ -7,6 +7,7 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from core import crash_handler as ch
+from PySide6.QtWidgets import QApplication, QFrame
 
 
 def _reset_crash_handler_state() -> None:
@@ -64,3 +65,25 @@ def test_nonfatal_handle_crash_writes_log_and_resets_guard(tmp_path, monkeypatch
     assert "background boom" in text
     assert "Contexto: unit-test" in text
     assert ch._CRASH_IN_PROGRESS is False
+
+
+def test_previous_crash_dialog_uses_pdflex_styled_shell() -> None:
+    app = QApplication.instance() or QApplication([])
+    dlg = ch.PreviousCrashDialog(
+        {
+            "status": "crashed",
+            "version": "2.0.7",
+            "last_log": r"C:\Users\tester\AppData\Local\PDFlex\crash_logs\crash.txt",
+        }
+    )
+
+    try:
+        assert dlg.windowTitle() == "Cierre inesperado — PDFlex"
+        assert dlg.findChild(QFrame, "PreviousCrashShell") is not None
+        assert dlg.findChild(QFrame, "PreviousCrashHeader") is not None
+        assert dlg.findChild(QFrame, "PreviousCrashFooter") is not None
+        assert "Estado previo: crashed" in dlg._details
+        assert "last_log" in dlg._details
+    finally:
+        dlg.close()
+        app.processEvents()

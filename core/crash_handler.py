@@ -32,7 +32,7 @@ from PySide6.QtCore import Qt, qInstallMessageHandler
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGraphicsDropShadowEffect,
-    QHBoxLayout, QLabel, QMessageBox, QPushButton, QTextEdit, QVBoxLayout, QWidget,
+    QHBoxLayout, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget,
 )
 
 from core.update_config import APP_VERSION
@@ -609,6 +609,301 @@ class CrashDialog(QDialog):
         super().keyPressEvent(event)
 
 
+class PreviousCrashDialog(QDialog):
+    """Diálogo premium para avisar que la sesión anterior cerró abruptamente."""
+
+    def __init__(self, previous: dict, *, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._previous = dict(previous)
+        self._details = (
+            f"Estado previo: {self._previous.get('status', 'desconocido')}\n\n"
+            + json.dumps(self._previous, ensure_ascii=False, indent=2)
+        )
+        self._drag_pos = None
+
+        self.setWindowTitle("Cierre inesperado — PDFlex")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setMinimumWidth(560)
+        self.setMaximumWidth(720)
+        from ui.common.icons import app_qicon
+        self.setWindowIcon(app_qicon())
+        self._build()
+
+    def _build(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(12, 12, 12, 12)
+        outer.setSpacing(0)
+
+        shell = QFrame()
+        shell.setObjectName("PreviousCrashShell")
+        shell.setStyleSheet(f"""
+            QFrame#PreviousCrashShell {{
+                background: {COLORS['surface']};
+                border: 1px solid rgba(245, 166, 35, 0.55);
+                border-radius: 12px;
+            }}
+        """)
+        shadow = QGraphicsDropShadowEffect(shell)
+        shadow.setBlurRadius(40)
+        shadow.setColor(QColor(0, 0, 0, 160))
+        shadow.setOffset(0, 16)
+        shell.setGraphicsEffect(shadow)
+        outer.addWidget(shell)
+
+        root = QVBoxLayout(shell)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._build_header())
+        root.addWidget(self._build_body())
+        root.addWidget(self._build_footer())
+
+    def _build_header(self) -> QFrame:
+        header = QFrame()
+        header.setObjectName("PreviousCrashHeader")
+        header.setStyleSheet(f"""
+            QFrame#PreviousCrashHeader {{
+                background: {COLORS['surface_2']};
+                border-bottom: 1px solid rgba(245, 166, 35, 0.30);
+                border-top-left-radius: 12px;
+                border-top-right-radius: 12px;
+            }}
+        """)
+        h = QHBoxLayout(header)
+        h.setContentsMargins(18, 15, 14, 15)
+        h.setSpacing(13)
+
+        icon_box = QFrame()
+        icon_box.setFixedSize(42, 42)
+        icon_box.setStyleSheet("""
+            QFrame {
+                background: rgba(245, 166, 35, 0.16);
+                border: 1px solid rgba(245, 166, 35, 0.50);
+                border-radius: 9px;
+            }
+        """)
+        ib = QVBoxLayout(icon_box)
+        ib.setContentsMargins(0, 0, 0, 0)
+        ib_lbl = QLabel()
+        ib_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ib_lbl.setPixmap(icon_pixmap("warning", COLORS["warning"], 22))
+        ib_lbl.setStyleSheet("background: transparent;")
+        ib.addWidget(ib_lbl, 0, Qt.AlignmentFlag.AlignCenter)
+        h.addWidget(icon_box)
+
+        title_col = QVBoxLayout()
+        title_col.setSpacing(2)
+        t = QLabel("PDFlex detectó un cierre inesperado")
+        t.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 14px; font-weight: 700;"
+            "background: transparent;"
+        )
+        title_col.addWidget(t)
+        s = QLabel("La sesión anterior no cerró limpiamente.")
+        s.setStyleSheet(
+            f"color: {COLORS['warning']}; font-size: 11px; background: transparent;"
+        )
+        title_col.addWidget(s)
+        h.addLayout(title_col, 1)
+
+        close_btn = QPushButton()
+        close_btn.setProperty("class", "IconBtn")
+        close_btn.setFixedSize(28, 28)
+        close_btn.setToolTip("Cerrar aviso")
+        set_button_icon(close_btn, "x", size=14, icon_only=True)
+        close_btn.clicked.connect(self.accept)
+        h.addWidget(close_btn)
+        return header
+
+    def _build_body(self) -> QWidget:
+        body = QWidget()
+        v = QVBoxLayout(body)
+        v.setContentsMargins(20, 18, 20, 14)
+        v.setSpacing(14)
+
+        warning_box = QFrame()
+        warning_box.setStyleSheet("""
+            QFrame {
+                background: rgba(245, 166, 35, 0.10);
+                border: 1px solid rgba(245, 166, 35, 0.32);
+                border-radius: 8px;
+            }
+        """)
+        wb = QHBoxLayout(warning_box)
+        wb.setContentsMargins(13, 11, 13, 11)
+        wb.setSpacing(11)
+
+        wi = QLabel()
+        wi.setFixedSize(18, 18)
+        wi.setPixmap(icon_pixmap("warning", COLORS["warning"], 18))
+        wi.setStyleSheet("background: transparent;")
+        wb.addWidget(wi, 0, Qt.AlignmentFlag.AlignTop)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(5)
+        main = QLabel("PDFlex se cerró antes de completar su salida normal.")
+        main.setStyleSheet(
+            f"color: {COLORS['text']}; font-size: 13px; font-weight: 600;"
+            "background: transparent;"
+        )
+        text_col.addWidget(main)
+
+        hint = QLabel(
+            "Si estabas girando, organizando o procesando páginas, revisa el "
+            "documento/resultados antes de continuar. El diagnóstico técnico "
+            "quedó guardado para soporte."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;"
+        )
+        text_col.addWidget(hint)
+
+        log_hint = (
+            self._previous.get("last_log")
+            or self._previous.get("native_fault_log")
+            or self._previous.get("crash_log_dir")
+        )
+        if log_hint:
+            log_lbl = QLabel(f"Logs: {log_hint}")
+            log_lbl.setWordWrap(True)
+            log_lbl.setStyleSheet(
+                f"color: {COLORS['text_dim']}; font-size: 10px; background: transparent;"
+            )
+            text_col.addWidget(log_lbl)
+        wb.addLayout(text_col, 1)
+        v.addWidget(warning_box)
+
+        detail_hdr = QLabel("DETALLE TÉCNICO")
+        detail_hdr.setStyleSheet(
+            f"color: {COLORS['text_dim']}; font-size: 10px; font-weight: 700;"
+            "letter-spacing: 0.8px; background: transparent;"
+        )
+        v.addWidget(detail_hdr)
+
+        details = QTextEdit()
+        details.setReadOnly(True)
+        details.setPlainText(self._details)
+        details.setFont(QFont("Consolas", 10))
+        details.setMinimumHeight(120)
+        details.setMaximumHeight(190)
+        details.setStyleSheet(f"""
+            QTextEdit {{
+                background: {COLORS['surface_3']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 8px;
+                color: {COLORS['text_muted']};
+                padding: 10px 12px;
+                font-family: Consolas, "Courier New", monospace;
+                font-size: 10px;
+            }}
+            QScrollBar:vertical {{
+                background: transparent; width: 10px;
+                margin: 5px 2px 5px 4px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: {COLORS['border_strong']}; min-height: 22px; border-radius: 3px;
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical  {{ height: 0; }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical  {{ background: none; }}
+        """)
+        v.addWidget(details)
+        return body
+
+    def _build_footer(self) -> QFrame:
+        footer = QFrame()
+        footer.setObjectName("PreviousCrashFooter")
+        footer.setStyleSheet(f"""
+            QFrame#PreviousCrashFooter {{
+                background: {COLORS['surface_2']};
+                border-top: 1px solid rgba(245, 166, 35, 0.20);
+                border-bottom-left-radius: 12px;
+                border-bottom-right-radius: 12px;
+            }}
+        """)
+        f = QHBoxLayout(footer)
+        f.setContentsMargins(18, 12, 18, 12)
+        f.setSpacing(8)
+
+        ts_lbl = QLabel(datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+        ts_lbl.setStyleSheet(
+            f"color: {COLORS['text_dim']}; font-size: 10px; background: transparent;"
+        )
+        f.addWidget(ts_lbl, 1)
+
+        copy_btn = QPushButton("Copiar detalle")
+        copy_btn.setFixedHeight(34)
+        copy_btn.setMinimumWidth(116)
+        copy_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {COLORS['surface_3']};
+                border: 1px solid {COLORS['border_strong']};
+                border-radius: 7px;
+                color: {COLORS['text']};
+                font-weight: 500;
+                padding: 0 14px;
+            }}
+            QPushButton:hover  {{ background: {COLORS['border']}; border-color: #44444E; }}
+            QPushButton:pressed {{ background: {COLORS['surface_2']}; }}
+        """)
+        copy_btn.clicked.connect(self._copy_details)
+        f.addWidget(copy_btn)
+
+        ok_btn = QPushButton("Entendido")
+        ok_btn.setFixedHeight(34)
+        ok_btn.setMinimumWidth(112)
+        ok_btn.setStyleSheet("""
+            QPushButton {
+                background: rgba(245, 166, 35, 0.18);
+                border: 1px solid #F5A623;
+                border-radius: 7px;
+                color: #FFD28A;
+                font-weight: 700;
+                padding: 0 14px;
+            }
+            QPushButton:hover   { background: rgba(245, 166, 35, 0.28); }
+            QPushButton:pressed { background: rgba(245, 166, 35, 0.38); }
+        """)
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(self.accept)
+        f.addWidget(ok_btn)
+        return footer
+
+    def _copy_details(self) -> None:
+        app = QApplication.instance()
+        if app:
+            app.clipboard().setText(self._details)
+        btn = self.sender()
+        if isinstance(btn, QPushButton):
+            original = btn.text()
+            btn.setText("¡Copiado!")
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(1800, lambda: btn.setText(original))
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_pos = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_pos and event.buttons() & Qt.MouseButton.LeftButton:
+            self.move(event.globalPosition().toPoint() - self._drag_pos)
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() == Qt.Key.Key_Escape:
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Punto de entrada central (solo hilo principal para diálogos)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -642,26 +937,8 @@ def _show_previous_crash_notice(previous: dict) -> None:
     if app is None:
         return
     try:
-        status = str(previous.get("status") or "running")
-        title = "PDFlex detectó un cierre inesperado"
-        text = (
-            "La sesión anterior de PDFlex no cerró correctamente.\n\n"
-            "Si estabas girando, organizando o procesando páginas, revisa el "
-            "resultado antes de continuar."
-        )
-        details = json.dumps(previous, ensure_ascii=False, indent=2)
-        log_hint = previous.get("last_log") or previous.get("native_fault_log") or previous.get("crash_log_dir")
-        if log_hint:
-            text += f"\n\nLogs técnicos:\n{log_hint}"
-
-        box = QMessageBox(app.activeWindow())
-        box.setIcon(QMessageBox.Icon.Warning)
-        box.setWindowTitle(title)
-        box.setText(title)
-        box.setInformativeText(text)
-        box.setDetailedText(f"Estado previo: {status}\n\n{details}")
-        box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        box.exec()
+        dlg = PreviousCrashDialog(previous, parent=app.activeWindow())
+        dlg.exec()
     except Exception:
         pass
 

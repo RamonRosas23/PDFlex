@@ -56,6 +56,18 @@ def _placeholder_pixmap() -> QPixmap:
     return pix
 
 
+def _icon_from_image(image: object) -> QIcon:
+    """Create QIcon from cached thumbnail data in the GUI thread.
+
+    ThumbnailCache stores QImage objects because they are safe to produce in a
+    worker thread. PySide6 may reject QIcon(QImage) in some override paths, so
+    always go through QPixmap on the GUI thread.
+    """
+    if isinstance(image, QPixmap):
+        return QIcon(image)
+    return QIcon(QPixmap.fromImage(image))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # _PageStrip
 # ─────────────────────────────────────────────────────────────────────────────
@@ -717,7 +729,7 @@ class DocLane(QFrame):
                 )
                 cached = self._cache.get(key)
                 if cached:
-                    item.setIcon(QIcon(cached))
+                    item.setIcon(_icon_from_image(cached))
                 else:
                     item.setIcon(QIcon(_placeholder_pixmap()))
                     self._worker.request(
@@ -1047,7 +1059,7 @@ class DocLane(QFrame):
             return
         # Convert QImage → QPixmap in GUI thread (QPixmap cannot be created in worker threads)
         try:
-            pix = QPixmap.fromImage(qimage)
+            icon = _icon_from_image(qimage)
             for i in range(self._list.count()):
                 item = self._list.item(i)
                 if not item:
@@ -1057,7 +1069,7 @@ class DocLane(QFrame):
                     ref.page_id == page_id
                     and int(ref.rotation_deg) % 360 == int(rotation_deg) % 360
                 ):
-                    item.setIcon(QIcon(pix))
+                    item.setIcon(icon)
                     break
         except RuntimeError:
             # El C++ _PageStrip fue destruido antes de que llegara la miniatura.

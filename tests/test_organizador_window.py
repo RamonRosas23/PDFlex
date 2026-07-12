@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import fitz
 from PIL import Image
 from PySide6.QtCore import QThread
+from PySide6.QtGui import QImage
 from PySide6.QtWidgets import QApplication
 
 from shell.context import ShellContext
@@ -399,6 +400,35 @@ class DocLaneTests(unittest.TestCase):
                 self.assertEqual(lane.count(), 8)
                 self.assertTrue(all(ref.rotation_deg == 0 for ref in lane.page_refs()))
                 self.assertLessEqual(worker.pending_count(), 8)
+            finally:
+                lane.teardown()
+                lane.deleteLater()
+                self.app.processEvents()
+
+    def test_rotate_selected_uses_cached_qimage_without_crashing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "cached.pdf"
+            doc = fitz.open()
+            doc.new_page(width=300, height=200)
+            doc.save(pdf)
+            doc.close()
+
+            cache = ThumbnailCache(max_size=10)
+            worker = ThumbnailWorker(cache)
+            lane = DocLane("lane-cached", "Cached", LANE_COLORS[0], cache, worker)
+            try:
+                lane.add_pages_from_pdf(str(pdf))
+                worker.discard_lane(lane.lane_id)
+
+                qimage = QImage(116, 83, QImage.Format.Format_RGB888)
+                qimage.fill(0x223344)
+                cache.put(ThumbnailKey(str(pdf), 0, 90, 116), qimage)
+
+                lane._list.setCurrentRow(0)
+                lane.rotate_selected(90)
+
+                self.assertEqual(lane.page_refs()[0].rotation_deg, 90)
+                self.assertFalse(lane._list.item(0).icon().isNull())
             finally:
                 lane.teardown()
                 lane.deleteLater()

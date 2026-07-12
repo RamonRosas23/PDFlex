@@ -121,7 +121,7 @@ Formato compacto propio (no JWT, para evitar la superficie de ataque de negociac
 PLT1.<base64url(claims_json)>.<base64url(firma_ed25519_de_claims_json_bytes)>
 ```
 
-`PLT1` = tag de versión de formato ("PDFlex License Token v1").
+`PLT1` = tag de versión de formato ("PDFlex License Token v1"). `base64url` = RFC 4648 §5, **sin padding** (sin caracteres `=`). `claims_json` = el JSON de claims serializado a UTF-8 **exactamente como lo produjo el servidor** (compacto, sin espacios, claves en el orden que sea — no importa el formato exacto porque la firma se verifica sobre esos mismos bytes, nunca sobre una re-serialización).
 
 ### Claims (JSON antes de codificar)
 
@@ -148,7 +148,7 @@ PLT1.<base64url(claims_json)>.<base64url(firma_ed25519_de_claims_json_bytes)>
 
 1. Separar por `.`, validar tag `PLT1`.
 2. Decodificar base64url de claims y firma.
-3. Verificar firma Ed25519 sobre los bytes crudos del JSON de claims usando `LICENSE_PUBLIC_KEY_ED25519` embebida. Firma inválida → tratar como no-activado, sin excepciones.
+3. Verificar la firma Ed25519 sobre los bytes **crudos decodificados** del segmento de claims (los mismos bytes que salieron del base64url, sin volver a serializar el JSON parseado) usando `LICENSE_PUBLIC_KEY_ED25519` embebida. Firma inválida → tratar como no-activado, sin excepciones.
 4. Validar `app == "pdflex"`.
 5. Comparar `fingerprint` contra el `composite_hash` calculado localmente. Distinto → no-activado, mensaje "Esta licencia pertenece a otro equipo."
 6. Validar `status == "active"`.
@@ -163,10 +163,15 @@ La clave pública Ed25519 (`LICENSE_PUBLIC_KEY_ED25519`) la genera el servidor y
 
 `PDFX-XXXXX-XXXXX-XXXXX-CCCC`
 
-- Alfabeto: Base32 de Crockford en mayúsculas (excluye `I`, `L`, `O`, `U` para evitar confusión visual).
-- 3 grupos de 5 caracteres aleatorios generados por el servidor (~75 bits de entropía, no es fuerza-bruteable en la práctica).
-- 1 grupo final de 4 caracteres de checksum: `checksum = crockford_base32(crc32(grupo1 + grupo2 + grupo3))[:4]`.
-- El cliente recalcula el checksum al vuelo para dar feedback de typo **antes** de llamar a la red. Este algoritmo debe ser bit-a-bit idéntico entre cliente y servidor — está documentado igual en `docs/licensing/server-ai-prompt.md`.
+- Alfabeto (32 símbolos, índice 0-31): `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (Crockford — excluye `I`, `L`, `O`, `U` para evitar confusión visual).
+- 3 grupos de 5 caracteres (`grupo1`, `grupo2`, `grupo3`), cada carácter elegido con un generador aleatorio criptográficamente seguro, uniforme sobre el alfabeto de 32 símbolos (~75 bits de entropía total, no es fuerza-bruteable en la práctica).
+- Checksum (algoritmo exacto, debe ser bit-a-bit idéntico entre cliente y servidor):
+  1. `payload = grupo1 + grupo2 + grupo3` (15 caracteres ASCII, sin guiones).
+  2. `crc = CRC-32(payload)` usando el polinomio estándar IEEE 802.3 (el que implementa `zlib.crc32` en Python y el `CRC-32` por defecto en prácticamente cualquier librería estándar — **no** usar variantes como CRC-32C/Castagnoli).
+  3. `checksum_bits = crc & 0xFFFFF` (quedarse solo con los 20 bits menos significativos).
+  4. Codificar esos 20 bits como big-endian en 4 símbolos del alfabeto de arriba (4 × 5 bits = 20 bits exactos, de más significativo a menos significativo).
+  5. Clave final: `"PDFX-" + grupo1 + "-" + grupo2 + "-" + grupo3 + "-" + checksum`.
+- El cliente valida quitando el prefijo `PDFX-` y los guiones, recalculando los pasos 1-4 sobre los primeros 15 caracteres, y comparando contra los últimos 4. Esto da feedback de typo **antes** de llamar a la red. Este algoritmo está documentado igual, en `docs/licensing/server-ai-prompt.md`.
 
 ---
 

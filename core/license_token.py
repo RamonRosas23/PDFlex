@@ -132,7 +132,7 @@ def verify_token(token: str, expected_fingerprint: str, now: datetime) -> Verifi
             app=raw["app"],
             seats_allowed=int(raw.get("seats_allowed", 1)),
         )
-    except (KeyError, ValueError, TypeError) as exc:
+    except (KeyError, ValueError, TypeError, AttributeError) as exc:
         raise LicenseFormatError("El token contiene datos incompletos o inválidos.") from exc
 
     return VerifiedLicense(claims=claims, needs_revalidation=now > valid_until)

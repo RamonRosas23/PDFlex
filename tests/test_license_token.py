@@ -157,3 +157,25 @@ def test_verify_token_rejects_signed_token_missing_required_field(keypair):
 
     with pytest.raises(lt.LicenseFormatError):
         lt.verify_token(token, expected_fingerprint="fp-hash-123", now=now)
+
+
+def test_verify_token_rejects_signed_token_with_non_string_date_field(keypair):
+    now = datetime.now(timezone.utc)
+    claims = {
+        "v": 1,
+        "key_id": "key-abc",
+        "fingerprint": "fp-hash-123",
+        "issued_at": 1234567890,  # tipo incorrecto: número en vez de string ISO
+        "valid_until": _iso(now + timedelta(days=14)),
+        "license_expires_at": None,
+        "status": "active",
+        "customer_name": "Empresa de Prueba",
+        "app": "pdflex",
+        "seats_allowed": 1,
+    }
+    claims_bytes = json.dumps(claims, separators=(",", ":")).encode("utf-8")
+    signature = keypair.sign(claims_bytes)
+    token = "PLT1." + _b64url_encode(claims_bytes) + "." + _b64url_encode(signature)
+
+    with pytest.raises(lt.LicenseFormatError):
+        lt.verify_token(token, expected_fingerprint="fp-hash-123", now=now)

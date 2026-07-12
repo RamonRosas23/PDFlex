@@ -110,6 +110,19 @@ def test_ensure_licensed_returns_none_when_reconnect_dialog_gives_up():
     assert result is None
 
 
+def test_ensure_licensed_returns_none_when_freshly_activated_token_fails_verification():
+    fake_dialog = Mock()
+    fake_dialog.activated_token = "PLT1.corrupt.token"
+
+    with patch.object(lg.license_storage, "load_token", return_value=None), \
+         patch.object(lg, "compute_fingerprint", return_value=Mock(composite_hash="fp")), \
+         patch.object(lg, "ActivationDialog", return_value=fake_dialog), \
+         patch.object(lg, "verify_token", side_effect=LicenseInvalidError("respuesta corrupta")):
+        result = lg.ensure_licensed()
+
+    assert result is None
+
+
 def test_start_background_revalidation_saves_token_silently_on_success():
     # Sustituye LicenseRevalidateThread por un fake cuyo start() ejecuta el
     # worker de forma síncrona (mismo hilo que el test) en vez de generar un
@@ -137,3 +150,28 @@ def test_start_background_revalidation_saves_token_silently_on_success():
         lg.start_background_revalidation("key-abc", Mock())
 
     save_token.assert_called_once_with("PLT1.bg.token")
+
+
+def test_start_background_revalidation_does_nothing_visible_on_failure():
+    class _SyncFakeThread:
+        def __init__(self, worker, parent):
+            self._worker = worker
+
+        def start(self):
+            self._worker.run()
+
+        def quit(self):
+            pass
+
+    fake_response = Mock(
+        status_code=404,
+        json=lambda: {"error_code": "KEY_NOT_FOUND", "message": "no existe"},
+    )
+
+    with patch.object(lg, "LicenseRevalidateThread", _SyncFakeThread), \
+         patch.object(lg, "compute_fingerprint", return_value=Mock(composite_hash="fp")), \
+         patch("requests.post", return_value=fake_response), \
+         patch.object(lg.license_storage, "save_token") as save_token:
+        lg.start_background_revalidation("key-abc", Mock())  # no debe lanzar
+
+    save_token.assert_not_called()

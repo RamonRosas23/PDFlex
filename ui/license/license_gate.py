@@ -40,7 +40,10 @@ def ensure_licensed(parent=None) -> str | None:
     if dialog.activated_token is None:
         return None
 
-    reactivated = verify_token(dialog.activated_token, fingerprint.composite_hash, datetime.now(timezone.utc))
+    try:
+        reactivated = verify_token(dialog.activated_token, fingerprint.composite_hash, datetime.now(timezone.utc))
+    except LicenseInvalidError:
+        return None
     return reactivated.claims.key_id
 
 

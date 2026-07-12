@@ -116,3 +116,50 @@ def test_deactivate_worker_emits_transfer_limit_error():
         worker.run()
 
     assert results["error_code"] == "TRANSFER_LIMIT_REACHED"
+
+
+def test_activate_worker_emits_error_when_200_response_missing_token():
+    fp = Fingerprint("g", "v", "c", "composite")
+    worker = lm.LicenseActivateWorker("PDFX-AAAAA-BBBBB-CCCCC-DDDD", fp, "PC-1", "Windows 11")
+    results = {}
+    worker.error.connect(lambda code, msg: results.update(error_code=code, message=msg))
+
+    with patch("requests.post", return_value=_fake_response(200, {"customer_name": "X"})):
+        worker.run()
+
+    assert results["error_code"] == "SERVER_ERROR"
+
+
+def test_revalidate_worker_emits_error_when_200_response_missing_token():
+    fp = Fingerprint("g", "v", "c", "composite")
+    worker = lm.LicenseRevalidateWorker("key-id-123", fp)
+    results = {}
+    worker.error.connect(lambda code, msg: results.update(error_code=code, message=msg))
+
+    with patch("requests.post", return_value=_fake_response(200, {"license_expires_at": None})):
+        worker.run()
+
+    assert results["error_code"] == "SERVER_ERROR"
+
+
+def test_activate_worker_emits_error_when_requests_not_importable():
+    fp = Fingerprint("g", "v", "c", "composite")
+    worker = lm.LicenseActivateWorker("PDFX-AAAAA-BBBBB-CCCCC-DDDD", fp, "PC-1", "Windows 11")
+    results = {}
+    worker.error.connect(lambda code, msg: results.update(error_code=code, message=msg))
+
+    with patch.dict("sys.modules", {"requests": None}):
+        worker.run()
+
+    assert results["error_code"] == "NETWORK_ERROR"
+
+
+def test_deactivate_worker_handles_null_transfers_remaining():
+    worker = lm.LicenseDeactivateWorker("key-id-123", "composite-hash")
+    results = {}
+    worker.success.connect(lambda remaining: results.update(remaining=remaining))
+
+    with patch("requests.post", return_value=_fake_response(200, {"ok": True, "transfers_remaining": None})):
+        worker.run()
+
+    assert results["remaining"] == 0

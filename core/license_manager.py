@@ -27,7 +27,13 @@ def _post_with_retries(url: str, payload: dict) -> tuple[int, dict]:
     devuelve (0, {"error_code": "NETWORK_ERROR", "message": "..."})  en vez
     de lanzar, para que los workers manejen un único camino de error.
     """
-    import requests
+    try:
+        import requests
+    except ImportError:
+        return 0, {
+            "error_code": "NETWORK_ERROR",
+            "message": "Librería 'requests' no disponible. Reinstala PDFlex.",
+        }
 
     last_message = "No se pudo conectar."
     for attempt in range(1, license_config.LICENSE_MAX_RETRIES + 1):
@@ -99,7 +105,11 @@ class LicenseActivateWorker(QObject):
         }
         status, body = _post_with_retries(url, payload)
         if status == 200:
-            self.success.emit(body["token"], body.get("customer_name") or "", body.get("license_expires_at"))
+            token = body.get("token")
+            if not token:
+                self.error.emit("SERVER_ERROR", "Respuesta del servidor inválida.")
+                return
+            self.success.emit(token, body.get("customer_name") or "", body.get("license_expires_at"))
         else:
             self.error.emit(body.get("error_code", "SERVER_ERROR"), body.get("message", "Error desconocido."))
 
@@ -134,7 +144,11 @@ class LicenseRevalidateWorker(QObject):
         }
         status, body = _post_with_retries(url, payload)
         if status == 200:
-            self.success.emit(body["token"], body.get("license_expires_at"))
+            token = body.get("token")
+            if not token:
+                self.error.emit("SERVER_ERROR", "Respuesta del servidor inválida.")
+                return
+            self.success.emit(token, body.get("license_expires_at"))
         else:
             self.error.emit(body.get("error_code", "SERVER_ERROR"), body.get("message", "Error desconocido."))
 
@@ -165,7 +179,8 @@ class LicenseDeactivateWorker(QObject):
         payload = {"key_id": self._key_id, "fingerprint": {"composite_hash": self._composite_hash}}
         status, body = _post_with_retries(url, payload)
         if status == 200:
-            self.success.emit(int(body.get("transfers_remaining", 0)))
+            transfers_remaining = body.get("transfers_remaining")
+            self.success.emit(int(transfers_remaining) if transfers_remaining is not None else 0)
         else:
             self.error.emit(body.get("error_code", "SERVER_ERROR"), body.get("message", "Error desconocido."))
 

@@ -83,7 +83,13 @@ def main() -> int:
     font.setPointSize(10)
     app.setFont(font)
 
+    from ui.license.license_gate import ensure_licensed, start_background_revalidation
+    license_key_id = ensure_licensed()
+    if license_key_id is None:
+        return 0
+
     from PySide6.QtCore import QTimer
+    from core.update_config import UPDATE_STARTUP_DELAY_MS
     from shell.shell_window import ShellWindow
     from shell.splash import SplashScreen
     splash = SplashScreen()
@@ -92,6 +98,12 @@ def main() -> int:
     win = ShellWindow()
     win._launcher.ready.connect(lambda: QTimer.singleShot(0, splash.close))
     win.showMaximized()
+
+    QTimer.singleShot(
+        UPDATE_STARTUP_DELAY_MS,
+        lambda: start_background_revalidation(license_key_id, win),
+    )
+
     return app.exec()
 
 

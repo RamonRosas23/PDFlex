@@ -145,6 +145,15 @@ class ShellWindow(QMainWindow):
         self._home_btn.clicked.connect(self._go_home)
         h.addWidget(self._home_btn)
 
+        # Indicador de licencia — siempre visible, no solo dentro de Opciones
+        self._license_status_btn = QPushButton("Licencia activa")
+        self._license_status_btn.setProperty("class", "Ghost")
+        self._license_status_btn.setFixedHeight(32)
+        self._license_status_btn.setToolTip("Ver detalles de tu licencia")
+        set_button_icon(self._license_status_btn, "check", size=14, color=COLORS["success"])
+        self._license_status_btn.clicked.connect(self._show_license_status)
+        h.addWidget(self._license_status_btn)
+
         self._options_btn = QPushButton("Opciones")
         self._options_btn.setProperty("class", "Ghost")
         self._options_btn.setFixedHeight(32)

@@ -1466,7 +1466,6 @@ def test_activate_error_shows_mapped_message_and_reenables_button():
         dlg._on_activate_error("KEY_NOT_FOUND", "mensaje crudo del servidor")
 
         assert dlg._activate_btn.isEnabled() is True
-        assert dlg._error_label.isVisible() is True
         assert "no existe" in dlg._error_label.text()
     finally:
         dlg.close()

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import (
 from core import license_storage
 from core.license_manager import LicenseDeactivateThread, LicenseDeactivateWorker
 from core.license_token import LicenseClaims
-from core.machine_fingerprint import compute_fingerprint
+from core.machine_fingerprint import compute_fingerprint_or_none
 from ui.styles import COLORS
 
 
@@ -76,7 +76,12 @@ class LicensePanel(QWidget):
     def _start_deactivation_worker(self) -> None:
         """Punto de extensión: crea y arranca el worker real. Las pruebas
         sobreescriben este método para simular éxito/error sin red real."""
-        fingerprint = compute_fingerprint()
+        fingerprint = compute_fingerprint_or_none()
+        if fingerprint is None:
+            self._on_deactivate_error(
+                "FINGERPRINT_ERROR", "No se pudo identificar este equipo. Inténtalo de nuevo."
+            )
+            return
         self._worker = LicenseDeactivateWorker(self._claims.key_id, fingerprint.composite_hash)
         self._thread = LicenseDeactivateThread(self._worker)
         self._worker.success.connect(self._on_deactivate_success)

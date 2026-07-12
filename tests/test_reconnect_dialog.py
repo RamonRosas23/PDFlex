@@ -83,12 +83,23 @@ def test_retry_button_disabled_while_a_revalidation_attempt_is_in_flight():
     # pruebas de este archivo) para que su cuerpo real -- incluido el nuevo
     # setEnabled(False) -- se ejecute; solo se mockean sus dependencias de
     # red/threading para que no haya llamadas reales.
-    with patch("ui.license.reconnect_dialog.compute_fingerprint", return_value=Mock(composite_hash="fp")), \
+    with patch("ui.license.reconnect_dialog.compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
          patch("ui.license.reconnect_dialog.LicenseRevalidateWorker"), \
          patch("ui.license.reconnect_dialog.LicenseRevalidateThread"):
         dlg = ReconnectDialog("key-abc")
     try:
         assert dlg._retry_btn.isEnabled() is False
+    finally:
+        dlg.close()
+        _app.processEvents()
+
+
+def test_start_revalidation_worker_shows_error_when_fingerprint_fails_instead_of_crashing():
+    with patch("ui.license.reconnect_dialog.compute_fingerprint_or_none", return_value=None):
+        dlg = ReconnectDialog("key-abc")  # no debe lanzar
+    try:
+        assert dlg._retry_btn.isEnabled() is True
+        assert "identificar este equipo" in dlg._status_label.text()
     finally:
         dlg.close()
         _app.processEvents()

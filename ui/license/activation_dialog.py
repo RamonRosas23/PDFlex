@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 from core import license_storage
 from core.license_key_format import is_valid_key_format, normalize_key
 from core.license_manager import LicenseActivateThread, LicenseActivateWorker
-from core.machine_fingerprint import compute_fingerprint
+from core.machine_fingerprint import compute_fingerprint_or_none
 from ui.common.icons import app_qicon, icon_pixmap
 from ui.styles import COLORS
 
@@ -27,6 +27,7 @@ _ERROR_MESSAGES = {
     "RATE_LIMITED": "Demasiados intentos. Espera unos minutos.",
     "NETWORK_ERROR": "No se pudo conectar. Verifica tu conexión e inténtalo de nuevo.",
     "SERVER_ERROR": "Ocurrió un error en el servidor. Inténtalo de nuevo.",
+    "FINGERPRINT_ERROR": "No se pudo identificar este equipo. Inténtalo de nuevo.",
 }
 
 
@@ -226,7 +227,12 @@ class ActivationDialog(QDialog):
     def _start_activation_worker(self, license_key: str) -> None:
         """Punto de extensión: crea y arranca el worker real. Las pruebas
         sobreescriben este método para simular éxito/error sin red real."""
-        fingerprint = compute_fingerprint()
+        fingerprint = compute_fingerprint_or_none()
+        if fingerprint is None:
+            self._on_activate_error(
+                "FINGERPRINT_ERROR", "No se pudo identificar este equipo. Inténtalo de nuevo."
+            )
+            return
         self._worker = LicenseActivateWorker(
             license_key, fingerprint, _machine_name(), _os_version_string()
         )

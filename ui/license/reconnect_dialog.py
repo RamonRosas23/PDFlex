@@ -14,7 +14,7 @@ from PySide6.QtWidgets import (
 
 from core import license_storage
 from core.license_manager import LicenseRevalidateThread, LicenseRevalidateWorker
-from core.machine_fingerprint import compute_fingerprint
+from core.machine_fingerprint import compute_fingerprint_or_none
 from ui.common.icons import app_qicon, icon_pixmap
 from ui.styles import COLORS
 
@@ -28,8 +28,9 @@ _ERROR_MESSAGES = {
     "RATE_LIMITED": "Demasiados intentos. Espera unos minutos.",
     "NETWORK_ERROR": "No se pudo conectar. Verifica tu conexión.",
     "SERVER_ERROR": "Ocurrió un error en el servidor. Inténtalo de nuevo.",
+    "FINGERPRINT_ERROR": "No se pudo identificar este equipo. Inténtalo de nuevo.",
 }
-_AUTO_RETRY_CODES = {"NETWORK_ERROR", "SERVER_ERROR"}
+_AUTO_RETRY_CODES = {"NETWORK_ERROR", "SERVER_ERROR", "FINGERPRINT_ERROR"}
 
 
 class ReconnectDialog(QDialog):
@@ -184,7 +185,12 @@ class ReconnectDialog(QDialog):
         """Punto de extensión: crea y arranca el worker real. Las pruebas
         sobreescriben este método para simular éxito/error sin red real."""
         self._retry_btn.setEnabled(False)
-        fingerprint = compute_fingerprint()
+        fingerprint = compute_fingerprint_or_none()
+        if fingerprint is None:
+            self._on_revalidate_error(
+                "FINGERPRINT_ERROR", "No se pudo identificar este equipo. Inténtalo de nuevo."
+            )
+            return
         self._worker = LicenseRevalidateWorker(self._key_id, fingerprint)
         self._thread = LicenseRevalidateThread(self._worker)
         self._worker.success.connect(self._on_revalidate_success)

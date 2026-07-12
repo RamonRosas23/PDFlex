@@ -109,3 +109,19 @@ def test_on_deactivate_error_reenables_button_and_shows_warning():
     finally:
         panel.deleteLater()
         _app.processEvents()
+
+
+def test_start_deactivation_worker_shows_error_when_fingerprint_fails_instead_of_crashing():
+    panel = LicensePanel(_claims())
+    panel._deactivate_btn.setEnabled(False)  # simula el estado tras un clic real
+
+    with patch("ui.license.license_panel.compute_fingerprint_or_none", return_value=None), \
+         patch.object(QMessageBox, "warning") as warning:
+        panel._start_deactivation_worker()  # no debe lanzar
+
+    try:
+        assert panel._deactivate_btn.isEnabled() is True
+        warning.assert_called_once()
+    finally:
+        panel.deleteLater()
+        _app.processEvents()

@@ -93,3 +93,16 @@ def test_activate_error_falls_back_to_server_message_for_unknown_code():
     finally:
         dlg.close()
         _app.processEvents()
+
+
+def test_start_activation_worker_shows_error_when_fingerprint_fails_instead_of_crashing():
+    dlg = ActivationDialog()
+    try:
+        with patch("ui.license.activation_dialog.compute_fingerprint_or_none", return_value=None):
+            dlg._start_activation_worker("PDFX-ABCDE-FGHJK-MNPQR-718B")  # no debe lanzar
+
+        assert dlg._activate_btn.isEnabled() is True
+        assert "identificar este equipo" in dlg._error_label.text()
+    finally:
+        dlg.close()
+        _app.processEvents()

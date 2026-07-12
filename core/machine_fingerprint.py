@@ -77,3 +77,16 @@ def compute_fingerprint() -> Fingerprint:
         cpu_id_hash=cpu_id_hash,
         composite_hash=composite_hash,
     )
+
+
+def compute_fingerprint_or_none() -> Fingerprint | None:
+    """Como `compute_fingerprint()`, pero nunca lanza — devuelve `None` si
+    falla la lectura de algún identificador de hardware (registro, WMI,
+    servicio caído). Los llamadores en el hilo de la GUI (diálogos de
+    licencia) deben usar esta variante y mostrar un error controlado en
+    vez de dejar escapar la excepción, que de otro modo llega al manejador
+    de crashes fatal de la app."""
+    try:
+        return compute_fingerprint()
+    except Exception:
+        return None

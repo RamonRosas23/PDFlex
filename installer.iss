@@ -143,6 +143,17 @@ Source: "{#EnterpriseServicesStagingDir}\{#EnterpriseServicesPayloadFile}"; \
 #endif
 #endif
 
+; ── Almacenamiento de licencia ─────────────────────────────────────────────────
+
+[Dirs]
+; Carpeta de estado de licencia — permisos relajados para que PDFlex.exe
+; (sin elevación tras la instalación) pueda escribir el token de licencia.
+; No lleva flags de borrado agresivo: sobrevive a la desinstalación porque
+; license.dat lo crea la app en tiempo de ejecución (no el instalador), y
+; Inno Setup no borra en desinstalación un directorio que no está vacío.
+Name: "{commonappdata}\{#AppPublisher}\{#AppName}\License"; \
+    Permissions: users-modify
+
 ; ── Íconos ────────────────────────────────────────────────────────────────────
 
 [Icons]
@@ -174,6 +185,14 @@ Root: HKLM; \
     Subkey: "Software\{#AppPublisher}\{#AppName}"; \
     ValueType: string; ValueName: "Version"; \
     ValueData: "{#AppVersion}"
+
+; Estado de licencia — clave HERMANA de Software\{#AppPublisher}\{#AppName}
+; (NO anidada bajo ella): esa clave tiene Flags: uninsdeletekey en su primer
+; valor (arriba), y una subclave ahí se borraría al desinstalar PDFlex.
+; Mismo patrón que Software\{#AppPublisher}\PDFlexEnterpriseServices.
+Root: HKLM; \
+    Subkey: "Software\{#AppPublisher}\PDFlexLicense"; \
+    Permissions: users-modify
 
 ; ── Ejecución post-instalación ────────────────────────────────────────────────
 

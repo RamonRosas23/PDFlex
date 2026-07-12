@@ -112,10 +112,20 @@ def save_token(token: str) -> None:
 def _repair_if_needed(
     good: bytes, registry_bytes: bytes | None, file_bytes: bytes | None
 ) -> None:
+    """Repara la copia faltante/desactualizada. Best-effort: un fallo de
+    escritura (disco lleno, archivo bloqueado por antivirus, la clave de
+    registro desapareció entre la lectura y la escritura) no debe impedir
+    devolver el token que ya se descifró correctamente."""
     if registry_bytes != good:
-        _registry_write(base64.b64encode(good).decode("ascii"))
+        try:
+            _registry_write(base64.b64encode(good).decode("ascii"))
+        except OSError:
+            pass
     if file_bytes != good:
-        _file_write(good)
+        try:
+            _file_write(good)
+        except OSError:
+            pass
 
 
 def load_token() -> str | None:

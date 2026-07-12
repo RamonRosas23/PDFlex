@@ -76,6 +76,18 @@ def test_clear_token_deletes_both_copies():
     file_delete.assert_called_once()
 
 
+def test_load_token_returns_token_even_if_repair_write_fails():
+    registry_protected = b"REGISTRY-VERSION"
+    file_protected = b"STALE-FILE-VERSION"
+    with patch.object(ls, "_registry_read", return_value=base64.b64encode(registry_protected).decode()), \
+         patch.object(ls, "_file_read", return_value=file_protected), \
+         patch.object(ls, "_dpapi_unprotect", return_value=b"PLT1.claims.sig"), \
+         patch.object(ls, "_file_write", side_effect=OSError("disco lleno")):
+        token = ls.load_token()
+
+    assert token == "PLT1.claims.sig"
+
+
 def test_load_token_falls_back_to_file_when_registry_value_is_malformed_base64():
     protected = b"PROTECTED-BYTES"
     with patch.object(ls, "_registry_read", return_value="not-valid-base64!!!"), \

@@ -183,6 +183,7 @@ class ReconnectDialog(QDialog):
     def _start_revalidation_worker(self) -> None:
         """Punto de extensión: crea y arranca el worker real. Las pruebas
         sobreescriben este método para simular éxito/error sin red real."""
+        self._retry_btn.setEnabled(False)
         fingerprint = compute_fingerprint()
         self._worker = LicenseRevalidateWorker(self._key_id, fingerprint)
         self._thread = LicenseRevalidateThread(self._worker)

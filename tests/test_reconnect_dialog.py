@@ -1,5 +1,5 @@
 import os
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -73,6 +73,22 @@ def test_key_revoked_does_not_schedule_auto_retry():
         with patch("ui.license.reconnect_dialog.QTimer.singleShot") as timer_mock:
             dlg._on_revalidate_error("KEY_REVOKED", "La licencia fue revocada.")
         timer_mock.assert_not_called()
+    finally:
+        dlg.close()
+        _app.processEvents()
+
+
+def test_retry_button_disabled_while_a_revalidation_attempt_is_in_flight():
+    # No sobreescribe _start_revalidation_worker (a diferencia de las demás
+    # pruebas de este archivo) para que su cuerpo real -- incluido el nuevo
+    # setEnabled(False) -- se ejecute; solo se mockean sus dependencias de
+    # red/threading para que no haya llamadas reales.
+    with patch("ui.license.reconnect_dialog.compute_fingerprint", return_value=Mock(composite_hash="fp")), \
+         patch("ui.license.reconnect_dialog.LicenseRevalidateWorker"), \
+         patch("ui.license.reconnect_dialog.LicenseRevalidateThread"):
+        dlg = ReconnectDialog("key-abc")
+    try:
+        assert dlg._retry_btn.isEnabled() is False
     finally:
         dlg.close()
         _app.processEvents()

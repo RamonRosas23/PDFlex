@@ -47,6 +47,12 @@ def _post_with_retries(url: str, payload: dict) -> tuple[int, dict]:
             try:
                 body = resp.json()
             except ValueError:
+                body = None
+            # `resp.json()` puede tener éxito con JSON válido que no es un
+            # objeto (ej. una lista o un escalar suelto) — tratarlo igual
+            # que JSON inválido, para que ningún worker llame `.get(...)`
+            # sobre algo que no es un dict.
+            if not isinstance(body, dict):
                 body = {"error_code": "SERVER_ERROR", "message": "Respuesta del servidor inválida."}
             return resp.status_code, body
         except requests.exceptions.ConnectionError:

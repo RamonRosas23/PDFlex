@@ -163,3 +163,17 @@ def test_deactivate_worker_handles_null_transfers_remaining():
         worker.run()
 
     assert results["remaining"] == 0
+
+
+def test_activate_worker_emits_server_error_when_response_json_is_not_an_object():
+    # JSON válido pero no es un objeto (ej. una lista suelta) -- body.get(...)
+    # reventaría con AttributeError si no se blindara en _post_with_retries.
+    fp = Fingerprint("g", "v", "c", "composite")
+    worker = lm.LicenseActivateWorker("PDFX-AAAAA-BBBBB-CCCCC-DDDD", fp, "PC-1", "Windows 11")
+    results = {}
+    worker.error.connect(lambda code, msg: results.update(error_code=code, message=msg))
+
+    with patch("requests.post", return_value=_fake_response(200, ["not", "an", "object"])):
+        worker.run()  # no debe lanzar AttributeError
+
+    assert results["error_code"] == "SERVER_ERROR"

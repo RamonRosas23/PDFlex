@@ -19,9 +19,10 @@ LICENSE_TRANSFER_WINDOW_DAYS = 90
 
 # ── Criptografía ───────────────────────────────────────────────────────────────
 # Clave pública Ed25519 (32 bytes crudos, base64 estándar) entregada por el
-# servidor. Placeholder de desarrollo — DEBE reemplazarse por la clave real
-# de producción antes de compilar un release comercial.
-LICENSE_PUBLIC_KEY_ED25519 = "REPLACE_WITH_SERVER_PUBLIC_KEY_BASE64_BEFORE_RELEASE"
+# servidor de producción. La clave privada correspondiente nunca sale del
+# servidor; esta mitad pública es la única que necesita el cliente para
+# verificar la firma de los tokens de licencia.
+LICENSE_PUBLIC_KEY_ED25519 = "n/x+N347aO/bThpqLmfLImjGTBveq1QLTZIlHVFJbXI="
 
 # Pepper fijo para normalizar identificadores de hardware antes de enviarlos.
 # No es un secreto de seguridad — solo evita transmitir IDs de hardware en crudo.

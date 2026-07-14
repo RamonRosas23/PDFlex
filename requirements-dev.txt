@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Solo para desarrollo/tests — no se empaqueta en la app distribuida.
+pytest>=8.0.0
+pymupdf>=1.24.0

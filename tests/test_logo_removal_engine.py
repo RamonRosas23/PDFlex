@@ -6,7 +6,7 @@ import unittest
 from unittest.mock import patch
 
 import fitz
-from PIL import Image, ImageDraw, ImageFilter
+from PIL import Image, ImageDraw, ImageFilter, ImageStat
 
 from core.logo_removal_engine import (
     LogoRemovalEngine,
@@ -135,10 +135,7 @@ class LogoRemovalEngineTests(unittest.TestCase):
                 pix = cleaned[0].get_pixmap(matrix=fitz.Matrix(1, 1), alpha=False)
                 rendered = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
                 sample = rendered.crop((345, 30, 450, 75))
-                average = tuple(
-                    sum(channel) / len(channel)
-                    for channel in zip(*list(sample.getdata()))
-                )
+                average = ImageStat.Stat(sample).mean
                 self.assertGreater(min(average), 235)
             finally:
                 cleaned.close()

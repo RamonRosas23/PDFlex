@@ -20,9 +20,7 @@ param(
     [switch]$SkipSetupBootstrapper,
     [switch]$SkipSign,
     [switch]$RequireSign,
-    [switch]$RequireBundledTesseract,
-    [string]$EnterpriseServicesMode = "",
-    [string]$EnterpriseServicesSource = ""
+    [switch]$RequireBundledTesseract
 )
 
 Set-StrictMode -Version Latest
@@ -90,24 +88,6 @@ function Copy-OptionalPdfEngine([string]$Name, [string[]]$SourceCandidates, [str
     Ok "$Name empaquetado en $DestRelative ($engineMB MB)"
 }
 
-function Resolve-EnterpriseServicesMode([string]$RequestedMode) {
-    $raw = if ($RequestedMode) {
-        $RequestedMode
-    } elseif ($env:PDFLEX_ENTERPRISE_SERVICES_MODE) {
-        $env:PDFLEX_ENTERPRISE_SERVICES_MODE
-    } else {
-        "Off"
-    }
-
-    switch ($raw.Trim().ToLowerInvariant()) {
-        "off"      { return "Off" }
-        "required" { return "Required" }
-        default    { Err "EnterpriseServicesMode invalido: '$raw'. Usa Off o Required." }
-    }
-}
-
-$EffectiveEnterpriseServicesMode = Resolve-EnterpriseServicesMode $EnterpriseServicesMode
-
 # ── 0. Validaciones previas ───────────────────────────────────────────────────
 Step "0/8" "Validando entorno"
 
@@ -124,7 +104,6 @@ Ok "Directorio del proyecto: $ProjectDir"
 
 if ($ISSCPaths) { Ok "Inno Setup: $ISSCPaths" }
 else            { Err "Inno Setup no encontrado. Se requiere para generar el instalador." }
-Ok "Enterprise Services: $EffectiveEnterpriseServicesMode"
 
 # ── 1. Limpiar builds anteriores ─────────────────────────────────────────────
 Step "1/8" "Limpiando builds anteriores"
@@ -469,10 +448,6 @@ $setupArgs = @{}
 if ($SkipSetupBootstrapper) { Warn "-SkipSetupBootstrapper esta obsoleto; se generara el instalador directo." }
 if ($SkipSign)              { $setupArgs["SkipSign"] = $true }
 if ($RequireSign)           { $setupArgs["RequireSign"] = $true }
-$setupArgs["EnterpriseServicesMode"] = $EffectiveEnterpriseServicesMode
-if ($EnterpriseServicesSource) {
-    $setupArgs["EnterpriseServicesSource"] = $EnterpriseServicesSource
-}
 
 & $setupBuilder @setupArgs
 if ($LASTEXITCODE -ne 0) { Err "build_setup.ps1 terminó con error $LASTEXITCODE." }

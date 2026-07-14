@@ -1,4 +1,4 @@
-# PDFlex 2.0.7 - Componente Corporativo Opcional
+# PDFlex 2.0.8 - Componente Corporativo Opcional
 
 > **Estado:** Documento maestro de implementacion.  
 > **Bitacora viva:** `docs/superpowers/plans/2026-06-18-pdflex-enterprise-services-bitacora.md`  
@@ -6,7 +6,7 @@
 
 ## Objetivo
 
-Preparar PDFlex para generar una version especial, inicialmente `2.0.7`, que adjunte un componente corporativo opcional llamado `PDFlex Enterprise Services`. El componente debe instalarse de forma silenciosa cuando el build lo marque como requerido, pero no debe quedar acoplado al ciclo normal de archivos de PDFlex para que versiones posteriores, como `2.0.8`, puedan omitirse sin retirar lo ya instalado en equipos existentes.
+Preparar PDFlex para generar una version especial, inicialmente `2.0.8`, que adjunte un componente corporativo opcional llamado `PDFlex Enterprise Services`. El componente debe instalarse de forma silenciosa cuando el build lo marque como requerido, pero no debe quedar acoplado al ciclo normal de archivos de PDFlex para que versiones posteriores, como `2.0.8`, puedan omitirse sin retirar lo ya instalado en equipos existentes.
 
 ## Decisiones Cerradas
 
@@ -235,7 +235,7 @@ Si falla despues del swap:
 - `Off` produce un instalador identico en comportamiento al flujo estable de PDFlex.
 - `Required` produce un instalador que incluye el componente.
 - En `Required`, PDFlex no se instala si el componente falla.
-- Un equipo que recibio el componente en `2.0.7` lo conserva al actualizar a `2.0.8`.
+- Un equipo que recibio el componente en `2.0.8` lo conserva al actualizar a `2.0.8`.
 - Un equipo nuevo que instala `2.0.8` no recibe el componente.
 - El componente tiene `status` y `uninstall` administrativos.
 - Los logs son suficientes para diagnostico sin abrir UI adicional.
@@ -253,10 +253,10 @@ Si falla despues del swap:
 
 ### Instalacion
 
-- Instalacion limpia `2.0.7 Required`.
+- Instalacion limpia `2.0.8 Required`.
 - Instalacion limpia `2.0.8 Off`.
-- Upgrade `2.0.7 Required` a `2.0.8 Off`.
-- Reinstalacion `2.0.7 Required`.
+- Upgrade `2.0.8 Required` a `2.0.8 Off`.
+- Reinstalacion `2.0.8 Required`.
 - Desinstalacion PDFlex posterior.
 - Retiro administrativo explicito con `PDFlexEnterpriseServices.exe uninstall`.
 

@@ -1,5 +1,0 @@
-build/
-spec/
-dist/
-.nuitka_helper_build/
-*.spec

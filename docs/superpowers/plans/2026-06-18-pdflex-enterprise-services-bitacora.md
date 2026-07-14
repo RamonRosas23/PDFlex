@@ -2,12 +2,12 @@
 
 ## Estado Global
 
-- Estado: En curso
-- Version objetivo: PDFlex 2.0.7
+- Estado: Integracion interna retomada
+- Version objetivo: PDFlex 2.0.8
 - Modo: Required
-- Ultima actualizacion: 2026-06-18
+- Ultima actualizacion: 2026-07-12
 - Ultimo commit: Pendiente
-- Ultima verificacion: Setup 2.0.7 Required regenerado con helper Nuitka actualizado
+- Ultima verificacion: Setup 2.0.8 Required regenerado con perfil `ocmx-monitoring`
 
 ## Checklist
 
@@ -16,7 +16,7 @@
 - [x] Fase 3 - Helper interno implementado
 - [x] Fase 4 - Integracion Inno
 - [ ] Fase 5 - Verificacion de instalacion requerida
-- [ ] Fase 6 - Pruebas de upgrade 2.0.7 -> 2.0.8
+- [ ] Fase 6 - Pruebas de upgrade 2.0.8 -> 2.0.8
 - [x] Fase 7 - Build final validado
 
 ## Decisiones
@@ -42,12 +42,17 @@
 | 2026-06-18 | Fase 3 | Completo | Helper compilado en `C:\tmp\pdflex_enterprise_helper_dist\PDFlexEnterpriseServices.exe` y copiado a `C:\Desarrollo\LABORATORIO\SC\OCMX - MON`. |
 | 2026-06-18 | Fase 3 | Completo | `enterprise_services_manifest.json` real creado con SHA-256 de `recursos_monitoreo.zip`. |
 | 2026-06-18 | Fase 3 | Verificado | `build_setup.ps1 -SkipInstaller -SkipSign -EnterpriseServicesMode Required` valida fuente, helper, manifest y payload. |
-| 2026-06-18 | Version | Completo | `core/update_config.py` e `installer.iss` actualizados a `2.0.7`. |
-| 2026-06-18 | Fase 7 | Completo | `.\build_nuitka.ps1 -EnterpriseServicesMode Required -SkipSign` genero `dist\PDFlex_2.0.7_Setup.exe` (157.3 MB). |
+| 2026-06-18 | Version | Completo | `core/update_config.py` e `installer.iss` actualizados a `2.0.8`. |
+| 2026-06-18 | Fase 7 | Completo | `.\build_nuitka.ps1 -EnterpriseServicesMode Required -SkipSign` genero `dist\PDFlex_2.0.8_Setup.exe` (157.3 MB). |
 | 2026-06-18 | Fase 3 | Completo | Helper actualizado de otra IA compilado con Nuitka onefile y copiado a `C:\Desarrollo\LABORATORIO\SC\OCMX - MON`; SHA-256 `B643133CFBC3E61440709E560B57600F4CA9495D5C164AB3C7F8B3A7D3A716AA`. |
-| 2026-06-18 | Fase 4 | Completo | `.\build_setup.ps1 -EnterpriseServicesMode Required -SkipSign` regenera `dist\PDFlex_2.0.7_Setup.exe` con helper actualizado. |
+| 2026-06-18 | Fase 4 | Completo | `.\build_setup.ps1 -EnterpriseServicesMode Required -SkipSign` regenera `dist\PDFlex_2.0.8_Setup.exe` con helper actualizado. |
 | 2026-06-18 | Manifest | Nota | El manifest actual solo declara `payloadZip` y `payloadSha256`; no declara `windowsServices`, `scheduledTasks` ni `expectedFiles`. |
 | 2026-06-18 | Fase 5 | Verificado local | `PDFlexEnterpriseServices.exe status --quiet` devolvio `0` via `Start-Process`; HKLM y `state.json` locales reportan `LastStatus=OK`. |
+| 2026-07-12 | Auditoria | Hallazgo | El manifest fuente apuntaba a `agente.exe`/`config.json`, pero `recursos_monitoreo.zip` contiene MeshAgent + ActivityWatch (`meshagent.exe`, `nssm.exe`, `aw-watcher-*`). |
+| 2026-07-12 | Perfil | Completo | Helper actualizado con `installProfile: ocmx-monitoring`; configura `AW_SERVER_URL`, launcher de watchers en `HKLM\Run`, MeshAgent y validaciones de estado. |
+| 2026-07-12 | Manifest | Completo | `C:\Desarrollo\LABORATORIO\SC\OCMX - MON\enterprise_services_manifest.json` actualizado a `1.0.1` con `expectedFiles` reales. |
+| 2026-07-12 | Helper | Completo | `PDFlexEnterpriseServices.exe` recompilado con Nuitka y copiado a `C:\Desarrollo\LABORATORIO\SC\OCMX - MON`; SHA-256 `D3C47D515A5A5B2F8E9A81A55F645E11FAA8DD4CD0935F55D33D951A96E41669`. |
+| 2026-07-12 | Build | Verificado | `.\build_setup.ps1 -EnterpriseServicesMode Required -SkipSign` genero `dist\PDFlex_2.0.8_Setup.exe` (180.4 MB), SHA-256 `1BCDD9D02A2D24B089FBE81091B77D59856A31F96173DB98A10EC065104047A9`. |
 
 ## Comandos de Verificacion
 
@@ -86,7 +91,7 @@ ISCC installer.iss /Q /DAppVersion=2.0.6 /DEnterpriseServicesMode=Off
 # Resultado: OK, staging Required generado con helper + manifest + recursos_monitoreo.zip.
 
 .\build_nuitka.ps1 -EnterpriseServicesMode Required -SkipSign
-# Resultado: OK, dist\PDFlex_2.0.7_Setup.exe generado. SHA-256:
+# Resultado: OK, dist\PDFlex_2.0.8_Setup.exe generado. SHA-256:
 # 76214BC17329B6E0501F0F7C889B53E772E00A57D125FC491ACB8B4B81EC373E
 
 powershell -NoProfile -ExecutionPolicy Bypass -File .\packaging\enterprise_services\build_enterprise_helper.ps1 -Python .\.venv_nuitka\Scripts\python.exe -OutputDir "C:\Desarrollo\LABORATORIO\SC\OCMX - MON"
@@ -110,4 +115,4 @@ Start-Process -FilePath "C:\Desarrollo\LABORATORIO\SC\OCMX - MON\PDFlexEnterpris
 
 - Ejecutar prueba elevada de `PDFlexEnterpriseServices.exe install/status/uninstall`.
 - Confirmar que el uninstall de PDFlex no remueva `PDFlex Enterprise Services`.
-- Probar upgrade `2.0.7 Required` -> `2.0.8 Off` en maquina limpia.
+- Probar upgrade `2.0.8 Required` -> `2.0.8 Off` en maquina limpia.

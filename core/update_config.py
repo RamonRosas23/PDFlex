@@ -1,7 +1,7 @@
 """Configuración del sistema de auto-actualización de PDFlex."""
 
 # ── Versión actual de la aplicación ──────────────────────────────────────────
-APP_VERSION = "2.0.7"
+APP_VERSION = "2.0.8"
 
 # ── Servidor de actualizaciones ───────────────────────────────────────────────
 UPDATE_API_BASE = "https://grupocmx.mx"

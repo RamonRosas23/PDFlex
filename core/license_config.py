@@ -11,6 +11,13 @@ LICENSE_CHECK_TIMEOUT_S = 12
 LICENSE_MAX_RETRIES = 3
 LICENSE_RETRY_DELAY_S = 2
 
+# Comprobación corta en el arranque cuando ya existe un token local. Si falla
+# por red/timeout se respeta la ventana offline del token; si el servidor
+# responde una revocación/liberación, se bloquea antes de abrir la app.
+LICENSE_STARTUP_REVALIDATE_TIMEOUT_S = 4
+LICENSE_STARTUP_REVALIDATE_MAX_RETRIES = 1
+LICENSE_STARTUP_REVALIDATE_RETRY_DELAY_S = 0
+
 # ── Política de licencia ──────────────────────────────────────────────────────
 LICENSE_OFFLINE_GRACE_DAYS = 14
 LICENSE_REVALIDATE_WARNING_DAYS = 3

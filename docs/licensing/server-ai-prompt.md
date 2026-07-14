@@ -18,8 +18,8 @@ Responde JSON con esta forma (campo por campo, ya en producción — es tu refer
 {
   "app": "pdflex",
   "channel": "stable",
-  "version": "2.0.7",
-  "url": "https://.../PDFlex_2.0.7_Setup.exe",
+  "version": "2.0.8",
+  "url": "https://.../PDFlex_2.0.8_Setup.exe",
   "sha256": "...",
   "size_bytes": 123456789,
   "mandatory": false,
@@ -152,7 +152,7 @@ Request:
   },
   "machine_name": "DESKTOP-ABC123",
   "os_version": "Windows 11 Pro 23H2",
-  "app_version": "2.0.7"
+  "app_version": "2.0.8"
 }
 ```
 
@@ -178,7 +178,7 @@ Request:
 {
   "key_id": "uuid-del-token-anterior",
   "fingerprint": { "machine_guid_hash": "...", "volume_serial_hash": "...", "cpu_id_hash": "...", "composite_hash": "..." },
-  "app_version": "2.0.7"
+  "app_version": "2.0.8"
 }
 ```
 
@@ -186,6 +186,7 @@ Response `200`: `{ "token": "PLT1....", "license_expires_at": ... }` — token f
 
 Lógica:
 - `key_id` no encontrado → `404 KEY_NOT_FOUND`.
+- Activación encontrada pero `license_activations.is_active=false` por `/deactivate` o por "Forzar liberación" desde el panel admin → `410 ACTIVATION_RELEASED`.
 - Clave revocada → `410 KEY_REVOKED`.
 - Licencia expirada (`expires_at` pasado) → `410 KEY_EXPIRED`.
 - `composite_hash` no coincide con el registrado → `409 FINGERPRINT_MISMATCH` (posible clonación/manipulación — regístralo para revisión, ver §11).
@@ -214,6 +215,7 @@ Todas las respuestas de error: JSON `{ "error_code": "...", "message": "texto en
 | `FINGERPRINT_MISMATCH` | 409 |
 | `KEY_REVOKED` | 410 |
 | `KEY_EXPIRED` | 410 |
+| `ACTIVATION_RELEASED` | 410 |
 | `TRANSFER_LIMIT_REACHED` | 429 |
 | `RATE_LIMITED` | 429 |
 | `SERVER_ERROR` | 500 |

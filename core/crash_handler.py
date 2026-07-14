@@ -24,11 +24,12 @@ import tempfile
 import threading
 import traceback
 import types
+import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import Type
 
-from PySide6.QtCore import Qt, qInstallMessageHandler
+from PySide6.QtCore import Qt, QTimer, qInstallMessageHandler
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QApplication, QDialog, QFrame, QGraphicsDropShadowEffect,
@@ -38,6 +39,12 @@ from PySide6.QtWidgets import (
 from core.update_config import APP_VERSION
 from ui.common.icons import icon_pixmap, set_button_icon
 from ui.styles import COLORS
+
+try:
+    from shiboken6 import isValid as _qt_is_valid
+except Exception:  # pragma: no cover - fallback defensivo si cambia el binding
+    def _qt_is_valid(obj) -> bool:
+        return obj is not None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -59,6 +66,23 @@ _QT_MESSAGE_FILE: Path | None = None
 _FAULT_LOG_HANDLE = None
 _SESSION_STARTED: bool = False
 _SESSION_FILE: Path | None = None
+
+
+def _restore_button_text_later(button: QPushButton, text: str, delay_ms: int = 1800) -> None:
+    """Restaura texto de un botón sin tocar wrappers Qt ya destruidos."""
+    button_ref = weakref.ref(button)
+
+    def _restore() -> None:
+        btn = button_ref()
+        if btn is None or not _qt_is_valid(btn):
+            return
+        try:
+            btn.setText(text)
+        except RuntimeError:
+            # Qt puede destruir el objeto C++ durante el cierre aunque el wrapper siga vivo.
+            return
+
+    QTimer.singleShot(delay_ms, _restore)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -583,8 +607,7 @@ class CrashDialog(QDialog):
         if isinstance(btn, QPushButton):
             original = btn.text()
             btn.setText("¡Copiado!")
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(1800, lambda: btn.setText(original))
+            _restore_button_text_later(btn, original)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -878,8 +901,7 @@ class PreviousCrashDialog(QDialog):
         if isinstance(btn, QPushButton):
             original = btn.text()
             btn.setText("¡Copiado!")
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(1800, lambda: btn.setText(original))
+            _restore_button_text_later(btn, original)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

@@ -18,6 +18,12 @@ def test_revalidate_warning_is_three_days():
     assert lc.LICENSE_REVALIDATE_WARNING_DAYS == 3
 
 
+def test_startup_revalidation_is_short_and_single_attempt():
+    assert lc.LICENSE_STARTUP_REVALIDATE_TIMEOUT_S == 4
+    assert lc.LICENSE_STARTUP_REVALIDATE_MAX_RETRIES == 1
+    assert lc.LICENSE_STARTUP_REVALIDATE_RETRY_DELAY_S == 0
+
+
 def test_transfer_limit_settings():
     assert lc.LICENSE_TRANSFER_LIMIT == 3
     assert lc.LICENSE_TRANSFER_WINDOW_DAYS == 90

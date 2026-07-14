@@ -191,7 +191,7 @@ Request:
   },
   "machine_name": "DESKTOP-ABC123",
   "os_version": "Windows 11 Pro 23H2",
-  "app_version": "2.0.7"
+  "app_version": "2.0.8"
 }
 ```
 Response 200: `{ "token": "PLT1....", "customer_name": "...", "license_expires_at": null }`
@@ -242,10 +242,18 @@ Reconciliación: si ambas copias existen pero difieren, o si una falta, se recon
 ## 8. Revalidación, gracia offline y revocación
 
 - En cada arranque con internet disponible: revalidación silenciosa en segundo plano (ver §1.2).
+- Si una revalidación de arranque recibe una respuesta definitiva del servidor
+  (`KEY_REVOKED`, `KEY_EXPIRED`, `KEY_NOT_FOUND`, `FINGERPRINT_MISMATCH` o
+  `ACTIVATION_RELEASED`), el cliente debe borrar el token local antes de abrir
+  la interfaz principal y volver al flujo de activación.
 - Sin internet: el token local sigue siendo confiable hasta `valid_until` (14 días desde la última revalidación exitosa).
 - Aviso discreto desde 3 días antes de `valid_until` si no se ha logrado reconectar.
 - Pasado `valid_until` sin reconectar: bloqueo (pantalla de "Reconectando licencia…", §1.2 punto 4) hasta lograr una revalidación exitosa o hasta que el usuario reactive con una clave.
-- Una clave revocada desde el panel del servidor deja de revalidarse exitosamente en el siguiente intento del cliente — el equipo queda bloqueado en un máximo de `LICENSE_OFFLINE_GRACE_DAYS` tras la revocación (antes si el equipo tiene internet regular, ya que se revalida en cada arranque).
+- Una clave revocada o una activación liberada desde el panel del servidor deja
+  de revalidarse exitosamente en el siguiente intento del cliente — el equipo
+  queda bloqueado en un máximo de `LICENSE_OFFLINE_GRACE_DAYS` tras la acción
+  administrativa (antes si el equipo tiene internet regular, ya que se revalida
+  en cada arranque).
 
 ## 9. Transferencia de equipo (autoservicio)
 

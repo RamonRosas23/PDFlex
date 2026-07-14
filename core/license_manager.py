@@ -7,6 +7,7 @@ Ver docs/superpowers/specs/2026-07-11-pdflex-licensing-design.md §6.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import time
 
 from PySide6.QtCore import QObject, QThread, Signal
@@ -20,13 +21,24 @@ def _headers() -> dict:
     return {"User-Agent": f"PDFlex-License/{APP_VERSION}"}
 
 
-def _post_with_retries(url: str, payload: dict) -> tuple[int, dict]:
+def _post_with_retries(
+    url: str,
+    payload: dict,
+    *,
+    timeout_s: int | float | None = None,
+    max_retries: int | None = None,
+    retry_delay_s: int | float | None = None,
+) -> tuple[int, dict]:
     """POST con reintentos. Devuelve (status_code, json_body).
 
     Si todos los intentos fallan por red (sin respuesta del servidor),
     devuelve (0, {"error_code": "NETWORK_ERROR", "message": "..."})  en vez
     de lanzar, para que los workers manejen un único camino de error.
     """
+    timeout = license_config.LICENSE_CHECK_TIMEOUT_S if timeout_s is None else timeout_s
+    retries = license_config.LICENSE_MAX_RETRIES if max_retries is None else max_retries
+    retry_delay = license_config.LICENSE_RETRY_DELAY_S if retry_delay_s is None else retry_delay_s
+
     try:
         import requests
     except ImportError:
@@ -36,13 +48,13 @@ def _post_with_retries(url: str, payload: dict) -> tuple[int, dict]:
         }
 
     last_message = "No se pudo conectar."
-    for attempt in range(1, license_config.LICENSE_MAX_RETRIES + 1):
+    for attempt in range(1, retries + 1):
         try:
             resp = requests.post(
                 url,
                 json=payload,
                 headers=_headers(),
-                timeout=license_config.LICENSE_CHECK_TIMEOUT_S,
+                timeout=timeout,
             )
             try:
                 body = resp.json()
@@ -62,10 +74,69 @@ def _post_with_retries(url: str, payload: dict) -> tuple[int, dict]:
         except requests.exceptions.RequestException as exc:
             last_message = f"Error de red: {exc}"
 
-        if attempt < license_config.LICENSE_MAX_RETRIES:
-            time.sleep(license_config.LICENSE_RETRY_DELAY_S * attempt)
+        if attempt < retries:
+            time.sleep(retry_delay * attempt)
 
     return 0, {"error_code": "NETWORK_ERROR", "message": last_message}
+
+
+@dataclass(frozen=True)
+class LicenseServerResult:
+    ok: bool
+    token: str | None = None
+    license_expires_at: object | None = None
+    error_code: str = ""
+    message: str = ""
+
+
+def revalidate_license_once(
+    key_id: str,
+    fingerprint: Fingerprint,
+    *,
+    timeout_s: int | float | None = None,
+    max_retries: int | None = None,
+    retry_delay_s: int | float | None = None,
+) -> LicenseServerResult:
+    """Revalida una activación y normaliza la respuesta del servidor.
+
+    Se usa tanto desde QThread como desde el arranque bloqueante corto. La
+    validación criptográfica del token devuelto sigue viviendo en el llamador,
+    que conoce el fingerprint esperado y la política UX adecuada.
+    """
+    url = (
+        f"{license_config.LICENSE_API_BASE}/api/desktop-apps/"
+        f"{license_config.LICENSE_APP_KEY}/licenses/revalidate"
+    )
+    payload = {
+        "key_id": key_id,
+        "fingerprint": fingerprint.to_dict(),
+        "app_version": APP_VERSION,
+    }
+    status, body = _post_with_retries(
+        url,
+        payload,
+        timeout_s=timeout_s,
+        max_retries=max_retries,
+        retry_delay_s=retry_delay_s,
+    )
+    if status == 200:
+        token = body.get("token")
+        if not token:
+            return LicenseServerResult(
+                ok=False,
+                error_code="SERVER_ERROR",
+                message="Respuesta del servidor inválida.",
+            )
+        return LicenseServerResult(
+            ok=True,
+            token=str(token),
+            license_expires_at=body.get("license_expires_at"),
+        )
+    return LicenseServerResult(
+        ok=False,
+        error_code=str(body.get("error_code") or "SERVER_ERROR"),
+        message=str(body.get("message") or "Error desconocido."),
+    )
 
 
 def _thread_run_with_crash_report(worker, context: str) -> None:
@@ -133,30 +204,35 @@ class LicenseRevalidateWorker(QObject):
     success = Signal(str, object)  # token, license_expires_at
     error = Signal(str, str)
 
-    def __init__(self, key_id: str, fingerprint: Fingerprint, parent=None) -> None:
+    def __init__(
+        self,
+        key_id: str,
+        fingerprint: Fingerprint,
+        parent=None,
+        *,
+        timeout_s: int | float | None = None,
+        max_retries: int | None = None,
+        retry_delay_s: int | float | None = None,
+    ) -> None:
         super().__init__(parent)
         self._key_id = key_id
         self._fingerprint = fingerprint
+        self._timeout_s = timeout_s
+        self._max_retries = max_retries
+        self._retry_delay_s = retry_delay_s
 
     def run(self) -> None:
-        url = (
-            f"{license_config.LICENSE_API_BASE}/api/desktop-apps/"
-            f"{license_config.LICENSE_APP_KEY}/licenses/revalidate"
+        result = revalidate_license_once(
+            self._key_id,
+            self._fingerprint,
+            timeout_s=self._timeout_s,
+            max_retries=self._max_retries,
+            retry_delay_s=self._retry_delay_s,
         )
-        payload = {
-            "key_id": self._key_id,
-            "fingerprint": self._fingerprint.to_dict(),
-            "app_version": APP_VERSION,
-        }
-        status, body = _post_with_retries(url, payload)
-        if status == 200:
-            token = body.get("token")
-            if not token:
-                self.error.emit("SERVER_ERROR", "Respuesta del servidor inválida.")
-                return
-            self.success.emit(token, body.get("license_expires_at"))
+        if result.ok and result.token:
+            self.success.emit(result.token, result.license_expires_at)
         else:
-            self.error.emit(body.get("error_code", "SERVER_ERROR"), body.get("message", "Error desconocido."))
+            self.error.emit(result.error_code, result.message)
 
 
 class LicenseRevalidateThread(QThread):

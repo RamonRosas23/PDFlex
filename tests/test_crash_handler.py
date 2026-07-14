@@ -3,11 +3,13 @@ from __future__ import annotations
 import json
 import os
 import sys
+from types import SimpleNamespace
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from core import crash_handler as ch
-from PySide6.QtWidgets import QApplication, QFrame
+from PySide6.QtCore import QEvent
+from PySide6.QtWidgets import QApplication, QFrame, QPushButton
 
 
 def _reset_crash_handler_state() -> None:
@@ -72,7 +74,7 @@ def test_previous_crash_dialog_uses_pdflex_styled_shell() -> None:
     dlg = ch.PreviousCrashDialog(
         {
             "status": "crashed",
-            "version": "2.0.7",
+            "version": "2.0.8",
             "last_log": r"C:\Users\tester\AppData\Local\PDFlex\crash_logs\crash.txt",
         }
     )
@@ -87,3 +89,23 @@ def test_previous_crash_dialog_uses_pdflex_styled_shell() -> None:
     finally:
         dlg.close()
         app.processEvents()
+
+
+def test_delayed_button_text_restore_ignores_deleted_qt_object(monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    callbacks = []
+    monkeypatch.setattr(
+        ch,
+        "QTimer",
+        SimpleNamespace(singleShot=lambda _delay, callback: callbacks.append(callback)),
+    )
+
+    btn = QPushButton("Copiar detalle")
+    ch._restore_button_text_later(btn, "Copiar detalle", delay_ms=1)
+    assert len(callbacks) == 1
+
+    btn.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
+
+    callbacks[0]()

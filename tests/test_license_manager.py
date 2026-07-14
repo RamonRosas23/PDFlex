@@ -94,6 +94,38 @@ def test_revalidate_worker_emits_fingerprint_mismatch_error():
     assert results["error_code"] == "FINGERPRINT_MISMATCH"
 
 
+def test_revalidate_once_reports_activation_released():
+    fp = Fingerprint("g", "v", "c", "composite")
+
+    with patch("requests.post", return_value=_fake_response(410, {
+        "error_code": "ACTIVATION_RELEASED",
+        "message": "Esta activación fue liberada desde el servidor.",
+    })):
+        result = lm.revalidate_license_once("key-id-123", fp)
+
+    assert result.ok is False
+    assert result.error_code == "ACTIVATION_RELEASED"
+
+
+def test_revalidate_once_uses_custom_timeout_and_retry_settings():
+    fp = Fingerprint("g", "v", "c", "composite")
+
+    with patch("requests.post", return_value=_fake_response(200, {
+        "token": "PLT1.new.token",
+        "license_expires_at": None,
+    })) as post:
+        result = lm.revalidate_license_once(
+            "key-id-123",
+            fp,
+            timeout_s=4,
+            max_retries=1,
+            retry_delay_s=0,
+        )
+
+    assert result.ok is True
+    assert post.call_args.kwargs["timeout"] == 4
+
+
 def test_deactivate_worker_emits_transfers_remaining():
     worker = lm.LicenseDeactivateWorker("key-id-123", "composite-hash")
     results = {}

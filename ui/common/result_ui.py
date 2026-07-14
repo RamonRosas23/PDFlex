@@ -86,14 +86,14 @@ class ResultsStatBar(QWidget):
             font_sz = "17px" if int_val is not None else "13px"
             val_lbl.setStyleSheet(
                 f"color: {color}; font-size: {font_sz}; font-weight: 700; "
-                "letter-spacing: -0.4px; background: transparent; border: none;"
+                "letter-spacing: 0px; background: transparent; border: none;"
             )
 
             label_lbl = QLabel(stat.get("label", "").upper())
             label_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
             label_lbl.setStyleSheet(
                 "color: #606470; font-size: 9px; font-weight: 700; "
-                "letter-spacing: 0.9px; background: transparent; border: none;"
+                "letter-spacing: 0px; background: transparent; border: none;"
             )
 
             bv.addWidget(val_lbl)

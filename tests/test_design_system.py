@@ -136,6 +136,7 @@ def test_documents_card_has_inline_actions():
     ctx.tray.changed.connect = MagicMock()
     ctx.tray.count = MagicMock(return_value=0)
     from ui.common.documents_step import DocumentsCard
+    from ui.styles import COLORS
     card = DocumentsCard(ctx)
     # Inline action buttons must exist (hidden until items are added)
     assert hasattr(card, "_remove_btn")
@@ -156,6 +157,7 @@ def test_documents_card_drag_feedback_uses_accent():
     ctx.tray.changed.connect = MagicMock()
     ctx.tray.count = MagicMock(return_value=0)
     from ui.common.documents_step import DocumentsCard
+    from ui.styles import COLORS
     card = DocumentsCard(ctx)
     card.set_accent("#2DD4BF")
     card._set_drop_active(True)
@@ -165,7 +167,8 @@ def test_documents_card_drag_feedback_uses_accent():
     assert card._empty_w.objectName() == "DropZone"
     assert card._empty_w.styleSheet() == ""
     card._flash_drop_success()
-    assert "0.15" in card._empty_w.styleSheet()
+    assert COLORS["bg"] in card._empty_w.styleSheet()
+    assert "45, 212, 191" in card._empty_w.styleSheet()
 
 
 def test_process_step_running_ui_shimmer_state():
@@ -303,6 +306,47 @@ def test_pdf_viewer_copies_current_pdf_as_file(tmp_path):
         mime = app.clipboard().mimeData()
         assert mime.hasUrls()
         assert Path(mime.urls()[0].toLocalFile()).resolve() == pdf.resolve()
+    finally:
+        viewer.clear_results()
+        viewer.deleteLater()
+        app.processEvents()
+
+
+def test_firmador_results_viewer_uses_shared_premium_shell(tmp_path):
+    import sys
+    import fitz
+    from PySide6.QtWidgets import QApplication, QFrame
+    app = QApplication.instance() or QApplication(sys.argv)
+    from core.signature_engine import JobResult, SignJob
+    from ui.results_viewer import ResultsViewer
+
+    pdf = tmp_path / "firmado.pdf"
+    doc = fitz.open()
+    doc.new_page(width=220, height=160).insert_text((36, 72), "Firmado")
+    doc.save(pdf)
+    doc.close()
+
+    result = JobResult(
+        job=SignJob(pdf_path=str(pdf), output_path=str(pdf), signatures=[]),
+        output_path=str(pdf),
+        success=True,
+    )
+    viewer = ResultsViewer()
+    try:
+        viewer.set_results([result])
+        app.processEvents()
+
+        assert viewer.findChild(QFrame, "ResultSidePanel") is not None
+        assert viewer.findChild(QFrame, "ResultMainPanel") is not None
+        assert viewer._doc_count_lbl.objectName() == "ResultCountBadge"
+        assert viewer._doc_count_lbl.text() == "1"
+        assert not viewer._stat_bar.isHidden()
+        assert viewer.page_spin.value() == 1
+        assert viewer._page_total_lbl.text() == "/ 1"
+
+        app.clipboard().clear()
+        assert viewer._on_copy_file()
+        assert app.clipboard().mimeData().hasUrls()
     finally:
         viewer.clear_results()
         viewer.deleteLater()

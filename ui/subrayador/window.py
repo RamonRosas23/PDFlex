@@ -58,6 +58,7 @@ from ui.common.pdf_render_utils import rendered_page_to_qimage
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
+from ui.styles import COLORS
 
 
 class HighlightWorker(QObject):
@@ -144,7 +145,7 @@ class HighlightCanvas(QWidget):
         self._render_thread: Optional[QThread] = None
         self.setMinimumSize(360, 420)
         self.setMouseTracking(True)
-        self.setStyleSheet("background:#0D0D10;")
+        self.setStyleSheet(f"background:{COLORS['bg']};")
         self.setCursor(Qt.CursorShape.CrossCursor)
 
     @property
@@ -404,7 +405,7 @@ class HighlightCanvas(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#0D0D10"))
+        painter.fillRect(self.rect(), QColor(COLORS["bg"]))
         if not self._pixmap.isNull():
             painter.drawPixmap(0, 0, self._pixmap)
             self._draw_marks(painter)
@@ -643,8 +644,9 @@ class SubrayadorWindow(PipelineWindow):
         body.setSpacing(16)
 
         controls_shell = make_card("Marcador")
-        controls_shell.setFixedWidth(362)
-        controls_shell.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        controls_shell.setMinimumWidth(300)
+        controls_shell.setMaximumWidth(362)
+        controls_shell.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         shell_layout = card_layout(controls_shell)
 
         self._controls_scroll = QScrollArea()
@@ -661,7 +663,8 @@ class SubrayadorWindow(PipelineWindow):
 
         controls = QWidget()
         controls.setStyleSheet("background: transparent;")
-        controls.setMinimumWidth(304)
+        controls.setMinimumWidth(0)
+        controls.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         cl = QVBoxLayout(controls)
         cl.setContentsMargins(0, 0, 8, 0)
         cl.setSpacing(10)
@@ -687,14 +690,16 @@ class SubrayadorWindow(PipelineWindow):
         cl.addWidget(self._mark_count_lbl)
 
         self._profile_combo = QComboBox()
-        self._profile_combo.setMinimumWidth(250)
+        self._profile_combo.setMinimumWidth(0)
+        self._profile_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for profile in HIGHLIGHT_PROFILES.values():
             self._profile_combo.addItem(profile.label, profile.id)
         self._profile_combo.currentIndexChanged.connect(self._on_profile_changed)
         cl.addWidget(self._profile_combo)
 
         self._color_combo = QComboBox()
-        self._color_combo.setMinimumWidth(250)
+        self._color_combo.setMinimumWidth(0)
+        self._color_combo.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         for color_id, (label, _rgb) in COLOR_CHOICES.items():
             self._color_combo.addItem(label, color_id)
         self._color_combo.currentIndexChanged.connect(lambda _idx: self._on_options_changed())
@@ -835,7 +840,7 @@ class SubrayadorWindow(PipelineWindow):
         self._page_scroll = scroll
         scroll.setWidgetResizable(False)
         scroll.setSizeAdjustPolicy(QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored)
-        scroll.setMinimumSize(360, 300)
+        scroll.setMinimumSize(280, 220)
         scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         scroll.setWidget(self._canvas)

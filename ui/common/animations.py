@@ -179,14 +179,11 @@ class AnimationHelper:
 
     @staticmethod
     def apply_glow_to_primary_buttons(root: QWidget, accent: str) -> None:
-        """Aplica glow a todos los QPushButton[class='Primary'] bajo root."""
+        """Mantiene los botones Primary sin halo de color."""
         from PySide6.QtWidgets import QPushButton
         for btn in root.findChildren(QPushButton):
             if btn.property("class") == "Primary":
-                if btn.isEnabled():
-                    AnimationHelper.apply_glow(btn, accent, blur=18, alpha=75)
-                else:
-                    btn.setGraphicsEffect(None)
+                btn.setGraphicsEffect(None)
 
     # ── Progress bar shimmer ─────────────────────────────────────────────────
 
@@ -207,6 +204,13 @@ class AnimationHelper:
             stop2 = offset
             stop3 = min(1.0, offset + 0.15)
             shimmer_style = (
+                "QProgressBar {"
+                "background-color: #1B1E2A;"
+                "border: none;"
+                "border-radius: 3px;"
+                "height: 6px;"
+                "max-height: 6px;"
+                "}"
                 f"QProgressBar::chunk {{"
                 f"background: qlineargradient(x1:{stop1:.3f}, y1:0, x2:{stop3:.3f}, y2:0,"
                 f" stop:{stop1:.2f} rgba({r},{g},{b},200),"

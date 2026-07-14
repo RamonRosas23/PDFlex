@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QVBoxLayout,
     QWidget,
+    QSizePolicy,
 )
 from core.pdf_backend import pdf_page_count
 
@@ -44,6 +45,7 @@ from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.slider import SliderWithValue
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
+from ui.styles import COLORS
 from ui.imgs_a_pdf.window import ImageListCard
 
 
@@ -256,7 +258,9 @@ class QuitarLogosWindow(PipelineWindow):
         body.setSpacing(16)
 
         settings = make_card("Ajustes de detección")
-        settings.setFixedWidth(350)
+        settings.setMinimumWidth(280)
+        settings.setMaximumWidth(350)
+        settings.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         sl = card_layout(settings)
 
         self._mode_combo = QComboBox()
@@ -371,9 +375,10 @@ class QuitarLogosWindow(PipelineWindow):
         self._preview_scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_lbl = QLabel("Carga PDFs y logos para analizar una página.")
         self._preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_lbl.setMinimumSize(560, 420)
+        self._preview_lbl.setMinimumSize(280, 260)
         self._preview_lbl.setStyleSheet(
-            "background:#0D0D10; border:1px solid #26262C; color:#9094A0;"
+            f"background:{COLORS['bg']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:8px; color:{COLORS['text_dim']};"
         )
         self._preview_scroll.setWidget(self._preview_lbl)
         pl.addWidget(self._preview_scroll, 1)
@@ -859,7 +864,7 @@ class QuitarLogosWindow(PipelineWindow):
         self._send_btn.set_output_paths([])
         self._preview_lbl.clear()
         self._preview_lbl.setText("Carga PDFs y logos para analizar una página.")
-        self._preview_lbl.setMinimumSize(560, 420)
+        self._preview_lbl.setMinimumSize(280, 260)
         self._preview_status_lbl.setText("Vista previa pendiente.")
         self._proc_step.reset()
         self._switch_section(0)

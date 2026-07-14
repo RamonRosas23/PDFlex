@@ -26,6 +26,7 @@ from ui.common.pdf_viewer import GenericPdfViewer
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.dialogs import show_error, show_warning
 from ui.common.icons import set_button_icon
+from ui.styles import COLORS
 
 
 # ====================================================================== #
@@ -231,7 +232,7 @@ class UnirWindow(PipelineWindow):
         # Divisor
         div = QFrame()
         div.setFixedHeight(1)
-        div.setStyleSheet("background: #1E1E24; border: none;")
+        div.setStyleSheet(f"background: {COLORS['border']}; border: none;")
         cl.addWidget(div)
 
         # Opciones de check

@@ -48,6 +48,13 @@ from ui.common.dialogs import show_error, show_info
 from ui.common.file_dialogs import get_open_file_name, get_open_file_names
 from ui.common.open_utils import open_file as open_local_file, open_folder as open_local_folder
 from ui.common.result_ui import ElidedLabel, configure_file_list, format_file_size
+
+# Tope de espera al apagar los hilos de miniaturas (ver
+# shutdown_background_jobs). Los hilos que no terminen a tiempo se
+# desenganchan de su padre y quedan aquí referenciados: sin la referencia el
+# GC destruiría el QThread corriendo (qFatal de Qt que aborta el proceso).
+_SHUTDOWN_WAIT_MS = 5000
+_ZOMBIE_THUMB_THREADS: List[QThread] = []
 from ui.styles import COLORS
 from core.output_paths import make_run_dir
 
@@ -81,6 +88,7 @@ class DocumentsCard(QFrame):
         parent=None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("DocumentsCard")
         self.setProperty("class", "Card")
         self.setAcceptDrops(True)
 
@@ -120,7 +128,10 @@ class DocumentsCard(QFrame):
         layout.setSpacing(12)
 
         # ── Botones de acción ──────────────────────────────────────────
-        row = QHBoxLayout()
+        action_bar = QFrame()
+        action_bar.setObjectName("DocumentActionBar")
+        row = QHBoxLayout(action_bar)
+        row.setContentsMargins(10, 8, 10, 8)
         row.setSpacing(8)
 
         self._add_btn = QPushButton("Agregar archivos")
@@ -198,10 +209,10 @@ class DocumentsCard(QFrame):
         row.addWidget(self._tray_btn)
 
         self._count_lbl = QLabel("Sin documentos")
-        self._count_lbl.setProperty("class", "CardHint")
+        self._count_lbl.setObjectName("DocumentCountBadge")
         row.addWidget(self._count_lbl)
 
-        layout.addLayout(row)
+        layout.addWidget(action_bar)
 
         # ── Hint de reordenado ──────────────────────────────────────────
         if allow_reorder:
@@ -230,9 +241,9 @@ class DocumentsCard(QFrame):
         icon_box.setFixedSize(60, 60)
         icon_box.setStyleSheet("""
             QFrame {
-                background: rgba(94, 106, 210, 0.14);
-                border: 1px solid rgba(94, 106, 210, 0.35);
-                border-radius: 14px;
+                background: #06070A;
+                border: 1px solid rgba(160, 167, 184, 0.24);
+                border-radius: 8px;
             }
         """)
         ib = QVBoxLayout(icon_box)
@@ -257,6 +268,19 @@ class DocumentsCard(QFrame):
         drop_sub.setObjectName("DropZoneHint")
         drop_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ez.addWidget(drop_sub)
+
+        ez.addSpacing(14)
+
+        format_row = QHBoxLayout()
+        format_row.setContentsMargins(0, 0, 0, 0)
+        format_row.setSpacing(6)
+        format_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for text in ("PDF", "Word", "Imágenes"):
+            chip = QLabel(text)
+            chip.setObjectName("DocumentFormatChip")
+            chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            format_row.addWidget(chip)
+        ez.addLayout(format_row)
 
         self._content_stack.addWidget(self._empty_w)   # idx 0
 
@@ -299,7 +323,7 @@ class DocumentsCard(QFrame):
         panel.setFixedWidth(260)
         panel.setStyleSheet(
             "QFrame#DocumentPreviewPanel {"
-            f"background: {COLORS['surface_2']};"
+            f"background: {COLORS['bg']};"
             f"border: 1px solid {COLORS['border']};"
             "border-radius: 8px;"
             "}"
@@ -320,7 +344,7 @@ class DocumentsCard(QFrame):
         self._preview_canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_canvas.setMinimumHeight(250)
         self._preview_canvas.setStyleSheet(
-            "background: #0F0F13;"
+            f"background: {COLORS['bg']};"
             f"border: 1px solid {COLORS['border']};"
             "border-radius: 6px;"
             f"color: {COLORS['text_muted']};"
@@ -403,9 +427,9 @@ class DocumentsCard(QFrame):
             self._empty_w.setObjectName("DropZoneActive")
             self._empty_w.setStyleSheet(
                 f"QFrame#DropZoneActive {{"
-                f"background: rgba({r}, {g}, {b}, 0.06);"
+                f"background: {COLORS['bg']};"
                 f"border: 2px solid rgba({r}, {g}, {b}, 0.70);"
-                f"border-radius: 10px;"
+                f"border-radius: 8px;"
                 f"}}"
             )
             self._start_icon_bounce()
@@ -444,9 +468,9 @@ class DocumentsCard(QFrame):
         r, g, b = self._parse_accent_rgb()
         self._icon_box.setStyleSheet(
             "QFrame {"
-            f"background: rgba({r}, {g}, {b}, 0.14);"
-            f"border: 1px solid rgba({r}, {g}, {b}, 0.35);"
-            "border-radius: 14px;"
+            f"background: {COLORS['bg']};"
+            f"border: 1px solid rgba({r}, {g}, {b}, 0.34);"
+            "border-radius: 8px;"
             "}"
         )
 
@@ -492,9 +516,9 @@ class DocumentsCard(QFrame):
         self._empty_w.setObjectName("DropZone")
         self._empty_w.setStyleSheet(
             f"QFrame#DropZone {{"
-            f"background: rgba({r}, {g}, {b}, 0.15);"
-            f"border: 1.5px solid rgba({r}, {g}, {b}, 0.45);"
-            f"border-radius: 10px;"
+            f"background: {COLORS['bg']};"
+            f"border: 1.5px solid rgba({r}, {g}, {b}, 0.62);"
+            f"border-radius: 8px;"
             f"}}"
         )
         QTimer.singleShot(300, lambda: self._clear_drop_flash(token))
@@ -994,7 +1018,7 @@ class DocumentsCard(QFrame):
             if w is not None:
                 w.setVisible(has_items)
         if n == 0:
-            self._count_lbl.setText("Sin documentos")
+            self._count_lbl.setText("0 docs")
         else:
             total_bytes = sum(
                 Path(p).stat().st_size
@@ -1062,15 +1086,21 @@ class DocumentsCard(QFrame):
         PDFium keeps the input file open for the lifetime of its document.  A
         card can be destroyed while a thumbnail is still being rendered (for
         example immediately after reordering a list), so every owning window
-        calls this hook before Qt destroys its children.  Waiting is bounded by
-        the work already in flight; no new jobs are accepted during teardown.
+        calls this hook before Qt destroys its children.
+
+        The wait is bounded: a renderer hung inside PDFium (pathological PDF)
+        would otherwise freeze the app forever, but destroying a still-running
+        QThread is a Qt qFatal (process abort).  A thread that misses the
+        deadline is detached from its parent and kept alive as a harmless
+        zombie until the process exits.
         """
         threads = list(self._thumb_threads)
         for thread in threads:
             thread.requestInterruption()
         for thread in threads:
-            if thread.isRunning():
-                thread.wait()
+            if thread.isRunning() and not thread.wait(_SHUTDOWN_WAIT_MS):
+                thread.setParent(None)
+                _ZOMBIE_THUMB_THREADS.append(thread)
         self._thumb_workers.clear()
         self._thumb_threads.clear()
 

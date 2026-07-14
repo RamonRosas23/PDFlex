@@ -101,12 +101,14 @@ class ProcessStep(QWidget):
         if self._show_output_dir:
             out_card = make_card("Carpeta de salida")
             h = QHBoxLayout()
+            h.setSpacing(8)
             self._out_edit = QLineEdit(self._initial_output)
             self._out_edit.textChanged.connect(
                 lambda v: _save_output_dir(self._settings_key, v)
             )
             browse_btn = QPushButton("Examinar")
             browse_btn.setProperty("class", "Ghost")
+            browse_btn.setFixedHeight(32)
             set_button_icon(browse_btn, "folder-open")
             browse_btn.clicked.connect(self._on_browse)
             h.addWidget(self._out_edit, 1)
@@ -119,8 +121,9 @@ class ProcessStep(QWidget):
         # ── Resumen del trabajo ────────────────────────────────────────
         self._sum_card = make_card("Resumen")
         self._summary_lbl = QLabel("—")
+        self._summary_lbl.setObjectName("ProcessSummaryLabel")
         self._summary_lbl.setStyleSheet(
-            "color:#ECEDEE; line-height:1.8; font-size:13px; background: transparent;"
+            f"color:{COLORS['text']}; line-height:1.8; font-size:13px; background: transparent;"
         )
         self._summary_lbl.setWordWrap(True)
         self._summary_lbl.setTextFormat(Qt.TextFormat.RichText)
@@ -137,9 +140,15 @@ class ProcessStep(QWidget):
         # Fila: etiqueta "Progreso" + porcentaje
         prow = QHBoxLayout()
         prow.setContentsMargins(0, 0, 0, 0)
+        prow.setSpacing(8)
         prog_title = QLabel("Progreso")
         prog_title.setProperty("class", "CardTitle")
         prow.addWidget(prog_title)
+        self._state_chip = QLabel("En espera")
+        self._state_chip.setObjectName("ProcessStateChip")
+        self._state_chip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._state_chip.setFixedHeight(24)
+        prow.addWidget(self._state_chip)
         prow.addStretch()
         self._pct_lbl = QLabel("—")
         self._pct_lbl.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 12px; background: transparent;")
@@ -180,6 +189,13 @@ class ProcessStep(QWidget):
         self._prog_lbl.setText(msg)
         if hasattr(self, "_pct_lbl"):
             self._pct_lbl.setText(f"{pct} %" if pct > 0 else "—")
+        if hasattr(self, "_state_chip"):
+            if pct >= 100:
+                self._state_chip.setText("Completado")
+            elif self._is_running:
+                self._state_chip.setText("Procesando")
+            else:
+                self._state_chip.setText("En espera")
 
     def set_running(self, running: bool) -> None:
         if running:
@@ -205,6 +221,10 @@ class ProcessStep(QWidget):
         self.stop_processing_ui()
         self._prog_bar.setValue(0)
         self._prog_lbl.setText("Listo para iniciar")
+        if hasattr(self, "_pct_lbl"):
+            self._pct_lbl.setText("—")
+        if hasattr(self, "_state_chip"):
+            self._state_chip.setText("En espera")
         # run_btn se mantiene en el estado que dictó watch_documents
 
     def set_accent(self, accent: str) -> None:
@@ -218,6 +238,8 @@ class ProcessStep(QWidget):
         if self._is_running:
             return
         self._is_running = True
+        if hasattr(self, "_state_chip"):
+            self._state_chip.setText("Procesando")
         self.running_changed.emit(True)
         from ui.common.animations import AnimationHelper
         if self._shimmer_timer is not None:
@@ -230,8 +252,12 @@ class ProcessStep(QWidget):
             self._shimmer_timer.stop()
             self._shimmer_timer = None
         self._apply_progress_accent()
-        self.running_changed.emit(False)
         self._is_running = False
+        if hasattr(self, "_state_chip"):
+            self._state_chip.setText(
+                "Completado" if self._prog_bar.value() >= 100 else "En espera"
+            )
+        self.running_changed.emit(False)
         self.run_enabled_changed.emit(self._run_enabled_requested)
 
     def animate_stats(self, stats: dict[str, int]) -> None:
@@ -262,6 +288,18 @@ class ProcessStep(QWidget):
             "border-radius: 3px;"
             "}"
         )
+        if hasattr(self, "_state_chip"):
+            self._state_chip.setStyleSheet(
+                "QLabel#ProcessStateChip {"
+                f"background: {COLORS['bg']};"
+                f"color: {self._accent};"
+                f"border: 1px solid {_rgba(self._accent, 0.28)};"
+                "border-radius: 7px;"
+                "padding: 0 9px;"
+                "font-size: 11px;"
+                "font-weight: 800;"
+                "}"
+            )
 
     def _on_browse(self) -> None:
         folder = get_existing_directory(
@@ -269,3 +307,15 @@ class ProcessStep(QWidget):
         )
         if folder:
             self._out_edit.setText(folder)
+
+
+def _rgba(color: str, alpha: float) -> str:
+    value = color.strip().lstrip("#")
+    if len(value) != 6:
+        value = "5E6AD2"
+    try:
+        r, g, b = (int(value[i:i + 2], 16) for i in (0, 2, 4))
+    except ValueError:
+        r, g, b = (94, 106, 210)
+    alpha = max(0.0, min(1.0, alpha))
+    return f"rgba({r}, {g}, {b}, {alpha:.2f})"

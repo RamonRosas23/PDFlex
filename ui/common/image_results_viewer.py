@@ -24,6 +24,7 @@ from ui.common.result_ui import (
     make_result_list_item,
 )
 from ui.common.save_utils import save_file_as, save_files_as_batch, save_grouped_files_as_batch
+from ui.styles import COLORS
 
 
 @dataclass
@@ -67,15 +68,22 @@ class ImageResultsViewer(QWidget):
         layout.setSpacing(12)
 
         left = QFrame()
+        left.setObjectName("ResultSidePanel")
         left.setProperty("class", "Card")
-        left.setFixedWidth(260)
+        left.setFixedWidth(276)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(14, 14, 14, 14)
         lv.setSpacing(10)
 
+        list_header = QHBoxLayout()
+        list_header.setSpacing(8)
         title_lbl = QLabel(self._list_title)
         title_lbl.setProperty("class", "CardTitle")
-        lv.addWidget(title_lbl)
+        list_header.addWidget(title_lbl, 1)
+        self._count_lbl = QLabel("0")
+        self._count_lbl.setObjectName("ResultCountBadge")
+        list_header.addWidget(self._count_lbl)
+        lv.addLayout(list_header)
 
         self._stat_bar = ResultsStatBar()
         lv.addWidget(self._stat_bar)
@@ -89,20 +97,31 @@ class ImageResultsViewer(QWidget):
         layout.addWidget(left)
 
         right = QFrame()
+        right.setObjectName("ResultMainPanel")
         right.setProperty("class", "Card")
         rv = QVBoxLayout(right)
-        rv.setContentsMargins(14, 14, 14, 14)
-        rv.setSpacing(10)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(0)
 
-        header = QVBoxLayout()
-        header.setSpacing(8)
+        header = QFrame()
+        header.setObjectName("ResultHeader")
+        header_row = QHBoxLayout(header)
+        header_row.setContentsMargins(14, 12, 14, 10)
+        header_row.setSpacing(8)
+
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(2)
+        eyebrow = QLabel("Vista previa")
+        eyebrow.setObjectName("ResultEyebrow")
+        title_block.addWidget(eyebrow)
         self.title_lbl = ElidedLabel("Selecciona un archivo")
         self.title_lbl.setProperty("class", "CardTitle")
-        header.addWidget(self.title_lbl)
+        title_block.addWidget(self.title_lbl)
+        header_row.addLayout(title_block, 1)
 
         actions = QHBoxLayout()
         actions.setSpacing(8)
-        actions.addStretch(1)
 
         self.open_file_btn = QPushButton()
         set_compact_icon_button(self.open_file_btn, "external-link", "Abrir imagen")
@@ -133,21 +152,32 @@ class ImageResultsViewer(QWidget):
         self.save_all_btn.setEnabled(False)
         self.save_all_btn.clicked.connect(self._on_save_all)
         actions.addWidget(self.save_all_btn)
-        header.addLayout(actions)
-        rv.addLayout(header)
+        header_row.addLayout(actions)
+        rv.addWidget(header)
 
+        toolbar = QFrame()
+        toolbar.setObjectName("ResultToolbar")
+        toolbar_layout = QHBoxLayout(toolbar)
+        toolbar_layout.setContentsMargins(14, 8, 14, 8)
+        toolbar_layout.setSpacing(8)
         self.meta_lbl = QLabel("")
-        self.meta_lbl.setProperty("class", "Mono")
+        self.meta_lbl.setProperty("class", "CardHint")
         self.meta_lbl.setWordWrap(True)
-        rv.addWidget(self.meta_lbl)
+        toolbar_layout.addWidget(self.meta_lbl, 1)
+        rv.addWidget(toolbar)
+
+        body = QWidget()
+        body.setObjectName("ResultBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(14, 12, 14, 12)
+        body_layout.setSpacing(12)
 
         self.preview_lbl = QLabel()
+        self.preview_lbl.setObjectName("ImagePreviewCanvas")
         self.preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_lbl.setStyleSheet(
-            "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
-        )
+        self.preview_lbl.setText("Selecciona un resultado")
         self._enable_preview_copy(self.preview_lbl)
-        rv.addWidget(self.preview_lbl, 1)
+        body_layout.addWidget(self.preview_lbl, 1)
 
         self.compare_widget = QWidget()
         compare_layout = QHBoxLayout(self.compare_widget)
@@ -159,19 +189,18 @@ class ImageResultsViewer(QWidget):
         self._enable_preview_copy(self.after_preview_lbl)
         compare_layout.addWidget(self.before_preview_lbl, 1)
         compare_layout.addWidget(self.after_preview_lbl, 1)
-        rv.addWidget(self.compare_widget, 1)
+        body_layout.addWidget(self.compare_widget, 1)
         self.compare_widget.setVisible(False)
+        rv.addWidget(body, 1)
 
         layout.addWidget(right, 1)
 
     def _make_compare_panel(self, title: str) -> QLabel:
         label = QLabel(title)
+        label.setObjectName("ImagePreviewCanvas")
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setMinimumHeight(220)
-        label.setStyleSheet(
-            "background: #111114; border: 1px solid #26262C; border-radius: 6px;"
-            "color: #9094A0;"
-        )
+        label.setStyleSheet(f"color: {COLORS['text_dim']};")
         return label
 
     def _enable_preview_copy(self, label: QLabel) -> None:
@@ -190,6 +219,7 @@ class ImageResultsViewer(QWidget):
         self._results = list(results)
         self._source_dirs = []
         self.file_list.clear()
+        self._count_lbl.setText(str(len(self._results)))
         for r in self._results:
             out = getattr(r, "output_path", "") or ""
             item = make_result_list_item(
@@ -256,7 +286,7 @@ class ImageResultsViewer(QWidget):
             header.setFlags(Qt.ItemFlag.NoItemFlags)
             header.setSizeHint(QSize(200, 26))
             header.setForeground(QBrush(QColor("#9094A0")))
-            header.setBackground(QBrush(QColor("#1A1A20")))
+            header.setBackground(QBrush(QColor(COLORS["bg"])))
             font = header.font()
             font.setPointSize(9)
             header.setFont(font)
@@ -276,6 +306,7 @@ class ImageResultsViewer(QWidget):
                 self._row_map.append(len(self._flat_results))
                 self._flat_results.append(r)
 
+        self._count_lbl.setText(str(len(self._flat_results)))
         if self._flat_results:
             for i, v in enumerate(self._row_map):
                 if v is not None:
@@ -293,12 +324,14 @@ class ImageResultsViewer(QWidget):
         self._groups = []
         self.file_list.clear()
         self.preview_lbl.clear()
+        self.preview_lbl.setText("Selecciona un resultado")
         self.before_preview_lbl.clear()
         self.after_preview_lbl.clear()
         self.compare_widget.setVisible(False)
         self.preview_lbl.setVisible(True)
         self.meta_lbl.setText("")
         self.title_lbl.setText("Selecciona un archivo")
+        self._count_lbl.setText("0")
         self.open_file_btn.setEnabled(False)
         self.copy_file_btn.setEnabled(False)
         self.open_btn.setEnabled(False)
@@ -509,13 +542,16 @@ class ImageResultsViewer(QWidget):
 
     def _clear_preview_area(self) -> None:
         self.preview_lbl.clear()
+        self.preview_lbl.setText("Sin vista previa")
         self.before_preview_lbl.clear()
         self.after_preview_lbl.clear()
 
     def _set_scaled_pixmap(self, label: QLabel, pix: QPixmap) -> None:
         if pix.isNull():
             label.clear()
+            label.setText("Sin vista previa")
             return
+        label.setText("")
         target_w = max(240, label.width())
         target_h = max(220, label.height())
         label.setPixmap(

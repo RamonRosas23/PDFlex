@@ -44,6 +44,7 @@ from ui.common.pdf_render_utils import rendered_page_to_qimage
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
+from ui.styles import COLORS
 
 
 class WatermarkPreviewWorker(QObject):
@@ -328,8 +329,10 @@ class MarcaAguaWindow(PipelineWindow):
         self._preview_lbl = QLabel("Carga un PDF y actualiza el preview.")
         self._preview_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_lbl.setMinimumHeight(220)
+        self._preview_lbl.setObjectName("ImagePreviewCanvas")
         self._preview_lbl.setStyleSheet(
-            "background:#0D0D10; border:1px solid #26262C; border-radius:8px; color:#9094A0;"
+            f"background:{COLORS['bg']}; border:1px solid {COLORS['border']}; "
+            f"border-radius:8px; color:{COLORS['text_dim']};"
         )
         card_layout(preview_card).addWidget(self._preview_lbl, 1)
         preview_btn = QPushButton("Actualizar preview")

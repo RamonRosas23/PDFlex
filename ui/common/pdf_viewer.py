@@ -81,15 +81,22 @@ class GenericPdfViewer(QWidget):
 
         # Panel izquierdo — lista de documentos
         left = QFrame()
+        left.setObjectName("ResultSidePanel")
         left.setProperty("class", "Card")
-        left.setFixedWidth(240)
+        left.setFixedWidth(276)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(14, 14, 14, 14)
         lv.setSpacing(10)
 
+        list_header = QHBoxLayout()
+        list_header.setSpacing(8)
         title_lbl = QLabel(self._doc_list_title)
         title_lbl.setProperty("class", "CardTitle")
-        lv.addWidget(title_lbl)
+        list_header.addWidget(title_lbl, 1)
+        self._doc_count_lbl = QLabel("0")
+        self._doc_count_lbl.setObjectName("ResultCountBadge")
+        list_header.addWidget(self._doc_count_lbl)
+        lv.addLayout(list_header)
 
         # Barra de estadísticas (auto-populated por set_results)
         self._stat_bar = ResultsStatBar()
@@ -111,18 +118,29 @@ class GenericPdfViewer(QWidget):
 
         # Panel central — render + controles
         center = QFrame()
+        center.setObjectName("ResultMainPanel")
         center.setProperty("class", "Card")
         cv = QVBoxLayout(center)
-        cv.setContentsMargins(14, 14, 14, 14)
-        cv.setSpacing(12)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
 
         # ── Fila 1: título + acciones de archivo ───────────────────────
-        title_row = QHBoxLayout()
+        header = QFrame()
+        header.setObjectName("ResultHeader")
+        title_row = QHBoxLayout(header)
+        title_row.setContentsMargins(14, 12, 14, 10)
         title_row.setSpacing(8)
 
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(2)
+        eyebrow = QLabel("Vista previa")
+        eyebrow.setObjectName("ResultEyebrow")
+        title_block.addWidget(eyebrow)
         self.title_label = ElidedLabel("Selecciona un documento")
         self.title_label.setProperty("class", "CardTitle")
-        title_row.addWidget(self.title_label, 1)
+        title_block.addWidget(self.title_label)
+        title_row.addLayout(title_block, 1)
 
         self.open_file_btn = QPushButton()
         set_compact_icon_button(self.open_file_btn, "external-link", "Abrir PDF")
@@ -164,12 +182,14 @@ class GenericPdfViewer(QWidget):
         self.save_all_btn.setEnabled(False)
         title_row.addWidget(self.save_all_btn)
 
-        cv.addLayout(title_row)
+        cv.addWidget(header)
 
         # ── Fila 2: controles de vista (zoom + ajuste) ─────────────────
-        view_bar = QHBoxLayout()
+        toolbar = QFrame()
+        toolbar.setObjectName("ResultToolbar")
+        view_bar = QHBoxLayout(toolbar)
         view_bar.setSpacing(8)
-        view_bar.setContentsMargins(0, 0, 0, 0)
+        view_bar.setContentsMargins(14, 8, 14, 8)
 
         self.zoom_out_btn = QPushButton()
         self.zoom_out_btn.setProperty("class", "IconBtn")
@@ -209,10 +229,13 @@ class GenericPdfViewer(QWidget):
         view_bar.addWidget(self.fit_page_btn)
 
         view_bar.addStretch(1)
-        cv.addLayout(view_bar)
+        cv.addWidget(toolbar)
 
         # Body: página miniatura + canvas
-        body = QHBoxLayout()
+        body_host = QWidget()
+        body_host.setObjectName("ResultBody")
+        body = QHBoxLayout(body_host)
+        body.setContentsMargins(14, 12, 14, 12)
         body.setSpacing(12)
 
         self.page_list = QListWidget()
@@ -237,16 +260,21 @@ class GenericPdfViewer(QWidget):
 
         self.canvas = QLabel()
         self.canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.canvas.setStyleSheet("background: transparent;")
+        self.canvas.setText("Selecciona un resultado")
+        self.canvas.setStyleSheet(
+            f"background: transparent; color: {_COLORS['text_dim']}; font-size: 13px;"
+        )
         self.scroll.setWidget(self.canvas)
         body.addWidget(self.scroll, 1)
 
-        cv.addLayout(body, 1)
+        cv.addWidget(body_host, 1)
 
         # ── Footer: metadata (izquierda) + paginador (derecha) ────────
-        footer_bar = QHBoxLayout()
+        footer = QFrame()
+        footer.setObjectName("ResultFooter")
+        footer_bar = QHBoxLayout(footer)
         footer_bar.setSpacing(6)
-        footer_bar.setContentsMargins(0, 4, 0, 0)
+        footer_bar.setContentsMargins(14, 8, 14, 10)
 
         self.meta_label = ElidedLabel("")
         self.meta_label.setProperty("class", "CardHint")
@@ -271,7 +299,7 @@ class GenericPdfViewer(QWidget):
         self.page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.page_spin.setStyleSheet(
-            f"QSpinBox {{ background: {_COLORS['surface_3']}; color: {_COLORS['text']}; "
+            f"QSpinBox {{ background: {_COLORS['bg']}; color: {_COLORS['text']}; "
             f"border: 1px solid {_COLORS['border']}; border-radius: 4px; "
             f"padding: 1px 4px; font-size: 12px; }}"
         )
@@ -290,7 +318,7 @@ class GenericPdfViewer(QWidget):
         self.next_page_btn.setEnabled(False)
         footer_bar.addWidget(self.next_page_btn)
 
-        cv.addLayout(footer_bar)
+        cv.addWidget(footer)
 
         layout.addWidget(center, 1)
 
@@ -303,6 +331,8 @@ class GenericPdfViewer(QWidget):
         self._results = results
         self._source_dirs = {}
         self.doc_list.clear()
+        if hasattr(self, "_doc_count_lbl"):
+            self._doc_count_lbl.setText(str(len(results)))
         for r in results:
             out = getattr(r, "output_path", "") or ""
             item = make_result_list_item(
@@ -348,6 +378,8 @@ class GenericPdfViewer(QWidget):
         self._source_dirs = {}
         self._current_result = None
         self.doc_list.clear()
+        if hasattr(self, "_doc_count_lbl"):
+            self._doc_count_lbl.setText("0")
         self._stat_bar.setVisible(False)
         self._extra_stat_bar.setVisible(False)
         self._clear_view()
@@ -418,6 +450,7 @@ class GenericPdfViewer(QWidget):
             self.page_list.blockSignals(False)
         self._current_page = 0
         self.canvas.clear()
+        self.canvas.setText("Selecciona un resultado")
         self.title_label.setText("Selecciona un documento")
         self.meta_label.setText("")
         self._set_zoom_enabled(False)
@@ -429,6 +462,7 @@ class GenericPdfViewer(QWidget):
         self._update_page_status()
 
     def _set_zoom_enabled(self, enabled: bool) -> None:
+        self.page_list.setVisible(enabled)
         self.zoom_in_btn.setEnabled(enabled)
         self.zoom_out_btn.setEnabled(enabled)
         self.fit_btn.setEnabled(enabled)
@@ -511,6 +545,7 @@ class GenericPdfViewer(QWidget):
             finally:
                 self.page_list.blockSignals(False)
             self.canvas.clear()
+            self.canvas.setText("No se pudo previsualizar")
             self._set_zoom_enabled(False)
             return
 
@@ -536,6 +571,7 @@ class GenericPdfViewer(QWidget):
             finally:
                 self.page_list.blockSignals(False)
             self.canvas.clear()
+            self.canvas.setText("No se pudo abrir el PDF")
             self._set_zoom_enabled(False)
             return
 
@@ -552,6 +588,7 @@ class GenericPdfViewer(QWidget):
             self._start_thumb_rendering()
         else:
             self.canvas.clear()
+            self.canvas.setText("Sin páginas para mostrar")
 
         size = format_file_size(out_path)
         meta_parts = [f"{self._current_doc.page_count} páginas"]

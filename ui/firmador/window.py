@@ -86,6 +86,7 @@ from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import make_icon_label, set_button_icon
 from ui.pdf_preview import PdfPreviewView, pil_to_qpixmap
 from ui.results_viewer import ResultsViewer
+from ui.styles import COLORS
 from core.sig_processing import remove_background, colorize_signature
 
 
@@ -434,7 +435,7 @@ class ReviewExportWorker(QObject):
 def _make_sig_icon(pixmap: QPixmap, color: QColor, w: int = 90, h: int = 54) -> QPixmap:
     """Crea un ícono con franja de color a la izquierda y miniatura de la firma."""
     result = QPixmap(w, h)
-    result.fill(QColor("#1A1A20"))
+    result.fill(QColor(COLORS["bg"]))
     painter = QPainter(result)
     # Franja de color
     painter.fillRect(0, 0, 5, h, color)
@@ -641,7 +642,7 @@ class FirmadorWindow(PipelineWindow):
         page = QWidget()
         page.setProperty("class", "PageContainer")
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(36, 28, 36, 28)
+        outer.setContentsMargins(28, 26, 28, 26)
         outer.setSpacing(12)
 
         outer.addLayout(make_page_header(
@@ -652,11 +653,11 @@ class FirmadorWindow(PipelineWindow):
 
         # ── Área principal ─────────────────────────────────────────────
         body = QHBoxLayout()
-        body.setSpacing(16)
+        body.setSpacing(12)
 
         # ── Panel izquierdo (340 px fijo) ──────────────────────────────
         left_col = QVBoxLayout()
-        left_col.setContentsMargins(0, 0, 22, 0)
+        left_col.setContentsMargins(0, 0, 14, 0)
         left_col.setSpacing(10)
         left_col.setAlignment(Qt.AlignmentFlag.AlignTop)
 
@@ -918,7 +919,9 @@ class FirmadorWindow(PipelineWindow):
 
         left_scroll = QScrollArea()
         left_scroll.setObjectName("LeftPanelScroll")
-        left_scroll.setFixedWidth(376)
+        left_scroll.setMinimumWidth(280)
+        left_scroll.setMaximumWidth(326)
+        left_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -929,6 +932,8 @@ class FirmadorWindow(PipelineWindow):
         # ── Canvas + barra de estado ───────────────────────────────────
         canvas_wrap = QWidget()
         canvas_wrap.setObjectName("CanvasWrap")
+        canvas_wrap.setMinimumWidth(0)
+        canvas_wrap.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         cw_layout = QVBoxLayout(canvas_wrap)
         cw_layout.setContentsMargins(0, 0, 0, 0)
         cw_layout.setSpacing(0)
@@ -936,6 +941,8 @@ class FirmadorWindow(PipelineWindow):
         # Stack: preview encima, empty-state debajo (se alternan)
         from PySide6.QtWidgets import QStackedWidget
         self._canvas_stack = QStackedWidget()
+        self._canvas_stack.setMinimumWidth(0)
+        self._canvas_stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
 
         # Preview
         self.preview = PdfPreviewView()
@@ -957,10 +964,17 @@ class FirmadorWindow(PipelineWindow):
         empty_title = QLabel("Sin documentos para previsualizar")
         empty_title.setObjectName("PreviewEmptyTitle")
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_title.setWordWrap(True)
+        empty_title.setMinimumWidth(280)
+        empty_title.setMaximumWidth(440)
+        empty_title.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         empty_msg = QLabel("Agrega PDFs en Documentos y vuelve aquí para colocar firmas.")
         empty_msg.setObjectName("PreviewEmptyHint")
         empty_msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_msg.setWordWrap(True)
+        empty_msg.setMinimumWidth(320)
+        empty_msg.setMaximumWidth(460)
+        empty_msg.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         empty_v.addWidget(empty_icon)
         empty_v.addWidget(empty_title)
         empty_v.addWidget(empty_msg)
@@ -982,10 +996,12 @@ class FirmadorWindow(PipelineWindow):
         bar = QFrame()
         bar.setObjectName("SigStatusBar")
         bar.setFixedHeight(42)
+        bar.setMinimumWidth(0)
+        bar.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         bar.setStyleSheet(
             "QFrame#SigStatusBar {"
-            "  background-color: #16161A;"
-            "  border-top: 1px solid #26262C;"
+            f"  background-color: {COLORS['bg']};"
+            f"  border-top: 1px solid {COLORS['border']};"
             "}"
         )
         layout = QHBoxLayout(bar)
@@ -1008,13 +1024,16 @@ class FirmadorWindow(PipelineWindow):
         self._sb_page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self._sb_page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._sb_page_spin.setStyleSheet(
-            "QSpinBox { background: #1A1A21; color: #F0F1F3; "
-            "border: 1px solid #1E1E28; border-radius: 4px; "
+            f"QSpinBox {{ background: {COLORS['bg']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 5px; "
             "padding: 1px 4px; font-size: 12px; }"
         )
         self._sb_page_spin.editingFinished.connect(self._on_sb_page_jump)
         self._sb_page_total_lbl = QLabel("/ —")
-        self._sb_page_total_lbl.setStyleSheet("color: #9094A0; font-size: 12px;")
+        self._sb_page_total_lbl.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;"
+        )
+        self._sb_page_total_lbl.setMinimumWidth(0)
         self._sb_next_pg = QPushButton()
         self._sb_next_pg.setProperty("class", "IconBtn")
         self._sb_next_pg.setFixedSize(26, 26)
@@ -1054,8 +1073,12 @@ class FirmadorWindow(PipelineWindow):
 
         # Info de firma activa
         self._sb_sig_info = QLabel("Sin firma seleccionada")
-        self._sb_sig_info.setStyleSheet("color: #9094A0; font-size: 12px;")
+        self._sb_sig_info.setStyleSheet(
+            f"color: {COLORS['text_muted']}; font-size: 12px; background: transparent;"
+        )
         self._sb_sig_info.setTextFormat(Qt.TextFormat.RichText)
+        self._sb_sig_info.setMinimumWidth(0)
+        self._sb_sig_info.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         layout.addWidget(self._sb_sig_info, 1)
 
         return bar
@@ -1199,7 +1222,9 @@ class FirmadorWindow(PipelineWindow):
         body.setSpacing(16)
 
         docs_card = make_card("Documentos")
-        docs_card.setFixedWidth(360)
+        docs_card.setMinimumWidth(280)
+        docs_card.setMaximumWidth(360)
+        docs_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         docs_layout = card_layout(docs_card)
         docs_layout.setSpacing(10)
 
@@ -1227,7 +1252,7 @@ class FirmadorWindow(PipelineWindow):
         self._interval_doc_title = ElidedLabel("Selecciona un documento")
         self._interval_doc_title.setMinimumWidth(0)
         self._interval_doc_title.setStyleSheet(
-            "color:#ECEDEE; font-size:15px; font-weight:600;"
+            f"color:{COLORS['text']}; font-size:15px; font-weight:700; background:transparent;"
         )
         editor_layout.addWidget(self._interval_doc_title)
 
@@ -1296,7 +1321,7 @@ class FirmadorWindow(PipelineWindow):
         self._interval_preview_lbl.setTextFormat(Qt.TextFormat.RichText)
         self._interval_preview_lbl.setWordWrap(True)
         self._interval_preview_lbl.setStyleSheet(
-            "color:#ECEDEE; font-size:13px; line-height:150%;"
+            f"color:{COLORS['text']}; font-size:13px; line-height:150%; background:transparent;"
         )
         preview_layout.addWidget(self._interval_preview_lbl)
         right_col.addWidget(preview_card)
@@ -1370,7 +1395,9 @@ class FirmadorWindow(PipelineWindow):
         body.setSpacing(12)
 
         left = make_card("Revisión")
-        left.setFixedWidth(248)
+        left.setMinimumWidth(210)
+        left.setMaximumWidth(250)
+        left.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         left_l = card_layout(left)
         left_l.setSpacing(10)
 
@@ -1399,24 +1426,26 @@ class FirmadorWindow(PipelineWindow):
 
         center = QFrame()
         center.setObjectName("ReviewCanvasShell")
-        center.setMinimumSize(560, 420)
+        center.setMinimumWidth(0)
+        center.setMinimumHeight(360)
+        center.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         center.setStyleSheet(
             "QFrame#ReviewCanvasShell {"
-            "  background: #101016;"
-            "  border: 1px solid #252532;"
+            f"  background: {COLORS['bg']};"
+            f"  border: 1px solid {COLORS['border']};"
             "  border-radius: 8px;"
             "}"
             "QFrame#ReviewToolbar {"
-            "  background: #16161D;"
+            f"  background: {COLORS['bg']};"
             "  border: none;"
-            "  border-bottom: 1px solid #262633;"
+            f"  border-bottom: 1px solid {COLORS['border']};"
             "  border-top-left-radius: 8px;"
             "  border-top-right-radius: 8px;"
             "}"
             "QFrame#ReviewFooter {"
-            "  background: #14141B;"
+            f"  background: {COLORS['bg']};"
             "  border: none;"
-            "  border-top: 1px solid #262633;"
+            f"  border-top: 1px solid {COLORS['border']};"
             "  border-bottom-left-radius: 8px;"
             "  border-bottom-right-radius: 8px;"
             "}"
@@ -1434,7 +1463,7 @@ class FirmadorWindow(PipelineWindow):
 
         self._review_doc_title_lbl = ElidedLabel("Sin documento")
         self._review_doc_title_lbl.setStyleSheet(
-            "color:#ECEDEE; font-size:13px; font-weight:600; background: transparent;"
+            f"color:{COLORS['text']}; font-size:13px; font-weight:700; background: transparent;"
         )
         self._review_doc_title_lbl.setMinimumWidth(0)
         tb.addWidget(self._review_doc_title_lbl, 1)
@@ -1455,14 +1484,14 @@ class FirmadorWindow(PipelineWindow):
         self._review_page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._review_page_spin.editingFinished.connect(self._on_review_page_jump)
         self._review_page_spin.setStyleSheet(
-            "QSpinBox { background: #1D1D26; color: #F0F1F3; "
-            "border: 1px solid #343442; border-radius: 5px; padding: 2px 6px; }"
+            f"QSpinBox {{ background: {COLORS['bg']}; color: {COLORS['text']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 5px; padding: 2px 6px; }}"
         )
         tb.addWidget(self._review_page_spin)
 
         self._review_page_total_lbl = QLabel("/ —")
         self._review_page_total_lbl.setStyleSheet(
-            "color:#9094A0; font-size:12px; background: transparent;"
+            f"color:{COLORS['text_muted']}; font-size:12px; background: transparent;"
         )
         tb.addWidget(self._review_page_total_lbl)
 
@@ -1476,7 +1505,7 @@ class FirmadorWindow(PipelineWindow):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color:#30303A; background: transparent;")
+        sep.setStyleSheet(f"color:{COLORS['border']}; background: transparent;")
         tb.addWidget(sep)
 
         for icon_name, handler, tip in (
@@ -1496,8 +1525,10 @@ class FirmadorWindow(PipelineWindow):
 
         self._review_preview = PdfPreviewView()
         self._review_preview.setObjectName("PdfPreview")
-        self._review_preview.setMinimumSize(520, 360)
-        self._review_preview.viewport().setStyleSheet("background: #0B0B10;")
+        self._review_preview.setMinimumWidth(0)
+        self._review_preview.setMinimumHeight(300)
+        self._review_preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
+        self._review_preview.viewport().setStyleSheet(f"background: {COLORS['bg']};")
         self._review_preview.sig_placement_changed.connect(
             self._on_review_placement_changed
         )
@@ -1519,15 +1550,19 @@ class FirmadorWindow(PipelineWindow):
         self._review_canvas_hint_lbl = QLabel(
             "Arrastra la firma para moverla. Usa sus esquinas para redimensionar y el tirador superior para rotar."
         )
+        self._review_canvas_hint_lbl.setMinimumWidth(0)
+        self._review_canvas_hint_lbl.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         self._review_canvas_hint_lbl.setStyleSheet(
-            "color:#8E93A3; font-size:12px; background: transparent;"
+            f"color:{COLORS['text_muted']}; font-size:12px; background: transparent;"
         )
         footer_l.addWidget(self._review_canvas_hint_lbl, 1)
         center_l.addWidget(footer)
         body.addWidget(center, 1)
 
         right = make_card("Firma de la página")
-        right.setFixedWidth(300)
+        right.setMinimumWidth(240)
+        right.setMaximumWidth(292)
+        right.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         right_l = card_layout(right)
         right_l.setSpacing(10)
 
@@ -3238,27 +3273,27 @@ class FirmadorWindow(PipelineWindow):
         menu = QMenu(self)
         menu.setStyleSheet(
             "QMenu {"
-            "  background-color: #1E1E26;"
-            "  border: 1px solid #32323C;"
-            "  border-radius: 6px;"
+            f"  background-color: {COLORS['glass_bg']};"
+            f"  border: 1px solid {COLORS['border_strong']};"
+            "  border-radius: 8px;"
             "  padding: 4px 0;"
-            "  color: #ECEDEE;"
+            f"  color: {COLORS['text']};"
             "  font-size: 12px;"
             "}"
             "QMenu::item {"
             "  padding: 6px 20px 6px 14px;"
-            "  border-radius: 4px;"
+            "  border-radius: 6px;"
             "  margin: 1px 4px;"
             "}"
             "QMenu::item:selected {"
-            "  background-color: #2E2E3A;"
+            f"  background-color: {COLORS['surface_hover']};"
             "}"
             "QMenu::item:disabled {"
-            "  color: #5A5A6A;"
+            f"  color: {COLORS['text_faint']};"
             "}"
             "QMenu::separator {"
             "  height: 1px;"
-            "  background-color: #32323C;"
+            f"  background-color: {COLORS['border']};"
             "  margin: 3px 8px;"
             "}"
         )

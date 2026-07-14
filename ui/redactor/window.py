@@ -20,7 +20,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QPushButton, QLabel,
-    QComboBox, QScrollArea,
+    QComboBox, QScrollArea, QSizePolicy,
 )
 
 from core.output_naming import unique_output_path_for_source
@@ -44,6 +44,7 @@ from ui.common.pdf_render_utils import rendered_page_to_qimage
 from ui.common.process_step import ProcessStep
 from ui.common.send_to_tool import SendToToolButton
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
+from ui.styles import COLORS
 
 
 class RedactionWorker(QObject):
@@ -116,9 +117,9 @@ class RedactionCanvas(QWidget):
         self._drag_current: QPointF | None = None
         self._render_guard = 0
         self._render_thread: Optional[QThread] = None
-        self.setMinimumSize(520, 640)
+        self.setMinimumSize(360, 460)
         self.setMouseTracking(True)
-        self.setStyleSheet("background:#0D0D10;")
+        self.setStyleSheet(f"background:{COLORS['bg']};")
 
     @property
     def path(self) -> str:
@@ -240,14 +241,14 @@ class RedactionCanvas(QWidget):
     def _render_current(self) -> None:
         if self._doc is None or self._doc.page_count <= 0:
             self._pixmap = QPixmap()
-            self.setFixedSize(520, 640)
+            self.setFixedSize(360, 460)
             self.update()
             return
         # Incrementar guard cancela cualquier render pendiente
         self._render_guard += 1
         guard = self._render_guard
         if self._pixmap.isNull():
-            self.setFixedSize(520, 640)
+            self.setFixedSize(360, 460)
         worker = PageRenderWorker(self._path, self._page_index, guard)
         thread = RunnerThread(worker.run, self)
         worker.ready.connect(self._on_render_ready)
@@ -268,7 +269,7 @@ class RedactionCanvas(QWidget):
             return
         if qimage is None:
             self._pixmap = QPixmap()
-            self.setFixedSize(520, 640)
+            self.setFixedSize(360, 460)
         else:
             self._pixmap = QPixmap.fromImage(qimage)
             self.setFixedSize(self._pixmap.size())
@@ -277,7 +278,7 @@ class RedactionCanvas(QWidget):
     def paintEvent(self, event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.fillRect(self.rect(), QColor("#0D0D10"))
+        painter.fillRect(self.rect(), QColor(COLORS["bg"]))
         if not self._pixmap.isNull():
             painter.drawPixmap(0, 0, self._pixmap)
             self._draw_rects(painter)
@@ -422,7 +423,9 @@ class RedactorWindow(PipelineWindow):
         body.setSpacing(16)
 
         controls = make_card("Controles")
-        controls.setFixedWidth(280)
+        controls.setMinimumWidth(240)
+        controls.setMaximumWidth(300)
+        controls.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         cl = card_layout(controls)
 
         self._page_lbl = QLabel("Pagina -/-")
@@ -477,6 +480,8 @@ class RedactorWindow(PipelineWindow):
         self._canvas.pageChanged.connect(lambda *_: self._sync_redaction_labels())
         scroll = QScrollArea()
         scroll.setWidgetResizable(False)
+        scroll.setMinimumSize(260, 220)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         scroll.setWidget(self._canvas)
         vl.addWidget(scroll, 1)

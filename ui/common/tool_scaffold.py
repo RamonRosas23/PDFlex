@@ -9,12 +9,13 @@ Provee:
 from __future__ import annotations
 from typing import TYPE_CHECKING, List, Tuple
 
-from PySide6.QtCore import Qt, QEvent, QThread, Signal
+from PySide6.QtCore import Qt, QEvent, QThread, QSize, Signal
 from ui.styles import COLORS
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget, QFrame, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QStackedWidget,
+    QSizePolicy,
 )
 
 from core.update_config import APP_VERSION
@@ -43,11 +44,11 @@ class _StepBtn(QWidget):
         if hint:
             self.setToolTip(hint)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(44)
+        self.setFixedHeight(54)
 
         row = QHBoxLayout(self)
-        row.setContentsMargins(18, 0, 18, 0)
-        row.setSpacing(10)
+        row.setContentsMargins(18, 0, 16, 0)
+        row.setSpacing(11)
         row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         # Badge numérico (cuadrado redondeado)
@@ -57,10 +58,21 @@ class _StepBtn(QWidget):
         self._badge.setObjectName("StepBadge")
         row.addWidget(self._badge)
 
+        text_col = QVBoxLayout()
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setSpacing(1)
+
         # Nombre del paso
         self._lbl = QLabel(name)
         self._lbl.setObjectName("StepName")
-        row.addWidget(self._lbl, 1)
+        text_col.addWidget(self._lbl)
+
+        self._hint_lbl = QLabel(hint)
+        self._hint_lbl.setObjectName("StepHint")
+        self._hint_lbl.setVisible(bool(hint))
+        text_col.addWidget(self._hint_lbl)
+
+        row.addLayout(text_col, 1)
 
         self._apply_state()
 
@@ -79,19 +91,22 @@ class _StepBtn(QWidget):
             self.setObjectName("SidebarStepActive")
             self._badge.setObjectName("StepBadgeActive")
             self._lbl.setObjectName("StepNameActive")
+            self._hint_lbl.setObjectName("StepHintActive")
             self._badge.setText(self._num)
         elif self._completed:
             self.setObjectName("SidebarStepCompleted")
             self._badge.setObjectName("StepBadgeCompleted")
             self._lbl.setObjectName("StepNameCompleted")
+            self._hint_lbl.setObjectName("StepHintCompleted")
             self._badge.setText("✓")
         else:
             self.setObjectName("SidebarStep")
             self._badge.setObjectName("StepBadge")
             self._lbl.setObjectName("StepName")
+            self._hint_lbl.setObjectName("StepHint")
             self._badge.setText(self._num)
         # Forzar repolicía de estilos
-        for w in (self, self._badge, self._lbl):
+        for w in (self, self._badge, self._lbl, self._hint_lbl):
             w.style().unpolish(w)
             w.style().polish(w)
             w.update()
@@ -140,6 +155,19 @@ class RunnerThread(QThread):
         self._target()
 
 
+class _StageStack(QStackedWidget):
+    """Stack de etapas que no deja que páginas ocultas dicten el tamaño."""
+
+    def sizeHint(self) -> QSize:  # type: ignore[override]
+        widget = self.currentWidget()
+        if widget is not None:
+            return widget.sizeHint()
+        return super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # type: ignore[override]
+        return QSize(0, 0)
+
+
 # ──────────────────────────────────────────────────────────────
 # Ventana base del pipeline
 # ──────────────────────────────────────────────────────────────
@@ -164,7 +192,10 @@ class PipelineWindow(QWidget):
         self._apply_tool_accent()
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self._apply_primary_glows)
-        QTimer.singleShot(0, lambda: self._update_navbar(0) if self.SECTIONS else None)
+        QTimer.singleShot(
+            0,
+            lambda: self._update_navbar(self.stack.currentIndex()) if self.SECTIONS else None,
+        )
 
         # Atajos Alt+1-9 para navegar entre pasos
         from PySide6.QtGui import QShortcut
@@ -213,12 +244,15 @@ class PipelineWindow(QWidget):
         root.addWidget(self._sidebar_frame)
 
         content_area = QWidget()
-        content_area.setStyleSheet("background: #050507;")
+        content_area.setObjectName("ToolContentArea")
+        content_area.setStyleSheet(f"QWidget#ToolContentArea {{ background: {COLORS['bg']}; }}")
         content_layout = QVBoxLayout(content_area)
         content_layout.setContentsMargins(0, 0, 0, 0)
         content_layout.setSpacing(0)
 
-        self.stack = QStackedWidget()
+        self.stack = _StageStack()
+        self.stack.setMinimumSize(0, 0)
+        self.stack.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Expanding)
         content_layout.addWidget(self.stack, 1)
 
         self._navbar = self._build_navbar()
@@ -262,7 +296,7 @@ class PipelineWindow(QWidget):
         # Divisor
         div = QFrame()
         div.setFixedHeight(1)
-        div.setStyleSheet(f"background: {COLORS['border_strong']}; border: none;")
+        div.setStyleSheet(f"background: {COLORS['border']}; border: none;")
         sb.addWidget(div)
 
         # Barra de progreso de pasos — 3px, sin texto, coloreada por accent en _apply_tool_accent
@@ -317,13 +351,7 @@ class PipelineWindow(QWidget):
 
         navbar = QFrame()
         navbar.setObjectName("ToolNavBar")
-        navbar.setFixedHeight(56)
-        navbar.setStyleSheet(
-            "QFrame#ToolNavBar {"
-            f"background: {COLORS['bg']};"
-            f"border-top: 1px solid {COLORS['border']};"
-            "}"
-        )
+        navbar.setFixedHeight(64)
 
         row = QHBoxLayout(navbar)
         row.setContentsMargins(20, 0, 20, 0)
@@ -338,7 +366,30 @@ class PipelineWindow(QWidget):
         self._nav_prev_btn.setVisible(False)
         row.addWidget(self._nav_prev_btn)
 
-        row.addStretch()
+        self._nav_step_pill = QLabel("")
+        self._nav_step_pill.setObjectName("NavStepPill")
+        self._nav_step_pill.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._nav_step_pill.setFixedHeight(28)
+        row.addWidget(self._nav_step_pill)
+
+        self._nav_context = QWidget()
+        self._nav_context.setObjectName("NavContext")
+        self._nav_context.setMinimumWidth(0)
+        self._nav_context.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        nav_context_layout = QVBoxLayout(self._nav_context)
+        nav_context_layout.setContentsMargins(0, 0, 0, 0)
+        nav_context_layout.setSpacing(1)
+        self._nav_context_title = QLabel("")
+        self._nav_context_title.setObjectName("NavContextTitle")
+        self._nav_context_title.setMinimumWidth(0)
+        self._nav_context_title.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self._nav_context_hint = QLabel("")
+        self._nav_context_hint.setObjectName("NavContextHint")
+        self._nav_context_hint.setMinimumWidth(0)
+        self._nav_context_hint.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        nav_context_layout.addWidget(self._nav_context_title)
+        nav_context_layout.addWidget(self._nav_context_hint)
+        row.addWidget(self._nav_context, 1)
 
         # Zona de acciones contextuales por paso
         self._action_zone = QWidget()
@@ -360,12 +411,14 @@ class PipelineWindow(QWidget):
         return navbar
 
     @staticmethod
-    def _fit_button_to_text(button: QPushButton, *, max_width: int = 360) -> None:
+    def _fit_button_to_text(button: QPushButton, *, max_width: int = 220) -> None:
         """Reserva el ancho que Qt calcula para texto+icono, con un pequeño margen."""
         if not button.text():
             return
         target = max(button.sizeHint().width(), button.minimumSizeHint().width()) + 8
-        button.setMinimumWidth(min(max_width, max(button.minimumWidth(), target)))
+        button.setMinimumWidth(min(max_width, max(104, target)))
+        button.setMaximumWidth(max_width)
+        button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
 
     def _get_step_actions(self, idx: int) -> list:
         """Returns contextual navbar widgets for the given step index.
@@ -436,6 +489,19 @@ class PipelineWindow(QWidget):
         if not self.SECTIONS:
             return
         total = len(self.SECTIONS)
+        idx = max(0, min(idx, total - 1))
+        current_name = self.SECTIONS[idx][1]
+        current_hint = self.SECTIONS[idx][2] if len(self.SECTIONS[idx]) > 2 else ""
+        if hasattr(self, "_nav_step_pill"):
+            self._nav_step_pill.setText(f"{idx + 1}/{total}")
+        if hasattr(self, "_nav_context_title"):
+            title = f"Paso {idx + 1} de {total}: {current_name}"
+            self._nav_context_title.setText(title)
+            self._nav_context_title.setToolTip(title)
+        if hasattr(self, "_nav_context_hint"):
+            self._nav_context_hint.setText(current_hint)
+            self._nav_context_hint.setToolTip(current_hint)
+            self._nav_context_hint.setVisible(bool(current_hint))
         if idx > 0:
             prev_name = self.SECTIONS[idx - 1][1]
             self._nav_prev_btn.setText(prev_name)
@@ -457,18 +523,13 @@ class PipelineWindow(QWidget):
 
     def _apply_tool_accent(self) -> None:
         accent = getattr(self, "ACCENT_COLOR", "#5E6AD2") or "#5E6AD2"
-        hover  = _mix_hex(accent, "#FFFFFF", 0.14)
-        press  = _mix_hex(accent, "#000000", 0.16)
-        soft   = _rgba(accent, 0.18)
-        soft2  = _rgba(accent, 0.12)
         line   = _rgba(accent, 0.42)
-        badge_bg = _rgba(accent, 0.20)
 
         # Actualizar el nombre de la herramienta en el sidebar
         if hasattr(self, "_brand_lbl"):
             self._brand_lbl.setStyleSheet(
-                f"color: {accent}; font-size: 17px; font-weight: 700;"
-                "letter-spacing: -0.4px; background: transparent;"
+                f"color: {accent}; font-size: 17px; font-weight: 800;"
+                "letter-spacing: 0px; background: transparent;"
             )
 
         if hasattr(self, "_step_progress"):
@@ -481,38 +542,38 @@ class PipelineWindow(QWidget):
 /* Sidebar — pasos */
 #SidebarStep, #SidebarStepHover, #SidebarStepActive {{
     border: none;
-    border-left: 2px solid transparent;
+    border-left: 3px solid transparent;
 }}
 #SidebarStepHover {{
-    background: #16161A;
-    border-left-color: #2A2A32;
+    background: {COLORS['surface_2']};
+    border-left-color: {COLORS['border_strong']};
 }}
 #SidebarStepActive {{
-    background: #1A1A22;
+    background: {COLORS['surface_2']};
     border-left-color: {accent};
 }}
 
 /* Badge numérico del paso */
 QLabel#StepBadge {{
-    background: #1E1E26;
-    color: #6B6F7A;
+    background: {COLORS['surface_3']};
+    color: {COLORS['text_dim']};
     border-radius: 5px;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.3px;
-    border: 1px solid #2A2A32;
+    letter-spacing: 0px;
+    border: 1px solid {COLORS['border_strong']};
     min-width: 22px;
     max-width: 22px;
     min-height: 22px;
     max-height: 22px;
 }}
 QLabel#StepBadgeActive {{
-    background: {badge_bg};
+    background: {COLORS['bg']};
     color: {accent};
     border-radius: 5px;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.3px;
+    letter-spacing: 0px;
     border: 1px solid {_rgba(accent, 0.35)};
     min-width: 22px;
     max-width: 22px;
@@ -524,15 +585,15 @@ QLabel#StepBadgeActive {{
 #SidebarStepCompleted {{
     background: transparent;
     border: none;
-    border-left: 2px solid {_rgba(accent, 0.25)};
+    border-left: 3px solid {_rgba(accent, 0.25)};
 }}
 QLabel#StepBadgeCompleted {{
-    background: {_rgba(accent, 0.12)};
+    background: {COLORS['bg']};
     color: {accent};
     border-radius: 5px;
     font-size: 10px;
     font-weight: 700;
-    letter-spacing: 0.3px;
+    letter-spacing: 0px;
     border: 1px solid {_rgba(accent, 0.25)};
     min-width: 22px;
     max-width: 22px;
@@ -540,7 +601,7 @@ QLabel#StepBadgeCompleted {{
     max-height: 22px;
 }}
 QLabel#StepNameCompleted {{
-    color: #6B6F7A;
+    color: {COLORS['text_muted']};
     font-size: 13px;
     font-weight: 500;
     background: transparent;
@@ -548,41 +609,71 @@ QLabel#StepNameCompleted {{
 
 /* Texto del paso */
 QLabel#StepName {{
-    color: #7A7E8C;
+    color: {COLORS['text_muted']};
     font-size: 13px;
     font-weight: 500;
     background: transparent;
 }}
 QLabel#StepNameActive {{
-    color: #ECEDEE;
+    color: {COLORS['text']};
     font-size: 13px;
+    font-weight: 800;
+    background: transparent;
+}}
+
+QLabel#StepHint {{
+    color: {COLORS['text_faint']};
+    font-size: 10px;
+    font-weight: 500;
+    background: transparent;
+}}
+QLabel#StepHintActive {{
+    color: {COLORS['text_muted']};
+    font-size: 10px;
     font-weight: 600;
+    background: transparent;
+}}
+QLabel#StepHintCompleted {{
+    color: {COLORS['text_faint']};
+    font-size: 10px;
+    font-weight: 500;
     background: transparent;
 }}
 
 /* Botones Primary (herramienta-acento) */
 QPushButton[class="Primary"] {{
-    background: {accent};
-    background-color: {accent};
-    border: 1px solid {accent};
+    background: {COLORS['bg']};
+    background-color: {COLORS['bg']};
+    border: 1px solid {_rgba(accent, 0.72)};
     color: #FFFFFF;
-    font-weight: 600;
+    font-weight: 800;
 }}
 QPushButton[class="Primary"]:hover {{
-    background: {hover};
-    background-color: {hover};
-    border: 1px solid {hover};
+    background: {_rgba(accent, 0.07)};
+    background-color: {_rgba(accent, 0.07)};
+    border: 1px solid {_rgba(accent, 0.92)};
 }}
 QPushButton[class="Primary"]:pressed {{
-    background: {press};
-    background-color: {press};
-    border: 1px solid {press};
+    background: {_rgba(accent, 0.12)};
+    background-color: {_rgba(accent, 0.12)};
+    border: 1px solid {accent};
 }}
 QPushButton[class="Primary"]:disabled {{
-    background: #1A1A21;
-    background-color: #1A1A21;
-    border: 1px solid #1E1E28;
-    color: #52566A;
+    background: {COLORS['surface_3']};
+    background-color: {COLORS['surface_3']};
+    border: 1px solid {COLORS['border']};
+    color: {COLORS['text_dim']};
+}}
+
+#NavStepPill {{
+    background: {COLORS['bg']};
+    color: {accent};
+    border: 1px solid {_rgba(accent, 0.28)};
+    border-radius: 8px;
+    padding: 0 10px;
+    font-size: 12px;
+    font-weight: 800;
+    min-width: 36px;
 }}
 
 /* Ghost / Icon hover accent */
@@ -614,11 +705,11 @@ QCheckBox::indicator:checked {{
 
 /* Listas — selección */
 QListWidget::item:selected {{
-    background-color: {soft};
+    background-color: {COLORS['surface_3']};
     border-color: {line};
 }}
 QListWidget::item:selected:!active {{
-    background-color: {soft2};
+    background-color: {COLORS['surface_2']};
 }}
 
 /* Scrollbars accent */
@@ -630,8 +721,7 @@ QListWidget::item:selected:!active {{
 """)
 
         if hasattr(self, "_nav_next_btn"):
-            from ui.common.animations import AnimationHelper
-            AnimationHelper.apply_glow(self._nav_next_btn, accent, blur=16, alpha=70)
+            self._nav_next_btn.setGraphicsEffect(None)
 
     def _apply_primary_glows(self) -> None:
         """Aplica QGraphicsDropShadowEffect a botones Primary para reforzar el accent."""

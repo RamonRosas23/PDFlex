@@ -12,10 +12,11 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
 )
 
-from ui.common.icons import icon, set_button_icon
+from ui.common.icons import icon, make_icon_label, set_button_icon
 from ui.common.result_ui import configure_file_list
 from ui.styles import COLORS
 
@@ -55,11 +56,14 @@ class TrayInputPanel(QFrame):
         title_lbl = QLabel(title)
         title_lbl.setProperty("class", "CardTitle")
         self._count_lbl = QLabel("0 archivos")
-        self._count_lbl.setProperty("class", "CardHint")
+        self._count_lbl.setObjectName("DocumentCountBadge")
         header.addWidget(title_lbl)
         header.addStretch()
         header.addWidget(self._count_lbl)
         layout.addLayout(header)
+
+        self._stack = QStackedWidget()
+        self._empty_state = self._build_empty_state()
 
         self.list_widget = QListWidget()
         configure_file_list(self.list_widget)
@@ -69,9 +73,13 @@ class TrayInputPanel(QFrame):
         self.list_widget.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.list_widget.itemSelectionChanged.connect(self._update_actions)
         self.list_widget.itemDoubleClicked.connect(lambda *_: self._emit_add())
-        layout.addWidget(self.list_widget, 1)
+        self._stack.addWidget(self._empty_state)
+        self._stack.addWidget(self.list_widget)
+        layout.addWidget(self._stack, 1)
 
-        primary_row = QHBoxLayout()
+        self._primary_actions = QFrame()
+        primary_row = QHBoxLayout(self._primary_actions)
+        primary_row.setContentsMargins(0, 0, 0, 0)
         primary_row.setSpacing(6)
         self._add_btn = QPushButton("Agregar")
         self._add_btn.setProperty("class", "Primary")
@@ -87,9 +95,11 @@ class TrayInputPanel(QFrame):
         set_button_icon(self._replace_btn, "refresh-cw", size=14)
         self._replace_btn.clicked.connect(self._emit_replace)
         primary_row.addWidget(self._replace_btn, 1)
-        layout.addLayout(primary_row)
+        layout.addWidget(self._primary_actions)
 
-        secondary_row = QHBoxLayout()
+        self._secondary_actions = QFrame()
+        secondary_row = QHBoxLayout(self._secondary_actions)
+        secondary_row.setContentsMargins(0, 0, 0, 0)
         secondary_row.setSpacing(6)
         self._remove_btn = QPushButton("Quitar")
         self._remove_btn.setProperty("class", "Ghost")
@@ -104,7 +114,33 @@ class TrayInputPanel(QFrame):
         set_button_icon(self._clear_btn, "eraser", size=14)
         self._clear_btn.clicked.connect(self._ctx.tray.clear)
         secondary_row.addWidget(self._clear_btn, 1)
-        layout.addLayout(secondary_row)
+        layout.addWidget(self._secondary_actions)
+
+    def _build_empty_state(self) -> QFrame:
+        empty = QFrame()
+        empty.setObjectName("WorkspaceEmptyState")
+        layout = QVBoxLayout(empty)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(
+            make_icon_label("folder", color=COLORS["text_dim"], size=26),
+            0,
+            Qt.AlignmentFlag.AlignCenter,
+        )
+
+        title = QLabel("Bandeja vacía")
+        title.setObjectName("WorkspaceEmptyTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        hint = QLabel("Los archivos enviados entre herramientas aparecerán aquí.")
+        hint.setObjectName("WorkspaceEmptyHint")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        return empty
 
     def selected_paths(self) -> List[str]:
         paths: List[str] = []
@@ -150,6 +186,7 @@ class TrayInputPanel(QFrame):
 
         count = len(items)
         self._count_lbl.setText(f"{count} archivo" + ("s" if count != 1 else ""))
+        self._stack.setCurrentWidget(self.list_widget if count else self._empty_state)
         self._update_actions()
 
     def _item_text(self, tray_item) -> str:
@@ -163,6 +200,8 @@ class TrayInputPanel(QFrame):
         self._replace_btn.setEnabled(selected)
         self._remove_btn.setEnabled(selected)
         self._clear_btn.setEnabled(has_items)
+        self._primary_actions.setVisible(has_items)
+        self._secondary_actions.setVisible(has_items)
 
     @staticmethod
     def _status_label(status: str) -> str:

@@ -67,7 +67,10 @@ class WordListCard(QFrame):
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
 
-        row = QHBoxLayout()
+        action_bar = QFrame()
+        action_bar.setObjectName("DocumentActionBar")
+        row = QHBoxLayout(action_bar)
+        row.setContentsMargins(14, 10, 14, 10)
         row.setSpacing(10)
 
         add_btn = QPushButton("Agregar Word")
@@ -94,9 +97,9 @@ class WordListCard(QFrame):
         row.addStretch()
 
         self._count_lbl = QLabel("0 documentos")
-        self._count_lbl.setProperty("class", "CardHint")
+        self._count_lbl.setObjectName("DocumentCountBadge")
         row.addWidget(self._count_lbl)
-        layout.addLayout(row)
+        layout.addWidget(action_bar)
 
         self._content_stack = QStackedWidget()
 
@@ -109,12 +112,12 @@ class WordListCard(QFrame):
         ez.setSpacing(0)
 
         icon_box = QFrame()
-        icon_box.setFixedSize(56, 56)
+        icon_box.setFixedSize(54, 54)
         icon_box.setStyleSheet("""
             QFrame {
-                background: rgba(66, 153, 225, 0.14);
-                border: 1px solid rgba(66, 153, 225, 0.35);
-                border-radius: 12px;
+                background: #06070A;
+                border: 1px solid rgba(66, 153, 225, 0.45);
+                border-radius: 8px;
             }
         """)
         ib = QVBoxLayout(icon_box)
@@ -137,6 +140,16 @@ class WordListCard(QFrame):
         drop_sub.setObjectName("DropZoneHint")
         drop_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
         ez.addWidget(drop_sub)
+
+        ez.addSpacing(12)
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        chips.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for text in ("DOCX", "DOC", "Imágenes"):
+            chip = QLabel(text)
+            chip.setObjectName("DocumentFormatChip")
+            chips.addWidget(chip)
+        ez.addLayout(chips)
 
         self._content_stack.addWidget(self._empty_w)
 

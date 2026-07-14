@@ -4,7 +4,7 @@ Estructura:
     QMainWindow
       centralWidget
         QVBoxLayout
-          Topbar (QFrame, 48px)  ← PDFlex + botón Inicio + bandeja
+          Topbar (QFrame, 48px)  ← PDFlex + acciones globales
           QStackedWidget
             [0]  LauncherWidget
             [1…] PipelineWindow de cada herramienta (lazy)
@@ -13,11 +13,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from PySide6.QtCore import Qt, QPoint, QTimer
+from PySide6.QtCore import Qt, QPoint, QThread, QTimer, QEvent
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFrame, QHBoxLayout, QVBoxLayout,
-    QPushButton, QLabel, QStackedWidget, QMenu, QMessageBox,
+    QPushButton, QLabel, QStackedWidget, QMenu, QMessageBox, QApplication,
 )
 
 from shell.context import ShellContext
@@ -44,10 +44,23 @@ from core.update_config import (
 
 
 class ShellWindow(QMainWindow):
+    _WM_NCHITTEST = 0x0084
+    _HTCLIENT = 1
+    _HTCAPTION = 2
+    _HTLEFT = 10
+    _HTRIGHT = 11
+    _HTTOP = 12
+    _HTTOPLEFT = 13
+    _HTTOPRIGHT = 14
+    _HTBOTTOM = 15
+    _HTBOTTOMLEFT = 16
+    _HTBOTTOMRIGHT = 17
+    _RESIZE_BORDER_PX = 8
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("PDFlex — Suite de herramientas PDF")
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
+        self.setWindowTitle("PDFlex")
         from ui.common.icons import app_qicon
         self.setWindowIcon(app_qicon())
         self.setMinimumSize(1320, 820)
@@ -84,6 +97,7 @@ class ShellWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         central = QWidget()
+        central.setObjectName("ShellRoot")
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
         root.setContentsMargins(0, 0, 0, 0)
@@ -105,50 +119,53 @@ class ShellWindow(QMainWindow):
         bar = QFrame()
         bar.setObjectName("ShellTopbar")
         bar.setFixedHeight(48)
+        bar.installEventFilter(self)
+        self._topbar = bar
 
         h = QHBoxLayout(bar)
-        h.setContentsMargins(20, 0, 20, 0)
-        h.setSpacing(12)
+        h.setContentsMargins(18, 0, 10, 0)
+        h.setSpacing(11)
 
-        # Logo: ícono + texto
         from ui.common.icons import app_pixmap
+
         logo_icon = QLabel()
-        logo_icon.setPixmap(app_pixmap(24))
-        logo_icon.setFixedSize(24, 24)
+        logo_icon.setPixmap(app_pixmap(22))
+        logo_icon.setFixedSize(22, 22)
         logo_icon.setStyleSheet("background: transparent;")
+        logo_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         h.addWidget(logo_icon, 0, Qt.AlignmentFlag.AlignVCenter)
 
         logo = QLabel("PDFlex")
         logo.setObjectName("TopbarLogo")
+        logo.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         h.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        # Divisor
         sep = QFrame()
         sep.setObjectName("TopbarSep")
-        sep.setFixedSize(1, 20)
-        h.addWidget(sep)
-
-        # Nombre de la herramienta activa
-        self._tool_name_lbl = QLabel("")
-        self._tool_name_lbl.setObjectName("TopbarToolName")
-        self._tool_name_lbl.setVisible(False)
-        h.addWidget(self._tool_name_lbl)
-
-        h.addStretch(1)
+        sep.setFixedSize(1, 18)
+        sep.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        h.addWidget(sep, 0, Qt.AlignmentFlag.AlignVCenter)
 
         # Botón Inicio
-        self._home_btn = QPushButton("Inicio")
+        self._home_btn = QPushButton("Herramientas")
         self._home_btn.setProperty("class", "Ghost")
-        self._home_btn.setFixedHeight(32)
+        self._home_btn.setFixedHeight(30)
         set_button_icon(self._home_btn, "arrow-left", size=15)
         self._home_btn.setVisible(False)
         self._home_btn.clicked.connect(self._go_home)
         h.addWidget(self._home_btn)
 
+        # Se conserva para compatibilidad interna, pero no se muestra: el
+        # nombre de herramienta ya vive en el sidebar de cada flujo.
+        self._tool_name_lbl = QLabel("")
+        self._tool_name_lbl.setVisible(False)
+
+        h.addStretch(1)
+
         # Indicador de licencia — siempre visible, no solo dentro de Opciones
         self._license_status_btn = QPushButton("Licencia activa")
         self._license_status_btn.setProperty("class", "Ghost")
-        self._license_status_btn.setFixedHeight(32)
+        self._license_status_btn.setFixedHeight(30)
         self._license_status_btn.setToolTip("Ver detalles de tu licencia")
         set_button_icon(self._license_status_btn, "check", size=14, color=COLORS["success"])
         self._license_status_btn.clicked.connect(self._show_license_status)
@@ -156,7 +173,7 @@ class ShellWindow(QMainWindow):
 
         self._options_btn = QPushButton("Opciones")
         self._options_btn.setProperty("class", "Ghost")
-        self._options_btn.setFixedHeight(32)
+        self._options_btn.setFixedHeight(30)
         set_button_icon(self._options_btn, "settings", size=15)
         options_menu = QMenu(self._options_btn)
         self._suffix_action = QAction(
@@ -199,15 +216,60 @@ class ShellWindow(QMainWindow):
         # Botón bandeja
         self._tray_btn = QPushButton("Bandeja (0)")
         self._tray_btn.setObjectName("TrayBtn")
-        self._tray_btn.setFixedHeight(32)
+        self._tray_btn.setFixedHeight(30)
         set_button_icon(self._tray_btn, "folder", size=15)
         self._tray_btn.clicked.connect(self._toggle_tray)
         h.addWidget(self._tray_btn)
 
+        win_sep = QFrame()
+        win_sep.setObjectName("WindowControlSep")
+        win_sep.setFixedSize(1, 20)
+        win_sep.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        h.addWidget(win_sep, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._win_min_btn = self._make_window_control_button(
+            "window-minimize",
+            "Minimizar",
+        )
+        self._win_min_btn.clicked.connect(self.showMinimized)
+        h.addWidget(self._win_min_btn)
+
+        self._win_max_btn = self._make_window_control_button(
+            "window-maximize",
+            "Maximizar",
+        )
+        self._win_max_btn.clicked.connect(self._toggle_max_restore)
+        h.addWidget(self._win_max_btn)
+
+        self._win_close_btn = self._make_window_control_button(
+            "window-close",
+            "Cerrar",
+            object_name="WindowCloseBtn",
+        )
+        self._win_close_btn.clicked.connect(self.close)
+        h.addWidget(self._win_close_btn)
+
         self._tray.changed.connect(self._on_tray_changed)
         self._tray_popup: Optional[TrayPopup] = None
+        self._refresh_window_controls()
 
         return bar
+
+    def _make_window_control_button(
+        self,
+        icon_name: str,
+        tooltip: str,
+        *,
+        object_name: str = "WindowControlBtn",
+    ) -> QPushButton:
+        btn = QPushButton()
+        btn.setObjectName(object_name)
+        btn.setFixedSize(34, 30)
+        btn.setToolTip(tooltip)
+        btn.setAccessibleName(tooltip)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        set_button_icon(btn, icon_name, size=14, icon_only=True)
+        return btn
 
     def _build_loading_widget(self) -> QWidget:
         """Widget placeholder mostrado mientras se construye una herramienta."""
@@ -222,6 +284,120 @@ class ShellWindow(QMainWindow):
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(lbl)
         return w
+
+    # ------------------------------------------------------------------ #
+    # Chrome custom de ventana
+    # ------------------------------------------------------------------ #
+
+    def _toggle_max_restore(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+        else:
+            self.showMaximized()
+        self._refresh_window_controls()
+
+    def _refresh_window_controls(self) -> None:
+        btn = getattr(self, "_win_max_btn", None)
+        if btn is None:
+            return
+        if self.isMaximized():
+            set_button_icon(btn, "window-restore", size=14, icon_only=True)
+            btn.setToolTip("Restaurar")
+            btn.setAccessibleName("Restaurar")
+        else:
+            set_button_icon(btn, "window-maximize", size=14, icon_only=True)
+            btn.setToolTip("Maximizar")
+            btn.setAccessibleName("Maximizar")
+
+    def _titlebar_can_drag_at(self, global_pos) -> bool:
+        topbar = getattr(self, "_topbar", None)
+        if topbar is None:
+            return False
+        local = topbar.mapFromGlobal(global_pos)
+        if not topbar.rect().contains(local):
+            return False
+
+        widget = QApplication.widgetAt(global_pos)
+        while widget is not None and widget is not topbar:
+            if isinstance(widget, (QPushButton, QMenu)):
+                return False
+            widget = widget.parentWidget()
+        return True
+
+    def nativeEvent(self, event_type, message):  # noqa: N802 - Qt override
+        """Hit-test nativo para frame custom en Windows.
+
+        Permite resize por bordes, drag del topbar y snap/maximize del sistema
+        sin recrear esa lógica a mano.
+        """
+        try:
+            import sys
+            if not sys.platform.startswith("win"):
+                return super().nativeEvent(event_type, message)
+
+            from ctypes import wintypes
+
+            try:
+                address = int(message)
+            except TypeError:
+                address = message.__int__()
+            msg = wintypes.MSG.from_address(address)
+            if msg.message != self._WM_NCHITTEST:
+                return super().nativeEvent(event_type, message)
+        except Exception:
+            return super().nativeEvent(event_type, message)
+
+        from PySide6.QtGui import QCursor
+
+        global_pos = QCursor.pos()
+        frame = self.frameGeometry()
+        border = self._RESIZE_BORDER_PX
+        if not self.isMaximized():
+            left = frame.left() <= global_pos.x() < frame.left() + border
+            right = frame.right() - border < global_pos.x() <= frame.right()
+            top = frame.top() <= global_pos.y() < frame.top() + border
+            bottom = frame.bottom() - border < global_pos.y() <= frame.bottom()
+
+            if top and left:
+                return True, self._HTTOPLEFT
+            if top and right:
+                return True, self._HTTOPRIGHT
+            if bottom and left:
+                return True, self._HTBOTTOMLEFT
+            if bottom and right:
+                return True, self._HTBOTTOMRIGHT
+            if left:
+                return True, self._HTLEFT
+            if right:
+                return True, self._HTRIGHT
+            if top:
+                return True, self._HTTOP
+            if bottom:
+                return True, self._HTBOTTOM
+
+        if self._titlebar_can_drag_at(global_pos):
+            return True, self._HTCAPTION
+        return False, 0
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is getattr(self, "_topbar", None):
+            if event.type() == QEvent.Type.MouseButtonDblClick:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self._toggle_max_restore()
+                    event.accept()
+                    return True
+            if event.type() == QEvent.Type.MouseButtonPress:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    handle = self.windowHandle()
+                    if handle is not None and hasattr(handle, "startSystemMove"):
+                        event.accept()
+                        return bool(handle.startSystemMove())
+        return super().eventFilter(obj, event)
+
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange:
+            self._refresh_window_controls()
 
     # ------------------------------------------------------------------ #
     # Navegación
@@ -354,19 +530,16 @@ class ShellWindow(QMainWindow):
             self._tray.clear()
 
     def _set_topbar_tool(self, tool: object) -> None:
-        """Actualiza topbar con nombre y color de la herramienta activa."""
+        """Actualiza topbar al entrar a una herramienta."""
         self._active_tool_id = tool.id
-        self._tool_name_lbl.setText(tool.title)
-        self._tool_name_lbl.setStyleSheet(f"color: {tool.accent_color};")
-        self._tool_name_lbl.setVisible(True)
+        self._home_btn.setToolTip(f"Volver a herramientas desde {tool.title}")
         self._home_btn.setVisible(True)
 
     def _go_home(self) -> None:
         self._launcher.refresh_usage()
         self._main_stack.setCurrentIndex(0)
         self._active_tool_id = None
-        self._tool_name_lbl.setStyleSheet("")
-        self._tool_name_lbl.setVisible(False)
+        self._home_btn.setToolTip("")
         self._home_btn.setVisible(False)
 
     # ------------------------------------------------------------------ #
@@ -582,9 +755,26 @@ class ShellWindow(QMainWindow):
     # Cierre limpio
     # ------------------------------------------------------------------ #
 
+    @staticmethod
+    def _is_thread_running(thread) -> bool:
+        """True si `thread` sigue corriendo. Tolera wrappers cuyo objeto C++
+        ya fue destruido por deleteLater: libshiboken lanza RuntimeError al
+        tocar cualquier método de ese cadáver (crash real de v2.0.8 al
+        cerrar), y un hilo ya destruido por definición ya terminó."""
+        if thread is None or not hasattr(thread, "isRunning"):
+            return False
+        try:
+            return bool(thread.isRunning())
+        except RuntimeError:
+            return False
+
     def closeEvent(self, event) -> None:
         """Cancela workers activos y espera terminación antes de cerrar."""
         threads_to_wait = []
+
+        def _collect(thread) -> None:
+            if self._is_thread_running(thread) and thread not in threads_to_wait:
+                threads_to_wait.append(thread)
 
         for widget in self._tool_widgets.values():
             # Herramientas con shutdown explícito (OCR, etc.)
@@ -603,19 +793,40 @@ class ShellWindow(QMainWindow):
                 except Exception:
                     pass
 
-            thread = getattr(widget, "_worker_thread", None)
-            if thread is not None and hasattr(thread, "isRunning") and thread.isRunning():
-                threads_to_wait.append(thread)
+            _collect(getattr(widget, "_worker_thread", None))
 
         # Revalidación de licencia en segundo plano (ver ui/license/license_gate.py)
-        license_thread = getattr(self, "_license_revalidate_thread", None)
-        if license_thread is not None and license_thread.isRunning():
-            threads_to_wait.append(license_thread)
+        _collect(getattr(self, "_license_revalidate_thread", None))
+
+        # Cualquier otro QThread colgado del árbol de la ventana: comprobación
+        # de actualizaciones, conversiones Word→PDF, previews, miniaturas,
+        # renders… Destruir la ventana con uno de estos aún corriendo aborta
+        # el proceso entero ("QThread: Destroyed while thread is still
+        # running" es un qFatal de Qt, no una excepción capturable).
+        for child_thread in self.findChildren(QThread):
+            _collect(child_thread)
+
+        # Pedir a todos que terminen (flag cooperativo + salir del event
+        # loop si lo tuvieran) antes de esperar, para que bajen en paralelo.
+        for t in threads_to_wait:
+            if callable(getattr(t, "requestInterruption", None)):
+                try:
+                    t.requestInterruption()
+                except RuntimeError:
+                    pass
+            if callable(getattr(t, "quit", None)):
+                try:
+                    t.quit()
+                except RuntimeError:
+                    pass
 
         # Esperar terminación de todos los threads (máximo 3s por thread)
         for t in threads_to_wait:
             if hasattr(t, "wait"):
-                t.wait(3000)
+                try:
+                    t.wait(3000)
+                except RuntimeError:
+                    pass  # deleteLater procesado a mitad del cierre: ya terminó
 
         event.accept()
 

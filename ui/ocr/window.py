@@ -36,11 +36,17 @@ from ui.common.document_workspace import DocumentWorkspace as DocumentsCard
 from ui.common.process_step import ProcessStep
 from ui.common.open_utils import open_file, open_folder
 from ui.common.save_utils import save_file_as, save_files_as_batch
-from ui.common.result_ui import ElidedLabel, configure_result_list, format_file_size
+from ui.common.result_ui import (
+    ElidedLabel,
+    ResultsStatBar,
+    configure_result_list,
+    format_file_size,
+)
 from ui.common.tool_scaffold import PipelineWindow, RunnerThread
 from ui.common.output_settings import add_tool_suffix_enabled
 from ui.common.dialogs import show_error, show_info, show_success, show_warning
-from ui.common.icons import icon, set_button_icon
+from ui.common.icons import icon, set_button_icon, set_compact_icon_button
+from ui.styles import COLORS
 
 
 # ====================================================================== #
@@ -314,15 +320,25 @@ class TextResultsViewer(QWidget):
         root.setSpacing(12)
 
         left = QFrame()
+        left.setObjectName("ResultSidePanel")
         left.setProperty("class", "Card")
-        left.setFixedWidth(270)
+        left.setFixedWidth(276)
         lv = QVBoxLayout(left)
         lv.setContentsMargins(14, 14, 14, 14)
         lv.setSpacing(10)
 
+        list_header = QHBoxLayout()
+        list_header.setSpacing(8)
         title = QLabel("Transcripciones")
         title.setProperty("class", "CardTitle")
-        lv.addWidget(title)
+        list_header.addWidget(title, 1)
+        self._count_lbl = QLabel("0")
+        self._count_lbl.setObjectName("ResultCountBadge")
+        list_header.addWidget(self._count_lbl)
+        lv.addLayout(list_header)
+
+        self._stat_bar = ResultsStatBar()
+        lv.addWidget(self._stat_bar)
 
         self._doc_list = QListWidget()
         configure_result_list(self._doc_list)
@@ -331,94 +347,94 @@ class TextResultsViewer(QWidget):
         root.addWidget(left)
 
         right = QFrame()
+        right.setObjectName("ResultMainPanel")
         right.setProperty("class", "Card")
         rv = QVBoxLayout(right)
-        rv.setContentsMargins(16, 14, 16, 14)
-        rv.setSpacing(10)
+        rv.setContentsMargins(0, 0, 0, 0)
+        rv.setSpacing(0)
 
-        header = QVBoxLayout()
-        header.setSpacing(8)
+        header = QFrame()
+        header.setObjectName("ResultHeader")
+        header_row = QHBoxLayout(header)
+        header_row.setContentsMargins(14, 12, 14, 10)
+        header_row.setSpacing(8)
+
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(2)
+        eyebrow = QLabel("Texto reconocido")
+        eyebrow.setObjectName("ResultEyebrow")
+        title_block.addWidget(eyebrow)
         self._title_lbl = ElidedLabel("Selecciona un documento")
         self._title_lbl.setProperty("class", "CardTitle")
-        header.addWidget(self._title_lbl)
+        title_block.addWidget(self._title_lbl)
+        header_row.addLayout(title_block, 1)
 
-        actions = QHBoxLayout()
-        actions.setSpacing(8)
-        actions.addStretch(1)
-
-        self._open_docx_btn = QPushButton("Abrir Word")
-        self._open_docx_btn.setProperty("class", "Ghost")
-        set_button_icon(self._open_docx_btn, "external-link")
+        self._open_docx_btn = QPushButton()
+        set_compact_icon_button(self._open_docx_btn, "external-link", "Abrir Word")
         self._open_docx_btn.clicked.connect(self._open_docx)
-        actions.addWidget(self._open_docx_btn)
+        header_row.addWidget(self._open_docx_btn)
 
-        self._open_txt_btn = QPushButton("Abrir TXT")
-        self._open_txt_btn.setProperty("class", "Ghost")
-        set_button_icon(self._open_txt_btn, "file-text")
+        self._open_txt_btn = QPushButton()
+        set_compact_icon_button(self._open_txt_btn, "file-text", "Abrir TXT")
         self._open_txt_btn.clicked.connect(self._open_txt)
-        actions.addWidget(self._open_txt_btn)
+        header_row.addWidget(self._open_txt_btn)
 
-        self._open_folder_btn = QPushButton("Abrir carpeta")
-        self._open_folder_btn.setProperty("class", "Ghost")
-        set_button_icon(self._open_folder_btn, "folder-open")
+        self._open_folder_btn = QPushButton()
+        set_compact_icon_button(self._open_folder_btn, "folder-open", "Abrir carpeta")
         self._open_folder_btn.clicked.connect(self._open_folder)
-        actions.addWidget(self._open_folder_btn)
+        header_row.addWidget(self._open_folder_btn)
 
-        self._save_docx_btn = QPushButton("Guardar DOCX")
-        self._save_docx_btn.setProperty("class", "Ghost")
-        set_button_icon(self._save_docx_btn, "save")
+        self._save_docx_btn = QPushButton()
+        set_compact_icon_button(self._save_docx_btn, "save", "Guardar DOCX")
         self._save_docx_btn.clicked.connect(self._save_docx_as)
-        actions.addWidget(self._save_docx_btn)
+        header_row.addWidget(self._save_docx_btn)
 
-        self._save_txt_btn = QPushButton("Guardar TXT")
-        self._save_txt_btn.setProperty("class", "Ghost")
-        set_button_icon(self._save_txt_btn, "save")
+        self._save_txt_btn = QPushButton()
+        set_compact_icon_button(self._save_txt_btn, "save", "Guardar TXT")
         self._save_txt_btn.clicked.connect(self._save_txt_as)
-        actions.addWidget(self._save_txt_btn)
+        header_row.addWidget(self._save_txt_btn)
 
-        self._save_all_btn = QPushButton("Guardar todo")
-        self._save_all_btn.setProperty("class", "Ghost")
-        set_button_icon(self._save_all_btn, "download")
+        self._save_all_btn = QPushButton()
+        set_compact_icon_button(self._save_all_btn, "download", "Guardar todo")
         self._save_all_btn.clicked.connect(self._save_all_as)
-        actions.addWidget(self._save_all_btn)
-        header.addLayout(actions)
-        rv.addLayout(header)
+        header_row.addWidget(self._save_all_btn)
+        rv.addWidget(header)
+
+        toolbar = QFrame()
+        toolbar.setObjectName("ResultToolbar")
+        toolbar_row = QHBoxLayout(toolbar)
+        toolbar_row.setContentsMargins(14, 8, 14, 8)
+        toolbar_row.setSpacing(8)
 
         self._stats_lbl = QLabel("")
         self._stats_lbl.setProperty("class", "CardHint")
         self._stats_lbl.setWordWrap(True)
-        rv.addWidget(self._stats_lbl)
-
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(8)
-        filter_lbl = QLabel("Vista:")
-        filter_lbl.setProperty("class", "CardHint")
-        filter_row.addWidget(filter_lbl)
+        toolbar_row.addWidget(self._stats_lbl, 1)
 
         self._page_combo = QComboBox()
         self._page_combo.setMinimumWidth(220)
         self._page_combo.currentIndexChanged.connect(self._refresh_preview)
-        filter_row.addWidget(self._page_combo)
-        filter_row.addStretch()
-        rv.addLayout(filter_row)
+        toolbar_row.addWidget(self._page_combo)
+        rv.addWidget(toolbar)
+
+        body = QWidget()
+        body.setObjectName("ResultBody")
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(14, 12, 14, 12)
+        body_layout.setSpacing(10)
 
         self._page_meta_lbl = QLabel("")
         self._page_meta_lbl.setProperty("class", "CardHint")
         self._page_meta_lbl.setWordWrap(True)
-        rv.addWidget(self._page_meta_lbl)
+        body_layout.addWidget(self._page_meta_lbl)
 
         self._preview = QPlainTextEdit()
+        self._preview.setObjectName("TextPreviewCanvas")
         self._preview.setReadOnly(True)
         self._preview.setPlaceholderText("El texto reconocido aparecerá aquí.")
-        self._preview.setStyleSheet(
-            "QPlainTextEdit {"
-            " background: #0D0D10; border: 1px solid #26262C;"
-            " border-radius: 8px; padding: 10px; color: #ECEDEE;"
-            " font-family: 'Consolas'; font-size: 12px;"
-            " selection-background-color: #5E6AD2;"
-            "}"
-        )
-        rv.addWidget(self._preview, 1)
+        body_layout.addWidget(self._preview, 1)
+        rv.addWidget(body, 1)
         root.addWidget(right, 1)
 
         self._set_actions_enabled(False)
@@ -426,10 +442,12 @@ class TextResultsViewer(QWidget):
     def set_results(self, results: List[OcrJobResult]) -> None:
         self.clear_results()
         self._results = list(results)
+        self._count_lbl.setText(str(len(results)))
         for result in results:
             item = _text_result_item(result)
             self._doc_list.addItem(item)
         if results:
+            self._refresh_stat_bar(results)
             self._doc_list.setCurrentRow(0)
 
     def clear_results(self) -> None:
@@ -441,7 +459,23 @@ class TextResultsViewer(QWidget):
         self._title_lbl.setText("Selecciona un documento")
         self._stats_lbl.setText("")
         self._page_meta_lbl.setText("")
+        self._count_lbl.setText("0")
+        self._stat_bar.setVisible(False)
         self._set_actions_enabled(False)
+
+    def _refresh_stat_bar(self, results: List[OcrJobResult]) -> None:
+        ok = sum(1 for result in results if result.success)
+        errors = len(results) - ok
+        words = sum(max(0, result.word_count) for result in results if result.success)
+        stats = [
+            {"value": len(results), "label": "docs", "color": COLORS["text"]},
+            {"value": ok, "label": "correctos", "color": COLORS["success"]},
+        ]
+        if words:
+            stats.append({"value": f"{words:,}", "label": "palabras", "color": COLORS["text_muted"]})
+        if errors:
+            stats.append({"value": errors, "label": "errores", "color": COLORS["danger"]})
+        self._stat_bar.set_stats(stats)
 
     def _set_actions_enabled(self, enabled: bool) -> None:
         result = self._current if enabled else None

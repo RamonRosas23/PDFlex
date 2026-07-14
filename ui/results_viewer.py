@@ -11,21 +11,27 @@ from __future__ import annotations
 from typing import List, Optional
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, Signal
-from PySide6.QtGui import QPixmap, QIcon, QColor, QBrush
+from PySide6.QtCore import Qt, QSize, Signal, QTimer
+from PySide6.QtGui import QPixmap, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem,
-    QLabel, QPushButton, QFrame, QScrollArea, QSizePolicy, QSpinBox,
+    QLabel, QPushButton, QFrame, QScrollArea, QSpinBox,
 )
 
 from ui.styles import COLORS as _COLORS
 
 from core.pdf_backend import PdfRenderDocument
 from core.signature_engine import JobResult
+from ui.common.clipboard_utils import copy_files_to_clipboard
 from ui.common.open_utils import open_file, open_folder
 from ui.common.save_utils import save_file_as, save_files_as_batch
-from ui.common.result_ui import ElidedLabel, configure_result_list
-from ui.common.icons import icon, set_button_icon, set_compact_icon_button
+from ui.common.result_ui import (
+    ElidedLabel,
+    ResultsStatBar,
+    configure_result_list,
+    make_result_list_item,
+)
+from ui.common.icons import set_button_icon, set_compact_icon_button
 from ui.common.pdf_fullview_dialog import PdfFullViewDialog
 from ui.common.pdf_render_utils import rendered_page_to_qpixmap
 
@@ -53,49 +59,71 @@ class ResultsViewer(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        # =========================================================
-        # Panel izquierdo: documentos
-        # =========================================================
         left = QFrame()
+        left.setObjectName("ResultSidePanel")
         left.setProperty("class", "Card")
-        left.setFixedWidth(240)
+        left.setFixedWidth(276)
         left_v = QVBoxLayout(left)
         left_v.setContentsMargins(14, 14, 14, 14)
         left_v.setSpacing(10)
 
+        list_header = QHBoxLayout()
+        list_header.setSpacing(8)
         lbl_docs = QLabel("Documentos firmados")
         lbl_docs.setProperty("class", "CardTitle")
-        left_v.addWidget(lbl_docs)
+        list_header.addWidget(lbl_docs, 1)
+        self._doc_count_lbl = QLabel("0")
+        self._doc_count_lbl.setObjectName("ResultCountBadge")
+        list_header.addWidget(self._doc_count_lbl)
+        left_v.addLayout(list_header)
+
+        self._stat_bar = ResultsStatBar()
+        left_v.addWidget(self._stat_bar)
 
         self.doc_list = QListWidget()
         configure_result_list(self.doc_list)
         self.doc_list.itemSelectionChanged.connect(self._on_doc_selected)
+        QShortcut(QKeySequence.StandardKey.Copy, self.doc_list, activated=self._on_copy_file)
         left_v.addWidget(self.doc_list, 1)
 
         layout.addWidget(left)
 
-        # =========================================================
-        # Panel central: vista + páginas
-        # =========================================================
         center = QFrame()
+        center.setObjectName("ResultMainPanel")
         center.setProperty("class", "Card")
         center_v = QVBoxLayout(center)
-        center_v.setContentsMargins(14, 14, 14, 14)
-        center_v.setSpacing(12)
+        center_v.setContentsMargins(0, 0, 0, 0)
+        center_v.setSpacing(0)
 
         # ── Fila 1: título + acciones de archivo ───────────────────────
-        title_row = QHBoxLayout()
+        header = QFrame()
+        header.setObjectName("ResultHeader")
+        title_row = QHBoxLayout(header)
+        title_row.setContentsMargins(14, 12, 14, 10)
         title_row.setSpacing(8)
 
+        title_block = QVBoxLayout()
+        title_block.setContentsMargins(0, 0, 0, 0)
+        title_block.setSpacing(2)
+        eyebrow = QLabel("Vista previa")
+        eyebrow.setObjectName("ResultEyebrow")
+        title_block.addWidget(eyebrow)
         self.title_label = ElidedLabel("Selecciona un documento")
         self.title_label.setProperty("class", "CardTitle")
-        title_row.addWidget(self.title_label, 1)
+        title_block.addWidget(self.title_label)
+        title_row.addLayout(title_block, 1)
 
         self.open_file_btn = QPushButton()
         set_compact_icon_button(self.open_file_btn, "external-link", "Abrir PDF")
         self.open_file_btn.clicked.connect(self._open_file_directly)
         self.open_file_btn.setEnabled(False)
         title_row.addWidget(self.open_file_btn)
+
+        self.copy_file_btn = QPushButton()
+        set_compact_icon_button(self.copy_file_btn, "copy", "Copiar PDF")
+        self.copy_file_btn.clicked.connect(self._on_copy_file)
+        self.copy_file_btn.setEnabled(False)
+        title_row.addWidget(self.copy_file_btn)
 
         self.fullview_btn = QPushButton()
         set_compact_icon_button(
@@ -125,12 +153,14 @@ class ResultsViewer(QWidget):
         self.save_all_btn.setEnabled(False)
         title_row.addWidget(self.save_all_btn)
 
-        center_v.addLayout(title_row)
+        center_v.addWidget(header)
 
         # ── Fila 2: controles de vista (zoom + ajuste) ─────────────────
-        view_bar = QHBoxLayout()
+        toolbar = QFrame()
+        toolbar.setObjectName("ResultToolbar")
+        view_bar = QHBoxLayout(toolbar)
         view_bar.setSpacing(8)
-        view_bar.setContentsMargins(0, 0, 0, 0)
+        view_bar.setContentsMargins(14, 8, 14, 8)
 
         self.zoom_out_btn = QPushButton()
         self.zoom_out_btn.setProperty("class", "IconBtn")
@@ -170,10 +200,13 @@ class ResultsViewer(QWidget):
         view_bar.addWidget(self.fit_page_btn)
 
         view_bar.addStretch(1)
-        center_v.addLayout(view_bar)
+        center_v.addWidget(toolbar)
 
         # Body: páginas + canvas
-        inner = QHBoxLayout()
+        body_host = QWidget()
+        body_host.setObjectName("ResultBody")
+        inner = QHBoxLayout(body_host)
+        inner.setContentsMargins(14, 12, 14, 12)
         inner.setSpacing(12)
 
         # Lista de páginas con thumbnails (IconMode: número debajo, sin cortes)
@@ -202,17 +235,23 @@ class ResultsViewer(QWidget):
 
         self.canvas = QLabel()
         self.canvas.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.canvas.setStyleSheet("background: transparent;")
+        self.canvas.setText("Selecciona un resultado")
+        self.canvas.setMinimumSize(240, 180)
+        self.canvas.setStyleSheet(
+            f"background: transparent; color: {_COLORS['text_dim']}; font-size: 13px;"
+        )
         self.scroll.setWidget(self.canvas)
 
         inner.addWidget(self.scroll, 1)
 
-        center_v.addLayout(inner, 1)
+        center_v.addWidget(body_host, 1)
 
         # ── Footer: metadata (izquierda) + paginador (derecha) ────────
-        footer_bar = QHBoxLayout()
+        footer = QFrame()
+        footer.setObjectName("ResultFooter")
+        footer_bar = QHBoxLayout(footer)
         footer_bar.setSpacing(6)
-        footer_bar.setContentsMargins(0, 4, 0, 0)
+        footer_bar.setContentsMargins(14, 8, 14, 10)
 
         self.meta_label = ElidedLabel("")
         self.meta_label.setProperty("class", "CardHint")
@@ -237,7 +276,7 @@ class ResultsViewer(QWidget):
         self.page_spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
         self.page_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.page_spin.setStyleSheet(
-            f"QSpinBox {{ background: {_COLORS['surface_3']}; color: {_COLORS['text']}; "
+            f"QSpinBox {{ background: {_COLORS['bg']}; color: {_COLORS['text']}; "
             f"border: 1px solid {_COLORS['border']}; border-radius: 4px; "
             f"padding: 1px 4px; font-size: 12px; }}"
         )
@@ -256,7 +295,7 @@ class ResultsViewer(QWidget):
         self.next_page_btn.setEnabled(False)
         footer_bar.addWidget(self.next_page_btn)
 
-        center_v.addLayout(footer_bar)
+        center_v.addWidget(footer)
 
         layout.addWidget(center, 1)
 
@@ -266,24 +305,24 @@ class ResultsViewer(QWidget):
     def set_results(self, results: List[JobResult]) -> None:
         self._results = results
         self.doc_list.clear()
+        self._doc_count_lbl.setText(str(len(results)))
         for r in results:
-            if r.output_path:
-                name = Path(r.output_path).name
-            else:
-                name = "(error)"
-            item = QListWidgetItem(name)
-            item.setToolTip(r.output_path or name)
-            if not r.success:
-                item.setForeground(QBrush(QColor("#E5484D")))
-                item.setIcon(icon("warning", "#E5484D", 16))
+            item = make_result_list_item(
+                r.output_path or "",
+                success=bool(r.success),
+                error=r.error or "",
+            )
             self.doc_list.addItem(item)
 
         if results:
+            self._refresh_stat_bar(results)
             self.doc_list.setCurrentRow(0)
         else:
             self.title_label.setText("No hay resultados")
             self.meta_label.setText("")
             self.canvas.clear()
+            self.canvas.setText("Selecciona un resultado")
+            self._stat_bar.setVisible(False)
             self._set_actions_enabled(False)
 
     def clear_results(self) -> None:
@@ -300,10 +339,28 @@ class ResultsViewer(QWidget):
         self.doc_list.clear()
         self.page_list.clear()
         self.canvas.clear()
+        self.canvas.setText("Selecciona un resultado")
         self.title_label.setText("Selecciona un documento")
         self.meta_label.setText("")
+        self._doc_count_lbl.setText("0")
+        self._stat_bar.setVisible(False)
         self._set_actions_enabled(False)
         self._update_page_status()
+
+    def _refresh_stat_bar(self, results: List[JobResult]) -> None:
+        ok = sum(1 for r in results if r.success)
+        errors = len(results) - ok
+        pages = sum(len(getattr(r, "page_results", []) or []) for r in results if r.success)
+        stats = [
+            {"value": len(results), "label": "docs", "color": _COLORS["text"]},
+            {"value": ok, "label": "correctos", "color": _COLORS["success"]},
+        ]
+        if pages:
+            stats.append({"value": pages, "label": "páginas", "color": _COLORS["text_muted"]})
+        if errors:
+            stats.append({"value": errors, "label": "errores", "color": _COLORS["danger"]})
+        self._stat_bar.set_stats(stats)
+        QTimer.singleShot(30, self._stat_bar.animate)
 
     # ================================================================== #
     # Estado de acciones
@@ -311,6 +368,7 @@ class ResultsViewer(QWidget):
     def _set_actions_enabled(self, enabled: bool) -> None:
         self.open_btn.setEnabled(enabled)
         self.open_file_btn.setEnabled(enabled)
+        self.copy_file_btn.setEnabled(enabled)
         self.fullview_btn.setEnabled(enabled)
         self.zoom_in_btn.setEnabled(enabled)
         self.zoom_out_btn.setEnabled(enabled)
@@ -540,6 +598,14 @@ class ResultsViewer(QWidget):
     def _open_file_directly(self) -> None:
         if self._current_result and self._current_result.output_path:
             open_file(self, self._current_result.output_path, title="Abrir PDF")
+
+    def _on_copy_file(self) -> bool:
+        if self._current_result is None:
+            return False
+        out = self._current_result.output_path or ""
+        if not out or not Path(out).exists():
+            return False
+        return copy_files_to_clipboard([out])
 
     def _on_fullview(self) -> None:
         row = self.doc_list.currentRow()

@@ -221,6 +221,22 @@ class ImgsAPdfWindowTests(unittest.TestCase):
                 card.deleteLater()
                 self.app.processEvents()
 
+    def test_image_list_card_uses_drop_zone_empty_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            image_path = self._make_scan_photo(Path(tmp) / "scan.png")
+            card = ImageListCard()
+            try:
+                self.assertEqual(card._empty_w.objectName(), "DropZone")
+                self.assertEqual(card._content_stack.currentWidget(), card._empty_w)
+
+                card.add_paths([str(image_path)])
+                self.app.processEvents()
+
+                self.assertEqual(card._content_stack.currentWidget(), card.list_widget)
+            finally:
+                card.deleteLater()
+                self.app.processEvents()
+
     def test_image_list_card_preserves_input_order_across_pdf_conversion(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

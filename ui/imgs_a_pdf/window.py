@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QFrame, QLineEdit,
     QCheckBox, QComboBox, QScrollArea, QListWidget,
     QListWidgetItem, QDoubleSpinBox, QGridLayout, QSizePolicy,
+    QStackedWidget,
 )
 from PySide6.QtCore import QUrl
 
@@ -45,7 +46,7 @@ from ui.common.send_to_tool import SendToToolButton
 from ui.common.dialogs import show_error, show_info, show_warning
 from ui.common.file_workspace import FileWorkspace
 from ui.common.file_dialogs import get_open_file_names
-from ui.common.icons import set_button_icon
+from ui.common.icons import make_icon_label, set_button_icon
 from ui.common.result_ui import configure_file_list, format_file_size
 
 
@@ -472,22 +473,28 @@ class ImageListCard(QFrame):
         layout.setSpacing(12)
 
         # ── Botones ───────────────────────────────────────────────────
-        row = QHBoxLayout()
+        action_bar = QFrame()
+        action_bar.setObjectName("DocumentActionBar")
+        row = QHBoxLayout(action_bar)
+        row.setContentsMargins(14, 10, 14, 10)
         row.setSpacing(8)
 
         add_btn = QPushButton("Agregar archivos")
         add_btn.setProperty("class", "Primary")
+        set_button_icon(add_btn, "plus")
         add_btn.clicked.connect(self._on_browse)
         row.addWidget(add_btn)
 
         clear_btn = QPushButton("Vaciar")
         clear_btn.setProperty("class", "Ghost")
+        set_button_icon(clear_btn, "trash-2")
         clear_btn.clicked.connect(self.clear)
         row.addWidget(clear_btn)
 
         self._remove_btn = QPushButton("Quitar")
         self._remove_btn.setProperty("class", "Ghost")
         self._remove_btn.setToolTip("Quita del lote las imágenes seleccionadas. No borra archivos del disco.")
+        set_button_icon(self._remove_btn, "x", color="#E5484D")
         self._remove_btn.clicked.connect(self.remove_selected)
         self._remove_btn.setEnabled(False)
         row.addWidget(self._remove_btn)
@@ -495,14 +502,17 @@ class ImageListCard(QFrame):
         row.addStretch()
 
         self._count_lbl = QLabel("0 imágenes")
-        self._count_lbl.setProperty("class", "CardHint")
+        self._count_lbl.setObjectName("DocumentCountBadge")
         row.addWidget(self._count_lbl)
 
-        layout.addLayout(row)
+        layout.addWidget(action_bar)
 
         hint = QLabel("Arrastra para reordenar · selecciona y usa Quitar o Supr")
         hint.setProperty("class", "CardHint")
         layout.addWidget(hint)
+
+        self._content_stack = QStackedWidget()
+        self._empty_w = self._build_empty_state()
 
         # ── Lista ─────────────────────────────────────────────────────
         self.list_widget = QListWidget()
@@ -518,7 +528,43 @@ class ImageListCard(QFrame):
             self._sync_after_reorder
         )
         self.list_widget.installEventFilter(self)
-        layout.addWidget(self.list_widget, 1)
+        self._content_stack.addWidget(self._empty_w)
+        self._content_stack.addWidget(self.list_widget)
+        layout.addWidget(self._content_stack, 1)
+
+    def _build_empty_state(self) -> QFrame:
+        empty = QFrame()
+        empty.setObjectName("DropZone")
+        layout = QVBoxLayout(empty)
+        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setSpacing(10)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        layout.addWidget(
+            make_icon_label("folder-open", color="#00D6C9", size=30),
+            0,
+            Qt.AlignmentFlag.AlignCenter,
+        )
+
+        title = QLabel("Arrastra imágenes aquí")
+        title.setObjectName("DropZoneTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        hint = QLabel("o usa el botón Agregar archivos")
+        hint.setObjectName("DropZoneHint")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(hint)
+
+        chips = QHBoxLayout()
+        chips.setSpacing(6)
+        chips.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        for text in ("Imágenes", "PDF", "Word"):
+            chip = QLabel(text)
+            chip.setObjectName("DocumentFormatChip")
+            chips.addWidget(chip)
+        layout.addLayout(chips)
+        return empty
 
     # ── eventFilter (Delete key) ─────────────────────────────────────
 
@@ -744,6 +790,7 @@ class ImageListCard(QFrame):
     def _update_count(self) -> None:
         n = self.list_widget.count()
         self._count_lbl.setText(f"{n} imagen" + ("es" if n != 1 else ""))
+        self._content_stack.setCurrentIndex(0 if n == 0 else 1)
 
     def _on_browse(self) -> None:
         files, _ = get_open_file_names(

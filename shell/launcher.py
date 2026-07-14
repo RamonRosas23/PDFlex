@@ -27,9 +27,9 @@ from ui.styles import COLORS
 
 
 ICON_SIZE = 40
-CARD_H = 96
-GRID_SPACING = 10
-CARD_MIN_W = 232
+CARD_H = 100
+GRID_SPACING = 12
+CARD_MIN_W = 248
 QUICK_LIMIT = 6
 
 
@@ -73,7 +73,7 @@ BASE_SECTIONS: tuple[ToolSection, ...] = (
     ToolSection(
         id="esenciales",
         title="Esenciales",
-        subtitle="Firma, folios, separacion, union y membretes",
+        subtitle="Firma, folios, separación, unión y membretes",
         tool_ids=("firmador", "foleador", "separador", "unir", "membretado", "organizador"),
     ),
     ToolSection(
@@ -84,8 +84,8 @@ BASE_SECTIONS: tuple[ToolSection, ...] = (
     ),
     ToolSection(
         id="conversion",
-        title="Conversion e imagen",
-        subtitle="Word, imagenes, OCR, extraccion y clasificacion",
+        title="Conversión e imagen",
+        subtitle="Word, imágenes, OCR, extracción y clasificación",
         tool_ids=("word_a_pdf", "pdf_to_word", "pdf_to_imgs", "scan_simulator", "imgs_a_pdf", "extraer_imagenes", "quitar_fondo", "ocr", "clasificador"),
     ),
 )
@@ -172,7 +172,7 @@ class ToolCard(QFrame):
 
     def _build_content(self) -> None:
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(14, 10, 12, 10)
+        layout.setContentsMargins(14, 12, 12, 12)
         layout.setSpacing(12)
 
         from ui.common.icons import make_tool_icon_card, icon_pixmap
@@ -183,14 +183,17 @@ class ToolCard(QFrame):
         layout.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(3)
+        text_col.setSpacing(4)
         text_col.setContentsMargins(0, 0, 0, 0)
 
         title_row = QHBoxLayout()
         title_row.setSpacing(6)
         title = QLabel(self._tool.title)
         title.setObjectName("ToolCardTitle")
-        title.setStyleSheet(f"color: {self._tool.accent_color}; background: transparent; border: none;")
+        title.setStyleSheet(
+            f"color: {self._tool.accent_color}; "
+            "background: transparent; border: none;"
+        )
         title.setWordWrap(False)
         title_row.addWidget(title, 1)
 
@@ -199,13 +202,14 @@ class ToolCard(QFrame):
             badge.setObjectName("LauncherMiniBadge")
             badge.setStyleSheet(
                 "QLabel#LauncherMiniBadge {"
-                "color: #C8CBD2;"
-                "background: #1A1B22;"
-                "border: 1px solid #2B2D36;"
+                "color: #DCE2F2;"
+                f"background: {COLORS['surface_2']};"
+                f"border: 1px solid {COLORS['border_strong']};"
                 "border-radius: 5px;"
                 "padding: 1px 6px;"
                 "font-size: 10px;"
-                "font-weight: 600;"
+                "font-weight: 800;"
+                "letter-spacing: 0px;"
                 "}"
             )
             title_row.addWidget(badge)
@@ -213,14 +217,14 @@ class ToolCard(QFrame):
         text_col.addLayout(title_row)
 
         if not self._tool.enabled:
-            coming = QLabel("Proximamente")
+            coming = QLabel("Próximamente")
             coming.setObjectName("ComingSoonBadge")
             text_col.addWidget(coming)
         else:
             tagline = QLabel(self._tool.tagline)
             tagline.setObjectName("ToolCardTagline")
             tagline.setWordWrap(True)
-            tagline.setMaximumHeight(34)
+            tagline.setMaximumHeight(40)
             tagline.setStyleSheet("background: transparent; border: none;")
             text_col.addWidget(tagline)
 
@@ -242,9 +246,11 @@ class ToolCard(QFrame):
             comp = _hex_components(self._tool.accent_color)
             self.setStyleSheet(
                 f"QFrame#LauncherCard {{"
-                f"background: rgba({comp}, 0.06);"
-                f"border: 1px solid rgba({comp}, 0.45);"
-                f"border-radius: 10px;"
+                f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                f" stop:0 rgba({comp}, 0.08), stop:0.42 rgba({comp}, 0.04),"
+                f" stop:1 {COLORS['surface']});"
+                f"border: 1px solid rgba({comp}, 0.42);"
+                f"border-radius: 8px;"
                 f"}}"
             )
         else:
@@ -252,7 +258,7 @@ class ToolCard(QFrame):
                 "QFrame#LauncherCard {"
                 f"background: {COLORS['surface']};"
                 f"border: 1px solid {COLORS['border']};"
-                "border-radius: 10px;"
+                "border-radius: 8px;"
                 "}"
             )
 
@@ -310,8 +316,8 @@ class LauncherWidget(QWidget):
         content.setObjectName("LauncherContent")
         content.setStyleSheet(f"QWidget#LauncherContent {{ background: {COLORS['bg']}; }}")
         self._content_layout = QVBoxLayout(content)
-        self._content_layout.setContentsMargins(40, 34, 40, 28)
-        self._content_layout.setSpacing(18)
+        self._content_layout.setContentsMargins(36, 24, 36, 24)
+        self._content_layout.setSpacing(16)
 
         self._build_header()
 
@@ -329,56 +335,81 @@ class LauncherWidget(QWidget):
         QTimer.singleShot(0, self._render_tools)
 
     def _build_header(self) -> None:
+        command = QFrame()
+        command.setObjectName("LauncherCommandBar")
+        command_layout = QVBoxLayout(command)
+        command_layout.setContentsMargins(0, 0, 0, 0)
+        command_layout.setSpacing(10)
+
         top = QHBoxLayout()
         top.setContentsMargins(0, 0, 0, 0)
-        top.setSpacing(16)
+        top.setSpacing(14)
 
-        title_col = QVBoxLayout()
-        title_col.setSpacing(3)
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(10)
+
         title = QLabel("Herramientas")
         title.setObjectName("LauncherTitle")
-        title.setStyleSheet("font-size: 26px; font-weight: 800; letter-spacing: -0.5px;")
-        title_col.addWidget(title)
+        title.setStyleSheet("font-size: 24px; font-weight: 800; letter-spacing: 0px;")
+        title_row.addWidget(title)
 
         self._status_lbl = QLabel("")
-        self._status_lbl.setObjectName("LauncherSubtitle")
-        self._status_lbl.setStyleSheet("color: #8B909B; font-size: 12px;")
-        title_col.addWidget(self._status_lbl)
-        top.addLayout(title_col, 1)
+        self._status_lbl.setObjectName("LauncherCountBadge")
+        title_row.addWidget(self._status_lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addStretch(1)
+        top.addLayout(title_row, 1)
 
         self._search = QLineEdit()
         self._search.setObjectName("LauncherSearch")
-        self._search.setPlaceholderText("Buscar herramienta")
+        self._search.setPlaceholderText("Buscar herramienta, acción o formato")
         self._search.setClearButtonEnabled(True)
-        self._search.setFixedHeight(36)
-        self._search.setMinimumWidth(300)
+        self._search.setFixedHeight(34)
+        self._search.setMinimumWidth(380)
+        self._search.setMaximumWidth(560)
         self._search.setStyleSheet(
             "QLineEdit#LauncherSearch {"
-            f"background: {COLORS['surface']};"
+            f"background: {COLORS['surface_2']};"
             f"border: 1px solid {COLORS['border_strong']};"
-            "border-radius: 7px;"
-            "padding: 0 12px;"
+            "border-radius: 8px;"
+            "padding: 0 13px 0 9px;"
             f"color: {COLORS['text']};"
+            "font-weight: 600;"
             "}"
             f"QLineEdit#LauncherSearch:focus {{ border-color: {COLORS['accent']}; }}"
         )
+        from ui.common.icons import icon
+        self._search.addAction(
+            icon("search", COLORS["text_dim"], 14),
+            QLineEdit.ActionPosition.LeadingPosition,
+        )
         self._search.textChanged.connect(self._render_tools)
-        top.addWidget(self._search, 0, Qt.AlignmentFlag.AlignTop)
-        self._content_layout.addLayout(top)
+        command_layout.addLayout(top)
 
+        filter_bar = QFrame()
+        filter_bar.setObjectName("LauncherFilterBar")
         filters = QHBoxLayout()
-        filters.setContentsMargins(0, 0, 0, 0)
-        filters.setSpacing(8)
+        filters.setContentsMargins(5, 5, 5, 5)
+        filters.setSpacing(4)
+        filter_bar.setLayout(filters)
         filter_defs = [("all", "Todo")] + [(section.id, section.title) for section in self._sections]
         for section_id, label in filter_defs:
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setFixedHeight(30)
+            btn.setFixedHeight(26)
             btn.clicked.connect(lambda checked=False, sid=section_id: self._set_active_section(sid))
             self._filter_buttons[section_id] = btn
             filters.addWidget(btn)
-        filters.addStretch(1)
-        self._content_layout.addLayout(filters)
+
+        lower = QHBoxLayout()
+        lower.setContentsMargins(0, 0, 0, 0)
+        lower.setSpacing(10)
+        lower.addWidget(filter_bar, 0, Qt.AlignmentFlag.AlignLeft)
+        lower.addStretch(1)
+        lower.addWidget(self._search, 0, Qt.AlignmentFlag.AlignRight)
+        command_layout.addLayout(lower)
+
+        self._content_layout.addWidget(command)
         self._apply_filter_styles()
 
     def _set_active_section(self, section_id: str) -> None:
@@ -393,28 +424,31 @@ class LauncherWidget(QWidget):
             if active:
                 btn.setStyleSheet(
                     "QPushButton {"
-                    f"background: {COLORS['accent']};"
-                    "color: #FFFFFF;"
-                    f"border: 1px solid {COLORS['accent']};"
+                    f"background: {COLORS['surface_3']};"
+                    f"color: {COLORS['text']};"
+                    f"border: 1px solid {COLORS['border_strong']};"
                     "border-radius: 7px;"
                     "padding: 0 12px;"
                     "font-size: 12px;"
-                    "font-weight: 700;"
+                    "font-weight: 800;"
+                    "letter-spacing: 0px;"
                     "}"
                 )
             else:
                 btn.setStyleSheet(
                     "QPushButton {"
-                    f"background: {COLORS['surface']};"
+                    "background: transparent;"
                     f"color: {COLORS['text_muted']};"
-                    f"border: 1px solid {COLORS['border_strong']};"
+                    "border: 1px solid transparent;"
                     "border-radius: 7px;"
                     "padding: 0 12px;"
                     "font-size: 12px;"
+                    "font-weight: 700;"
                     "}"
                     "QPushButton:hover {"
                     f"color: {COLORS['text']};"
-                    f"border-color: {COLORS['border_strong']};"
+                    f"background: {COLORS['surface_3']};"
+                    f"border-color: {COLORS['border']};"
                     "}"
                 )
 
@@ -465,11 +499,11 @@ class LauncherWidget(QWidget):
             self._sections_layout.addStretch(1)
             total = sum(1 for tool in TOOLS if tool.enabled)
             if query:
-                self._status_lbl.setText(f"{shown_count} de {total} herramientas")
+                self._status_lbl.setText(f"{shown_count} de {total}")
             elif self._active_section == "all":
-                self._status_lbl.setText(f"{total} herramientas disponibles")
+                self._status_lbl.setText(f"{total} disponibles")
             else:
-                self._status_lbl.setText(f"{shown_count} herramientas en esta seccion")
+                self._status_lbl.setText(f"{shown_count} en sección")
             self._current_cols = columns
         finally:
             self._rendering = False
@@ -516,7 +550,7 @@ class LauncherWidget(QWidget):
             EDITORIAL_ORDER,
             limit=QUICK_LIMIT,
         )
-        label = "Mas usadas" if self._usage_store.has_usage(available_ids) else "Accesos rapidos"
+        label = "Más usadas" if self._usage_store.has_usage(available_ids) else "Accesos rápidos"
         return [self._tool_map[tool_id] for tool_id in ranked_ids if tool_id in self._tool_map], label
 
     def _tools_for_section(
@@ -543,12 +577,12 @@ class LauncherWidget(QWidget):
     def _preferred_columns(self) -> int:
         viewport_width = self._scroll.viewport().width() if hasattr(self, "_scroll") else 0
         width = max(self.width(), viewport_width)
-        content_width = max(520, width - 80)
-        if content_width >= 1500:
+        content_width = max(520, width - 72)
+        if content_width >= 1680:
             return 5
-        if content_width >= 980:
+        if content_width >= 1180:
             return 4
-        if content_width >= 700:
+        if content_width >= 820:
             return 3
         return 2
 
@@ -568,14 +602,17 @@ def _make_section_header(title: str, subtitle: str, count: int) -> QWidget:
     layout.setSpacing(10)
 
     title_lbl = QLabel(title)
-    title_lbl.setStyleSheet(f"color: {COLORS['text']}; font-size: 14px; font-weight: 800; background: transparent;")
+    title_lbl.setStyleSheet(
+        f"color: {COLORS['text']}; font-size: 15px; font-weight: 800; "
+        "letter-spacing: 0px; background: transparent;"
+    )
     layout.addWidget(title_lbl)
 
     count_lbl = QLabel(str(count))
     count_lbl.setStyleSheet(
         f"color: {COLORS['text_muted']};"
-        f"background: {COLORS['surface']};"
-        f"border: 1px solid {COLORS['border_strong']};"
+        f"background: {COLORS['surface_2']};"
+        f"border: 1px solid {COLORS['border']};"
         "border-radius: 6px;"
         "padding: 1px 7px;"
         "font-size: 11px;"
@@ -585,7 +622,7 @@ def _make_section_header(title: str, subtitle: str, count: int) -> QWidget:
 
     if subtitle:
         sub = QLabel(subtitle)
-        sub.setStyleSheet("color: #5C6272; font-size: 11px; background: transparent;")
+        sub.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 11px; background: transparent;")
         layout.addWidget(sub)
 
     line = QFrame()
@@ -608,12 +645,12 @@ def _make_footer() -> QWidget:
 
     n_tools = sum(1 for tool in TOOLS if tool.enabled)
     label = QLabel(f"GRUPO OCMX  ·  {n_tools} herramientas disponibles")
-    label.setStyleSheet("color: #3D3D45; font-size: 11px; background: transparent;")
+    label.setStyleSheet(f"color: {COLORS['text_faint']}; font-size: 11px; background: transparent;")
     layout.addWidget(label)
     layout.addStretch(1)
 
     version = QLabel(f"v{APP_VERSION}")
-    version.setStyleSheet("color: #3D3D45; font-size: 11px; background: transparent;")
+    version.setStyleSheet(f"color: {COLORS['text_faint']}; font-size: 11px; background: transparent;")
     layout.addWidget(version)
     return footer
 

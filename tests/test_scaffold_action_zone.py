@@ -66,6 +66,20 @@ def test_nav_next_shows_on_non_action_step(app):
         w.deleteLater(); app.processEvents()
 
 
+def test_initial_navbar_timer_keeps_current_step(app):
+    """Deferred navbar refresh must not overwrite a section selected immediately."""
+    from ui.compresor.window import CompresorWindow
+    w = CompresorWindow(_make_ctx())
+    try:
+        w._switch_section(1)
+        app.processEvents()
+
+        assert "Perfil" in w._nav_context_title.text()
+        assert "Siguiente: Procesar" == w._nav_next_btn.text()
+    finally:
+        w.deleteLater(); app.processEvents()
+
+
 def test_get_step_actions_returns_run_cancel_on_procesar(app):
     """_get_step_actions returns [_cancel_btn, _run_btn] for Procesar step."""
     from ui.compresor.window import CompresorWindow
@@ -88,5 +102,34 @@ def test_get_step_actions_returns_send_restart_on_resultados(app):
         actions = w._get_step_actions(resultados_idx)
         assert w._send_btn in actions
         assert w._restart_btn in actions
+    finally:
+        w.deleteLater(); app.processEvents()
+
+
+def test_stage_stack_ignores_hidden_page_minimums(app):
+    """Hidden stages must not force a wide minimum size on the whole tool."""
+    from PySide6.QtWidgets import QWidget
+    from ui.common.tool_scaffold import PipelineWindow
+
+    class DemoWindow(PipelineWindow):
+        SECTIONS = [
+            ("01", "Compacta", "Actual"),
+            ("02", "Gigante", "Oculta"),
+        ]
+        BRAND = "Demo"
+        TAGLINE = "Prueba"
+
+    w = DemoWindow(_make_ctx())
+    try:
+        compact = QWidget()
+        compact.setMinimumWidth(120)
+        huge = QWidget()
+        huge.setMinimumWidth(1600)
+        w.stack.addWidget(compact)
+        w.stack.addWidget(huge)
+        w._switch_section(0)
+
+        assert w.stack.minimumSizeHint().width() == 0
+        assert w.minimumSizeHint().width() < 1000
     finally:
         w.deleteLater(); app.processEvents()

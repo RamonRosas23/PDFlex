@@ -58,6 +58,7 @@ from ui.common.file_dialogs import get_open_file_name
 from ui.common.icons import set_button_icon
 from ui.common.pdf_render_utils import rendered_page_to_qimage
 from ui.common.result_ui import ElidedLabel, configure_file_list, elide_middle_text
+from ui.styles import COLORS
 
 
 # ====================================================================== #
@@ -568,9 +569,10 @@ class MembretadoWindow(PipelineWindow):
             row_l.setContentsMargins(0, 0, 0, 0)
             row_l.setSpacing(4)
             lbl = QLabel(label_text)
-            lbl.setStyleSheet("color: #9094A0; font-size: 11px; font-weight: 600; "
-                              "letter-spacing: 0.6px; text-transform: uppercase; "
-                              "background: transparent;")
+            lbl.setStyleSheet(
+                f"color: {COLORS['text_dim']}; font-size: 11px; font-weight: 700; "
+                "letter-spacing: 0px; text-transform: uppercase; background: transparent;"
+            )
             lbl.setToolTip(tooltip)
             s = SliderWithValue(
                 0.0,
@@ -592,7 +594,7 @@ class MembretadoWindow(PipelineWindow):
         # Divisor lateral
         hor_div = QFrame()
         hor_div.setFixedHeight(1)
-        hor_div.setStyleSheet("background: #1E1E24; border: none;")
+        hor_div.setStyleSheet(f"background: {COLORS['border']}; border: none;")
         ll.addWidget(hor_div)
 
         self._s_left  = _row_slider("Izquierdo", "Margen lateral izquierdo", 18.0)
@@ -616,7 +618,9 @@ class MembretadoWindow(PipelineWindow):
         ctrl_card.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         left_scroll.setWidget(ctrl_card)
         left_scroll.setWidgetResizable(True)
-        left_scroll.setFixedWidth(360)
+        left_scroll.setMinimumWidth(300)
+        left_scroll.setMaximumWidth(360)
+        left_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         left_scroll.setFrameShape(QFrame.Shape.NoFrame)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         body.addWidget(left_scroll)
@@ -731,7 +735,9 @@ class MembretadoWindow(PipelineWindow):
         ed.setSpacing(10)
         self._scope_doc_title = ElidedLabel("Selecciona un documento")
         self._scope_doc_title.setMinimumWidth(0)
-        self._scope_doc_title.setStyleSheet("color:#ECEDEE; font-size:15px; font-weight:600;")
+        self._scope_doc_title.setStyleSheet(
+            f"color:{COLORS['text']}; font-size:15px; font-weight:700; background:transparent;"
+        )
         ed.addWidget(self._scope_doc_title)
 
         self._scope_doc_meta = QLabel("—")
@@ -784,7 +790,9 @@ class MembretadoWindow(PipelineWindow):
         self._scope_preview_lbl = QLabel("Carga documentos para calcular el alcance.")
         self._scope_preview_lbl.setTextFormat(Qt.TextFormat.RichText)
         self._scope_preview_lbl.setWordWrap(True)
-        self._scope_preview_lbl.setStyleSheet("color:#ECEDEE; font-size:13px; line-height:150%;")
+        self._scope_preview_lbl.setStyleSheet(
+            f"color:{COLORS['text']}; font-size:13px; line-height:150%; background:transparent;"
+        )
         pv.addWidget(self._scope_preview_lbl)
         right_col.addWidget(preview_card)
         right_col.addStretch()

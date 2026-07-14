@@ -14,12 +14,14 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
+    QWidget,
     QVBoxLayout,
 )
 
 from shell.transfer import ToolTransfer
 from ui.common.documents_step import DocumentsCard
-from ui.common.icons import icon, set_button_icon
+from ui.common.icons import icon, make_icon_label, set_button_icon
 from ui.common.result_ui import configure_file_list
 from ui.styles import COLORS
 
@@ -145,11 +147,14 @@ class DocumentWorkspace(QFrame):
         title = QLabel("Bandeja")
         title.setProperty("class", "CardTitle")
         self._tray_count_lbl = QLabel("0 archivos")
-        self._tray_count_lbl.setProperty("class", "CardHint")
+        self._tray_count_lbl.setObjectName("DocumentCountBadge")
         header.addWidget(title)
         header.addStretch()
         header.addWidget(self._tray_count_lbl)
         layout.addLayout(header)
+
+        self._tray_stack = QStackedWidget()
+        self._tray_empty = self._build_tray_empty_state()
 
         self._tray_list = QListWidget()
         configure_file_list(self._tray_list)
@@ -159,9 +164,13 @@ class DocumentWorkspace(QFrame):
         self._tray_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self._tray_list.itemSelectionChanged.connect(self._update_tray_actions)
         self._tray_list.itemDoubleClicked.connect(lambda *_: self._add_selected_to_work())
-        layout.addWidget(self._tray_list, 1)
+        self._tray_stack.addWidget(self._tray_empty)
+        self._tray_stack.addWidget(self._tray_list)
+        layout.addWidget(self._tray_stack, 1)
 
-        primary_row = QHBoxLayout()
+        self._tray_primary_actions = QWidget()
+        primary_row = QHBoxLayout(self._tray_primary_actions)
+        primary_row.setContentsMargins(0, 0, 0, 0)
         primary_row.setSpacing(6)
 
         self._add_selected_btn = QPushButton("Agregar")
@@ -179,9 +188,11 @@ class DocumentWorkspace(QFrame):
         self._replace_work_btn.clicked.connect(self._replace_work_with_selected)
         primary_row.addWidget(self._replace_work_btn, 1)
 
-        layout.addLayout(primary_row)
+        layout.addWidget(self._tray_primary_actions)
 
-        secondary_row = QHBoxLayout()
+        self._tray_secondary_actions = QWidget()
+        secondary_row = QHBoxLayout(self._tray_secondary_actions)
+        secondary_row.setContentsMargins(0, 0, 0, 0)
         secondary_row.setSpacing(6)
 
         self._remove_tray_btn = QPushButton("Quitar")
@@ -198,8 +209,31 @@ class DocumentWorkspace(QFrame):
         self._clear_tray_btn.clicked.connect(self._ctx.tray.clear)
         secondary_row.addWidget(self._clear_tray_btn, 1)
 
-        layout.addLayout(secondary_row)
+        layout.addWidget(self._tray_secondary_actions)
         return panel
+
+    def _build_tray_empty_state(self) -> QFrame:
+        empty = QFrame()
+        empty.setObjectName("WorkspaceEmptyState")
+        layout = QVBoxLayout(empty)
+        layout.setContentsMargins(22, 22, 22, 22)
+        layout.setSpacing(8)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        icon_lbl = make_icon_label("folder", color=COLORS["text_dim"], size=26)
+        layout.addWidget(icon_lbl, 0, Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel("Bandeja vacía")
+        title.setObjectName("WorkspaceEmptyTitle")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+
+        hint = QLabel("Los archivos enviados entre herramientas aparecerán aquí.")
+        hint.setObjectName("WorkspaceEmptyHint")
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        return empty
 
     def paths(self) -> List[str]:
         return self._work_card.paths()
@@ -243,6 +277,7 @@ class DocumentWorkspace(QFrame):
     def set_accent(self, accent: str) -> None:
         self._accent = accent or "#5E6AD2"
         self._work_card.set_accent(self._accent)
+        self._refresh_tray()
 
     def _selected_tray_paths(self) -> List[str]:
         rows = sorted({self._tray_list.row(i) for i in self._tray_list.selectedItems()})
@@ -288,6 +323,8 @@ class DocumentWorkspace(QFrame):
 
         n = len(items)
         self._tray_count_lbl.setText(f"{n} archivo" + ("s" if n != 1 else ""))
+        if hasattr(self, "_tray_stack"):
+            self._tray_stack.setCurrentWidget(self._tray_list if n else self._tray_empty)
         self._update_tray_actions()
 
     def _tray_text(self, tray_item) -> str:
@@ -308,7 +345,7 @@ class DocumentWorkspace(QFrame):
     def _status_color(self, status: str) -> str:
         colors = {
             "available": COLORS["text_muted"],
-            "in_work": COLORS["accent"],
+            "in_work": self._accent,
             "sent": COLORS["success"],
             "missing": COLORS["danger"],
         }
@@ -321,6 +358,10 @@ class DocumentWorkspace(QFrame):
         self._replace_work_btn.setEnabled(selected)
         self._remove_tray_btn.setEnabled(selected)
         self._clear_tray_btn.setEnabled(has_items)
+        if hasattr(self, "_tray_primary_actions"):
+            self._tray_primary_actions.setVisible(has_items)
+        if hasattr(self, "_tray_secondary_actions"):
+            self._tray_secondary_actions.setVisible(has_items)
 
     def _hide_legacy_tray_button(self) -> None:
         tray_btn = getattr(self._work_card, "_tray_btn", None)

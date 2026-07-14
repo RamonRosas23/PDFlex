@@ -25,12 +25,46 @@ _ERROR_MESSAGES = {
     "KEY_REVOKED": "Esta licencia fue revocada. Contacta a soporte.",
     "KEY_EXPIRED": "Esta licencia venció. Contacta a soporte para renovarla.",
     "FINGERPRINT_MISMATCH": "Esta licencia pertenece a otro equipo.",
+    "ALREADY_ACTIVATED_ELSEWHERE": "Esta licencia ya está activa en otro equipo.",
+    "ACTIVATION_NOT_FOUND": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "ACTIVATION_RELEASED": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "ACTIVATION_INACTIVE": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "ACTIVATION_NOT_ACTIVE": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "ACTIVATION_DEACTIVATED": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "KEY_RELEASED": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "KEY_INACTIVE": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "KEY_SUSPENDED": "Esta licencia fue suspendida. Contacta a soporte.",
+    "KEY_DEACTIVATED": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "LICENSE_RELEASED": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "LICENSE_INACTIVE": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "LICENSE_NOT_ACTIVE": "Esta licencia fue liberada desde el servidor. Vuelve a activar PDFlex.",
+    "LICENSE_SUSPENDED": "Esta licencia fue suspendida. Contacta a soporte.",
     "RATE_LIMITED": "Demasiados intentos. Espera unos minutos.",
     "NETWORK_ERROR": "No se pudo conectar. Verifica tu conexión.",
     "SERVER_ERROR": "Ocurrió un error en el servidor. Inténtalo de nuevo.",
     "FINGERPRINT_ERROR": "No se pudo identificar este equipo. Inténtalo de nuevo.",
 }
 _AUTO_RETRY_CODES = {"NETWORK_ERROR", "SERVER_ERROR", "FINGERPRINT_ERROR"}
+_LOCAL_TOKEN_INVALIDATION_CODES = {
+    "KEY_NOT_FOUND",
+    "KEY_REVOKED",
+    "KEY_EXPIRED",
+    "FINGERPRINT_MISMATCH",
+    "ALREADY_ACTIVATED_ELSEWHERE",
+    "ACTIVATION_NOT_FOUND",
+    "ACTIVATION_RELEASED",
+    "ACTIVATION_INACTIVE",
+    "ACTIVATION_NOT_ACTIVE",
+    "ACTIVATION_DEACTIVATED",
+    "KEY_RELEASED",
+    "KEY_INACTIVE",
+    "KEY_SUSPENDED",
+    "KEY_DEACTIVATED",
+    "LICENSE_RELEASED",
+    "LICENSE_INACTIVE",
+    "LICENSE_NOT_ACTIVE",
+    "LICENSE_SUSPENDED",
+}
 
 
 class ReconnectDialog(QDialog):
@@ -41,6 +75,7 @@ class ReconnectDialog(QDialog):
         self.gave_up = False
         self._thread: LicenseRevalidateThread | None = None
         self._worker: LicenseRevalidateWorker | None = None
+        self._request_in_flight = False
         self._drag_pos = None
 
         self.setWindowTitle("Reconectar licencia — PDFlex")
@@ -191,21 +226,29 @@ class ReconnectDialog(QDialog):
                 "FINGERPRINT_ERROR", "No se pudo identificar este equipo. Inténtalo de nuevo."
             )
             return
-        self._worker = LicenseRevalidateWorker(self._key_id, fingerprint)
-        self._thread = LicenseRevalidateThread(self._worker)
+        self._request_in_flight = True
+        self._quit_btn.setEnabled(False)
+        self._worker = LicenseRevalidateWorker(self._key_id, fingerprint, parent=self)
+        self._thread = LicenseRevalidateThread(self._worker, parent=self)
         self._worker.success.connect(self._on_revalidate_success)
         self._worker.error.connect(self._on_revalidate_error)
         self._worker.success.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
+        self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
     def _on_revalidate_success(self, token: str, license_expires_at) -> None:
+        self._request_in_flight = False
         license_storage.save_token(token)
         self.revalidated_token = token
         self.accept()
 
     def _on_revalidate_error(self, error_code: str, message: str) -> None:
+        self._request_in_flight = False
+        if error_code in _LOCAL_TOKEN_INVALIDATION_CODES:
+            license_storage.clear_token()
         self._retry_btn.setEnabled(True)
+        self._quit_btn.setEnabled(True)
         self._status_label.setText(_ERROR_MESSAGES.get(error_code, message))
         if error_code in _AUTO_RETRY_CODES:
             QTimer.singleShot(_AUTO_RETRY_MS, self._auto_retry_if_still_open)
@@ -213,6 +256,14 @@ class ReconnectDialog(QDialog):
     def _auto_retry_if_still_open(self) -> None:
         if self.isVisible():
             self._on_retry_clicked()
+
+    def done(self, result: int) -> None:
+        # Igual que ActivationDialog.done(): ignora el cierre mientras una
+        # revalidación sigue en curso, para no destruir el QThread de fondo
+        # a mitad de la llamada de red.
+        if self._request_in_flight:
+            return
+        super().done(result)
 
     # ── arrastre de ventana sin bordes ──────────────────────────────────────
 

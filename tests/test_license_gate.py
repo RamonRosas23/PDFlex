@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from core.license_token import LicenseClaims, LicenseInvalidError, VerifiedLicense
 from ui.license import license_gate as lg
@@ -28,15 +28,58 @@ def _claims(**overrides) -> LicenseClaims:
     return LicenseClaims(**base)
 
 
-def test_ensure_licensed_returns_key_id_when_local_token_is_fully_valid():
+def test_ensure_licensed_refreshes_token_before_opening_when_server_accepts():
+    local_verified = VerifiedLicense(claims=_claims(key_id="key-old"), needs_revalidation=False)
+    refreshed_verified = VerifiedLicense(claims=_claims(key_id="key-new"), needs_revalidation=False)
+
+    with patch.object(lg.license_storage, "load_token", return_value="PLT1.local.token"), \
+         patch.object(lg.license_storage, "save_token") as save_token, \
+         patch.object(lg, "verify_token", side_effect=[local_verified, refreshed_verified]), \
+         patch.object(lg, "revalidate_license_once", return_value=lg.LicenseServerResult(
+             ok=True, token="PLT1.fresh.token", license_expires_at=None
+         )) as revalidate, \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")):
+        result = lg.ensure_licensed()
+
+    assert result == "key-new"
+    revalidate.assert_called_once()
+    save_token.assert_called_once_with("PLT1.fresh.token")
+
+
+def test_ensure_licensed_returns_key_id_when_local_token_is_valid_and_server_unreachable():
     verified = VerifiedLicense(claims=_claims(), needs_revalidation=False)
 
     with patch.object(lg.license_storage, "load_token", return_value="PLT1.x.y"), \
          patch.object(lg, "verify_token", return_value=verified), \
+         patch.object(lg, "revalidate_license_once", return_value=lg.LicenseServerResult(
+             ok=False, error_code="NETWORK_ERROR", message="Sin conexión a Internet."
+         )), \
          patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")):
         result = lg.ensure_licensed()
 
     assert result == "key-abc"
+
+
+def test_ensure_licensed_clears_token_and_shows_activation_when_server_released_activation():
+    verified = VerifiedLicense(claims=_claims(key_id="key-abc"), needs_revalidation=False)
+    fake_dialog = Mock()
+    fake_dialog.activated_token = None
+
+    with patch.object(lg.license_storage, "load_token", return_value="PLT1.local.token"), \
+         patch.object(lg.license_storage, "clear_token") as clear_token, \
+         patch.object(lg, "verify_token", return_value=verified), \
+         patch.object(lg, "revalidate_license_once", return_value=lg.LicenseServerResult(
+             ok=False,
+             error_code="ACTIVATION_RELEASED",
+             message="Esta activación fue liberada desde el servidor.",
+         )), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
+         patch.object(lg, "ActivationDialog", return_value=fake_dialog) as dialog_cls:
+        result = lg.ensure_licensed()
+
+    assert result is None
+    clear_token.assert_called_once()
+    dialog_cls.assert_called_once()
 
 
 def test_ensure_licensed_shows_activation_dialog_when_no_token_stored():
@@ -72,6 +115,7 @@ def test_ensure_licensed_shows_activation_dialog_when_local_token_invalid():
     fake_dialog.activated_token = None
 
     with patch.object(lg.license_storage, "load_token", return_value="PLT1.corrupt.token"), \
+         patch.object(lg.license_storage, "clear_token"), \
          patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
          patch.object(lg, "verify_token", side_effect=LicenseInvalidError("firma inválida")), \
          patch.object(lg, "ActivationDialog", return_value=fake_dialog) as dialog_cls:
@@ -83,12 +127,16 @@ def test_ensure_licensed_shows_activation_dialog_when_local_token_invalid():
 
 def test_ensure_licensed_shows_reconnect_dialog_when_grace_expired():
     verified = VerifiedLicense(claims=_claims(key_id="key-abc"), needs_revalidation=True)
+    refreshed = VerifiedLicense(claims=_claims(key_id="key-abc"), needs_revalidation=False)
     fake_dialog = Mock()
     fake_dialog.revalidated_token = "PLT1.fresh.token"
 
     with patch.object(lg.license_storage, "load_token", return_value="PLT1.stale.token"), \
          patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
-         patch.object(lg, "verify_token", return_value=verified), \
+         patch.object(lg, "verify_token", side_effect=[verified, refreshed]), \
+         patch.object(lg, "revalidate_license_once", return_value=lg.LicenseServerResult(
+             ok=False, error_code="NETWORK_ERROR", message="Sin conexión a Internet."
+         )), \
          patch.object(lg, "ReconnectDialog", return_value=fake_dialog) as dialog_cls:
         result = lg.ensure_licensed()
 
@@ -104,6 +152,9 @@ def test_ensure_licensed_returns_none_when_reconnect_dialog_gives_up():
     with patch.object(lg.license_storage, "load_token", return_value="PLT1.stale.token"), \
          patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
          patch.object(lg, "verify_token", return_value=verified), \
+         patch.object(lg, "revalidate_license_once", return_value=lg.LicenseServerResult(
+             ok=False, error_code="NETWORK_ERROR", message="Sin conexión a Internet."
+         )), \
          patch.object(lg, "ReconnectDialog", return_value=fake_dialog):
         result = lg.ensure_licensed()
 
@@ -115,6 +166,7 @@ def test_ensure_licensed_returns_none_when_freshly_activated_token_fails_verific
     fake_dialog.activated_token = "PLT1.corrupt.token"
 
     with patch.object(lg.license_storage, "load_token", return_value=None), \
+         patch.object(lg.license_storage, "clear_token"), \
          patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
          patch.object(lg, "ActivationDialog", return_value=fake_dialog), \
          patch.object(lg, "verify_token", side_effect=LicenseInvalidError("respuesta corrupta")):
@@ -160,6 +212,56 @@ def test_start_background_revalidation_saves_token_silently_on_success():
     # mientras esta llamada de red sigue en curso mata el proceso (Qt trata
     # destruir un QThread todavía corriendo como error fatal).
     assert isinstance(parent._license_revalidate_thread, _SyncFakeThread)
+
+
+def test_start_background_revalidation_clears_parent_reference_when_thread_finishes():
+    # Reproduce el crash real de v2.0.8: el QThread conecta
+    # finished -> deleteLater, así que al terminar la revalidación Qt
+    # destruye el objeto C++ — pero parent._license_revalidate_thread
+    # conservaba el wrapper Python muerto. Minutos después, closeEvent
+    # llamaba isRunning() sobre ese cadáver -> "RuntimeError: libshiboken:
+    # Internal C++ object (LicenseRevalidateThread) already deleted",
+    # que CrashHandlerApp.notify trataba como crash fatal en pleno cierre.
+    # La referencia debe limpiarse en cuanto el hilo emite finished.
+    class _FakeSignal:
+        def __init__(self):
+            self._slots = []
+
+        def connect(self, slot):
+            self._slots.append(slot)
+
+        def emit(self):
+            for slot in list(self._slots):
+                slot()
+
+    class _SyncFakeThread:
+        def __init__(self, worker, parent):
+            self._worker = worker
+            self.finished = _FakeSignal()
+
+        def start(self):
+            self._worker.run()
+            self.finished.emit()  # igual que un QThread real al terminar
+
+        def quit(self):
+            pass
+
+        def deleteLater(self):
+            pass
+
+    fake_response = Mock(
+        status_code=200,
+        json=lambda: {"token": "PLT1.bg.token", "license_expires_at": None},
+    )
+
+    parent = Mock()
+    with patch.object(lg, "LicenseRevalidateThread", _SyncFakeThread), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
+         patch("requests.post", return_value=fake_response), \
+         patch.object(lg.license_storage, "save_token"):
+        lg.start_background_revalidation("key-abc", parent)
+
+    assert parent._license_revalidate_thread is None
 
 
 def test_get_current_claims_returns_claims_when_token_valid():
@@ -281,6 +383,75 @@ def test_start_background_revalidation_clears_local_token_when_key_revoked():
 
     save_token.assert_not_called()
     clear_token.assert_called_once()
+
+
+def test_start_background_revalidation_clears_local_token_when_activation_was_released():
+    class _SyncFakeThread:
+        def __init__(self, worker, parent):
+            self._worker = worker
+            self.finished = Mock()
+
+        def start(self):
+            self._worker.run()
+
+        def quit(self):
+            pass
+
+        def deleteLater(self):
+            pass
+
+    fake_response = Mock(
+        status_code=410,
+        json=lambda: {
+            "error_code": "ACTIVATION_RELEASED",
+            "message": "Esta activación fue liberada desde el servidor.",
+        },
+    )
+
+    with patch.object(lg, "LicenseRevalidateThread", _SyncFakeThread), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
+         patch("requests.post", return_value=fake_response), \
+         patch.object(lg.license_storage, "save_token") as save_token, \
+         patch.object(lg.license_storage, "clear_token") as clear_token:
+        lg.start_background_revalidation("key-abc", Mock())
+
+    save_token.assert_not_called()
+    clear_token.assert_called_once()
+
+
+def test_background_revalidation_error_handler_runs_on_gui_thread():
+    # El worker emite `error` desde el QThread de red. Conectado a una
+    # lambda suelta (sin QObject receptor), Qt usa conexión DIRECTA y el
+    # handler corría EN el hilo de red — donde puede abrir un QMessageBox
+    # y llamar app.quit(), ambos comportamiento indefinido fuera del hilo
+    # GUI. Con _BackgroundRevalidationReceiver la entrega llega encolada
+    # al hilo GUI. Usa un QThread real: la afinidad de hilos es
+    # precisamente lo que se está verificando.
+    import threading
+    import time
+
+    calls = {}
+
+    def fake_handler(code, message, parent=None):
+        calls["ident"] = threading.get_ident()
+        calls["code"] = code
+
+    result = lg.LicenseServerResult(
+        ok=False, error_code="KEY_REVOKED", message="La licencia fue revocada."
+    )
+
+    parent = QWidget()  # QObject real que vive en el hilo GUI
+    with patch.object(lg, "_handle_background_revalidation_error", side_effect=fake_handler), \
+         patch("core.license_manager.revalidate_license_once", return_value=result), \
+         patch.object(lg, "compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")):
+        lg.start_background_revalidation("key-abc", parent)
+        deadline = time.monotonic() + 5.0
+        while "ident" not in calls and time.monotonic() < deadline:
+            _app.processEvents()
+            time.sleep(0.01)
+
+    assert calls.get("code") == "KEY_REVOKED"
+    assert calls.get("ident") == threading.get_ident()  # hilo GUI, no el de red
 
 
 def test_handle_background_revalidation_error_ignores_rate_limited():

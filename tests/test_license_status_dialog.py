@@ -1,9 +1,10 @@
 import os
 from datetime import datetime, timezone
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtWidgets import QApplication, QFrame
+from PySide6.QtWidgets import QApplication, QDialog, QFrame
 
 from core.license_token import LicenseClaims
 from ui.license.license_status_dialog import LicenseStatusDialog
@@ -45,6 +46,40 @@ def test_close_button_accepts_dialog():
     try:
         dlg.accept()
         assert dlg.result() == 1  # QDialog.Accepted
+    finally:
+        dlg.close()
+        _app.processEvents()
+
+
+def test_close_button_disabled_while_panel_has_pending_deactivation():
+    dlg = LicenseStatusDialog(_claims())
+    try:
+        dlg._panel.busy_changed.emit(True)
+        assert dlg._close_btn.isEnabled() is False
+
+        dlg._panel.busy_changed.emit(False)
+        assert dlg._close_btn.isEnabled() is True
+    finally:
+        dlg.close()
+        _app.processEvents()
+
+
+def test_dialog_ignores_close_while_panel_has_pending_deactivation():
+    # Reproduce el crash reportado: cerrar "Ver licencia" mientras
+    # LicensePanel tenía una desactivación en curso destruía el QThread de
+    # fondo sin que nada esperara su terminación (access violation en
+    # notify()).
+    dlg = LicenseStatusDialog(_claims())
+    try:
+        dlg._panel._request_in_flight = True
+        with patch.object(QDialog, "done") as base_done:
+            dlg.accept()
+        base_done.assert_not_called()
+
+        dlg._panel._request_in_flight = False
+        with patch.object(QDialog, "done") as base_done:
+            dlg.accept()
+        base_done.assert_called_once()
     finally:
         dlg.close()
         _app.processEvents()

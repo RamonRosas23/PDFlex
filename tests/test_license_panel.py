@@ -1,6 +1,6 @@
 import os
 from datetime import datetime, timezone
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -106,6 +106,55 @@ def test_on_deactivate_error_reenables_button_and_shows_warning():
     try:
         assert panel._deactivate_btn.isEnabled() is True
         warning.assert_called_once()
+    finally:
+        panel.deleteLater()
+        _app.processEvents()
+
+
+def test_start_deactivation_worker_marks_request_in_flight_and_emits_busy_changed():
+    # Antes, el thread/worker no tenían padre Qt ni protección de cierre --
+    # cerrar el diálogo que envuelve a este panel mientras la desactivación
+    # seguía en curso podía destruir el QThread de fondo (access violation
+    # reportado en notify()). LicenseStatusDialog usa has_pending_request()
+    # y busy_changed para no cerrarse en ese caso.
+    panel = LicensePanel(_claims())
+    busy_events = []
+    panel.busy_changed.connect(busy_events.append)
+
+    with patch("ui.license.license_panel.compute_fingerprint_or_none", return_value=Mock(composite_hash="fp")), \
+         patch("ui.license.license_panel.LicenseDeactivateWorker"), \
+         patch("ui.license.license_panel.LicenseDeactivateThread"):
+        panel._start_deactivation_worker()
+
+    try:
+        assert panel.has_pending_request() is True
+        assert busy_events == [True]
+    finally:
+        panel._request_in_flight = False
+        panel.deleteLater()
+        _app.processEvents()
+
+
+def test_deactivate_success_and_error_clear_in_flight_flag_and_emit_busy_changed():
+    panel = LicensePanel(_claims())
+    busy_events = []
+    panel.busy_changed.connect(busy_events.append)
+    panel._request_in_flight = True
+
+    with patch("core.license_storage.clear_token"), \
+         patch.object(QMessageBox, "information"):
+        panel._on_deactivate_success(2)
+
+    try:
+        assert panel.has_pending_request() is False
+        assert busy_events == [False]
+
+        panel._request_in_flight = True
+        busy_events.clear()
+        with patch.object(QMessageBox, "warning"):
+            panel._on_deactivate_error("TRANSFER_LIMIT_REACHED", "mensaje")
+        assert panel.has_pending_request() is False
+        assert busy_events == [False]
     finally:
         panel.deleteLater()
         _app.processEvents()

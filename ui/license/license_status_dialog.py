@@ -117,6 +117,7 @@ class LicenseStatusDialog(QDialog):
         v.setContentsMargins(20, 18, 20, 14)
         v.setSpacing(10)
         self._panel = LicensePanel(claims)
+        self._panel.busy_changed.connect(self._on_panel_busy_changed)
         v.addWidget(self._panel)
         return body
 
@@ -136,13 +137,23 @@ class LicenseStatusDialog(QDialog):
         f.setSpacing(8)
         f.addStretch(1)
 
-        close_btn = QPushButton("Cerrar")
-        close_btn.setFixedHeight(34)
-        close_btn.setMinimumWidth(96)
-        close_btn.setDefault(True)
-        close_btn.clicked.connect(self.accept)
-        f.addWidget(close_btn)
+        self._close_btn = QPushButton("Cerrar")
+        self._close_btn.setFixedHeight(34)
+        self._close_btn.setMinimumWidth(96)
+        self._close_btn.setDefault(True)
+        self._close_btn.clicked.connect(self.accept)
+        f.addWidget(self._close_btn)
         return footer
+
+    def _on_panel_busy_changed(self, busy: bool) -> None:
+        self._close_btn.setEnabled(not busy)
+
+    def done(self, result: int) -> None:
+        # Igual que ActivationDialog/ReconnectDialog: no permite cerrar
+        # mientras LicensePanel tiene una desactivación en curso.
+        if self._panel.has_pending_request():
+            return
+        super().done(result)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

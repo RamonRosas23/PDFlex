@@ -37,6 +37,7 @@ class ActivationDialog(QDialog):
         self.activated_token: str | None = None
         self._thread: LicenseActivateThread | None = None
         self._worker: LicenseActivateWorker | None = None
+        self._request_in_flight = False
         self._drag_pos = None
 
         self.setWindowTitle("Activar PDFlex")
@@ -233,25 +234,39 @@ class ActivationDialog(QDialog):
                 "FINGERPRINT_ERROR", "No se pudo identificar este equipo. Inténtalo de nuevo."
             )
             return
+        self._request_in_flight = True
         self._worker = LicenseActivateWorker(
-            license_key, fingerprint, _machine_name(), _os_version_string()
+            license_key, fingerprint, _machine_name(), _os_version_string(), parent=self
         )
-        self._thread = LicenseActivateThread(self._worker)
+        self._thread = LicenseActivateThread(self._worker, parent=self)
         self._worker.success.connect(self._on_activate_success)
         self._worker.error.connect(self._on_activate_error)
         self._worker.success.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
+        self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
     def _on_activate_success(self, token: str, customer_name: str, license_expires_at) -> None:
+        self._request_in_flight = False
         license_storage.save_token(token)
         self.activated_token = token
         self.accept()
 
     def _on_activate_error(self, error_code: str, message: str) -> None:
+        self._request_in_flight = False
         self._activate_btn.setEnabled(True)
         self._activate_btn.setText("Activar")
         self._show_error(_ERROR_MESSAGES.get(error_code, message))
+
+    def done(self, result: int) -> None:
+        # Ignora el cierre (Esc, Alt+F4, llamada programática) mientras la
+        # activación sigue en curso: cerrar aquí dejaría el QThread en
+        # segundo plano sin nada que lo mantenga con vida de forma
+        # determinista, y Qt entregaría su señal de red más tarde sobre
+        # widgets ya liberados (access violation en notify()).
+        if self._request_in_flight:
+            return
+        super().done(result)
 
     # ── arrastre de ventana sin bordes ──────────────────────────────────────
 

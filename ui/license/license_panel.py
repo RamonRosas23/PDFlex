@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget,
 )
@@ -15,11 +16,14 @@ from ui.styles import COLORS
 
 
 class LicensePanel(QWidget):
+    busy_changed = Signal(bool)
+
     def __init__(self, claims: LicenseClaims, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._claims = claims
         self._thread: LicenseDeactivateThread | None = None
         self._worker: LicenseDeactivateWorker | None = None
+        self._request_in_flight = False
         self._build()
 
     def _build(self) -> None:
@@ -82,15 +86,22 @@ class LicensePanel(QWidget):
                 "FINGERPRINT_ERROR", "No se pudo identificar este equipo. Inténtalo de nuevo."
             )
             return
-        self._worker = LicenseDeactivateWorker(self._claims.key_id, fingerprint.composite_hash)
-        self._thread = LicenseDeactivateThread(self._worker)
+        self._request_in_flight = True
+        self.busy_changed.emit(True)
+        self._worker = LicenseDeactivateWorker(
+            self._claims.key_id, fingerprint.composite_hash, parent=self
+        )
+        self._thread = LicenseDeactivateThread(self._worker, parent=self)
         self._worker.success.connect(self._on_deactivate_success)
         self._worker.error.connect(self._on_deactivate_error)
         self._worker.success.connect(self._thread.quit)
         self._worker.error.connect(self._thread.quit)
+        self._thread.finished.connect(self._thread.deleteLater)
         self._thread.start()
 
     def _on_deactivate_success(self, transfers_remaining: int) -> None:
+        self._request_in_flight = False
+        self.busy_changed.emit(False)
         license_storage.clear_token()
         QMessageBox.information(
             self,
@@ -100,6 +111,14 @@ class LicensePanel(QWidget):
         self._deactivate_btn.setText("Licencia desactivada")
 
     def _on_deactivate_error(self, error_code: str, message: str) -> None:
+        self._request_in_flight = False
+        self.busy_changed.emit(False)
         self._deactivate_btn.setEnabled(True)
         self._deactivate_btn.setText("Desactivar esta licencia")
         QMessageBox.warning(self, "No se pudo desactivar", message)
+
+    def has_pending_request(self) -> bool:
+        """Usado por LicenseStatusDialog para no cerrarse mientras una
+        desactivación sigue en curso (evita destruir el QThread de fondo
+        a mitad de la llamada de red)."""
+        return self._request_in_flight
